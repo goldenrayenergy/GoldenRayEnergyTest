@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { calculateSolar } from '../services/calcService.js';
 import { generateQuotePDF } from '../services/quotePdfService.js';
 import { createProjectFromEnquiry } from '../services/projectService.js';
-import { sendQuoteEmail } from '../services/emailService.js';
+import { sendQuoteEmail, sendTeamNewLeadEmail } from '../services/emailService.js';
 import { supabaseAdmin } from '../config/supabase.js';
 
 const router = Router();
@@ -171,6 +171,27 @@ router.post('/submit', async (req, res) => {
         source:       'website_form',
       },
     });
+
+    // ── 6. Notify the team. Recipients: project owner (if assigned at intake)
+    //      + every admin user. Non-fatal — we never block the API response on
+    //      email problems.
+    try {
+      const { data: admins } = await supabaseAdmin
+        .from('users')
+        .select('email')
+        .eq('role', 'admin')
+        .eq('is_active', true);
+      const recipients = (admins || []).map(u => u.email).filter(Boolean);
+      await sendTeamNewLeadEmail({
+        form,
+        calculation,
+        leadScore,
+        recipients,
+        projectCode: project?.code,
+      });
+    } catch (mailErr) {
+      console.error('Team notification email failed (non-fatal):', mailErr.message);
+    }
 
     res.status(201).json({ success: true, id: enquiry.id, contact_id: contact.id });
   } catch (e) {

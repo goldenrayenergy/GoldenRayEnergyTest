@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { supabaseAdmin } from '../config/supabase.js';
 import { PROJECT_STAGES, missingRequiredItems } from '../services/projectService.js';
+import { scheduleCustomerCadence } from '../services/emailService.js';
 
 const router = Router();
 router.use(authenticate);
@@ -216,6 +217,29 @@ router.patch('/:id', async (req, res) => {
         });
       } catch (e) {
         console.error('Follow-up cadence creation failed (non-fatal):', e.message);
+      }
+
+      // Also schedule the 3 customer emails. Resend handles delivery via
+      // scheduled_at — no cron worker needed. Non-fatal: failure here doesn't
+      // affect the API response or the salesperson's task list.
+      try {
+        const { data: contact } = await supabaseAdmin
+          .from('contacts')
+          .select('email, name')
+          .eq('id', customerId)
+          .single();
+        if (contact?.email) {
+          await scheduleCustomerCadence({
+            customerEmail: contact.email,
+            customerName:  contact.name,
+            quality:       data.quality,
+            projectCode:   code,
+          });
+        } else {
+          console.log(`No customer email on contact ${customerId} — skipping email cadence (tasks still created).`);
+        }
+      } catch (e) {
+        console.error('Customer cadence scheduling failed (non-fatal):', e.message);
       }
     }
 
