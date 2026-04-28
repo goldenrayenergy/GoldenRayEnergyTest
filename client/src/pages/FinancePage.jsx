@@ -131,7 +131,7 @@ export default function FinancePage() {
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* Hero */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="pt-32 pb-14 px-6 md:px-16 text-white relative overflow-hidden"
+      <section className="pt-24 md:pt-32 pb-12 md:pb-14 px-4 md:px-16 text-white relative overflow-hidden"
         style={{ background: 'linear-gradient(135deg, #064e3b 0%, #0f766e 40%, #0e7490 100%)' }}>
         <div className="absolute -top-24 -right-24 w-[500px] h-[500px] rounded-full bg-gradient-to-br from-amber-400 to-pink-400 opacity-25 blur-3xl animate-blob" />
         <div className="absolute -bottom-32 -left-32 w-[500px] h-[500px] rounded-full bg-gradient-to-br from-violet-400 to-fuchsia-400 opacity-25 blur-3xl animate-blob-delay-2" />
@@ -140,7 +140,7 @@ export default function FinancePage() {
             <Sprout size={13} className="text-emerald-200" />
             <span className="text-xs font-extrabold tracking-widest">SOLAR FINANCE NZ</span>
           </div>
-          <h1 className="text-5xl md:text-6xl font-extrabold font-display leading-[1.05] mb-5">
+          <h1 className="text-3xl md:text-6xl font-extrabold font-display leading-[1.05] mb-5">
             Go Solar <br className="hidden md:block" />
             for <span className="bg-gradient-to-r from-amber-300 via-pink-300 to-white bg-clip-text text-transparent animate-gradient">$0 Upfront</span>
           </h1>
@@ -157,16 +157,16 @@ export default function FinancePage() {
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* Finance at a glance */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="py-16 px-6 md:px-16 bg-gradient-to-b from-white via-emerald-50/30 to-white">
+      <section className="py-10 md:py-16 px-4 md:px-16 bg-gradient-to-b from-white via-emerald-50/30 to-white">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-8">
             <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-cool">AT A GLANCE</div>
-            <h2 className="text-3xl font-extrabold font-display">Finance <span className="text-gradient-warm">at a glance</span></h2>
+            <h2 className="text-2xl md:text-3xl font-extrabold font-display">Finance <span className="text-gradient-warm">at a glance</span></h2>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
             {GLANCE.map((g, i) => (
               <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5 text-center hover:-translate-y-1 hover:shadow-lg transition-all">
-                <div className={`text-2xl md:text-3xl font-extrabold font-display bg-gradient-to-br ${g.gradient} bg-clip-text text-transparent`}>{g.value}</div>
+                <div className={`text-2xl md:text-2xl md:text-3xl font-extrabold font-display bg-gradient-to-br ${g.gradient} bg-clip-text text-transparent`}>{g.value}</div>
                 <div className="text-[10px] text-gray-500 uppercase font-semibold tracking-wide mt-1 leading-tight">{g.label}</div>
               </div>
             ))}
@@ -188,10 +188,10 @@ export default function FinancePage() {
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* How it works — 4 steps */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="py-20 px-6 md:px-16 bg-gradient-to-br from-violet-50 via-white to-cyan-50">
+      <section className="py-12 md:py-20 px-4 md:px-16 bg-gradient-to-br from-violet-50 via-white to-cyan-50">
         <div className="text-center mb-12">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-warm">SIMPLE PROCESS</div>
-          <h2 className="text-3xl font-extrabold font-display">How financing <span className="text-gradient-warm">works</span></h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display">How financing <span className="text-gradient-warm">works</span></h2>
           <p className="text-sm text-gray-500 mt-2 max-w-lg mx-auto">Getting solar with finance is straightforward. We handle the complexity so you don't have to.</p>
         </div>
         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-6 relative">
@@ -212,11 +212,11 @@ export default function FinancePage() {
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* Featured: Q Card interest-free */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="py-20 px-6 md:px-16 bg-gradient-to-br from-amber-50 via-white to-pink-50/40">
+      <section className="py-12 md:py-20 px-4 md:px-16 bg-gradient-to-br from-amber-50 via-white to-pink-50/40">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-10">
             <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-solar">FEATURED OPTION</div>
-            <h2 className="text-3xl font-extrabold font-display"><span className="text-gradient-warm">Interest-free</span> finance</h2>
+            <h2 className="text-2xl md:text-3xl font-extrabold font-display"><span className="text-gradient-warm">Interest-free</span> finance</h2>
             <p className="text-sm text-gray-500 mt-2">The fastest, simplest way to go solar. No bank required.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -283,11 +283,11 @@ export default function FinancePage() {
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* NZ bank green loans */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="py-20 px-6 md:px-16 bg-gradient-to-b from-white via-cyan-50/30 to-white">
+      <section className="py-12 md:py-20 px-4 md:px-16 bg-gradient-to-b from-white via-cyan-50/30 to-white">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-10">
             <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-cool">NZ BANK GREEN LOANS</div>
-            <h2 className="text-3xl font-extrabold font-display">Low-rate <span className="text-gradient-warm">bank options</span></h2>
+            <h2 className="text-2xl md:text-3xl font-extrabold font-display">Low-rate <span className="text-gradient-warm">bank options</span></h2>
             <p className="text-sm text-gray-500 mt-2 max-w-xl mx-auto">All major NZ banks offer green loan top-ups specifically for solar. Rates as low as <b>1% p.a. fixed</b> for 3 years.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -325,11 +325,11 @@ export default function FinancePage() {
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* Comparison table */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="py-20 px-6 md:px-16 bg-gradient-to-br from-pink-50 via-white to-amber-50">
+      <section className="py-12 md:py-20 px-4 md:px-16 bg-gradient-to-br from-pink-50 via-white to-amber-50">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-10">
             <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-warm">SIDE BY SIDE</div>
-            <h2 className="text-3xl font-extrabold font-display">Compare <span className="text-gradient-warm">all options</span></h2>
+            <h2 className="text-2xl md:text-3xl font-extrabold font-display">Compare <span className="text-gradient-warm">all options</span></h2>
             <p className="text-sm text-gray-500 mt-2">A quick breakdown of every finance option available through GoldenRay Energy NZ.</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
@@ -361,10 +361,10 @@ export default function FinancePage() {
       {/* Application CTA — applications are processed by our team, so the */}
       {/* public-facing flow is "talk to an advisor" rather than self-serve.*/}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="py-16 px-6 md:px-16 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
+      <section className="py-10 md:py-16 px-4 md:px-16 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
         <div className="max-w-3xl mx-auto text-center">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-warm">READY TO APPLY?</div>
-          <h2 className="text-3xl font-extrabold font-display mb-3">
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display mb-3">
             Talk to an advisor to <span className="text-gradient-warm">start your application</span>
           </h2>
           <p className="text-sm text-gray-500 max-w-xl mx-auto leading-relaxed mb-6">
@@ -380,13 +380,13 @@ export default function FinancePage() {
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* Finance FAQ */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="py-20 px-6 md:px-16 bg-gradient-to-br from-violet-50 via-white to-amber-50">
+      <section className="py-12 md:py-20 px-4 md:px-16 bg-gradient-to-br from-violet-50 via-white to-amber-50">
         <div className="max-w-3xl mx-auto">
           <div className="text-center mb-10">
             <div className="inline-flex items-center gap-1.5 text-xs font-extrabold tracking-widest mb-2 text-gradient-cool">
               <HelpCircle size={13} /> COMMON QUESTIONS
             </div>
-            <h2 className="text-3xl font-extrabold font-display">Finance <span className="text-gradient-warm">FAQs</span></h2>
+            <h2 className="text-2xl md:text-3xl font-extrabold font-display">Finance <span className="text-gradient-warm">FAQs</span></h2>
             <p className="text-sm text-gray-500 mt-2">Straight answers to the questions we get asked most.</p>
           </div>
           <div className="space-y-3">
@@ -411,7 +411,7 @@ export default function FinancePage() {
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* Final CTA */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="py-16 px-6 md:px-16 text-white relative overflow-hidden"
+      <section className="py-10 md:py-16 px-4 md:px-16 text-white relative overflow-hidden"
         style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #500724 80%, #7c2d12 100%)' }}>
         <div className="absolute -top-20 right-1/3 w-80 h-80 rounded-full bg-gradient-to-br from-amber-400 to-pink-400 opacity-20 blur-3xl" />
         <div className="max-w-3xl mx-auto text-center relative z-10">

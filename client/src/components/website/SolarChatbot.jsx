@@ -318,7 +318,7 @@ export default function SolarChatbot() {
       </button>
 
       {/* Chat Window */}
-      <div className={`fixed bottom-24 right-6 z-50 w-[370px] max-h-[600px] flex flex-col rounded-2xl shadow-2xl border border-gray-100 bg-white overflow-hidden transition-all duration-300 origin-bottom-right
+      <div className={`fixed bottom-24 right-3 left-3 sm:left-auto sm:right-6 z-50 sm:w-[370px] max-h-[80vh] sm:max-h-[600px] flex flex-col rounded-2xl shadow-2xl border border-gray-100 bg-white overflow-hidden transition-all duration-300 origin-bottom-right
         ${open ? 'scale-100 opacity-100 pointer-events-auto' : 'scale-90 opacity-0 pointer-events-none'}`}
       >
         {/* Header */}

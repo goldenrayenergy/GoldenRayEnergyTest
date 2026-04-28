@@ -8,7 +8,7 @@ export default function WebsiteFooter({ homepage = true }) {
   const anchor = (slug) => (homepage ? `#${slug}` : `/#${slug}`);
 
   return (
-    <footer className="text-gray-300 px-16 py-12 relative overflow-hidden"
+    <footer className="text-gray-300 px-4 md:px-16 py-10 md:py-12 relative overflow-hidden"
       style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 35%, #500724 70%, #7c2d12 100%)' }}>
       <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-400 via-pink-500 via-fuchsia-500 via-violet-500 to-teal-400" />
       <div className="absolute -top-20 right-1/4 w-72 h-72 rounded-full bg-gradient-to-br from-pink-500 to-violet-600 opacity-10 blur-3xl" />

@@ -102,36 +102,39 @@ export default function WebsitePage() {
   return (
     <div className="bg-white dark:bg-brand-dark font-body transition-colors">
       {/* Nav */}
-      <nav className="fixed top-0 left-0 right-0 z-50 px-10 h-16 flex items-center justify-between backdrop-blur-md shadow-lg shadow-black/20 relative" style={{ background: 'linear-gradient(90deg, rgba(11,15,26,0.96) 0%, rgba(17,23,42,0.96) 50%, rgba(11,15,26,0.96) 100%)' }}>
+      <nav className="fixed top-0 left-0 right-0 z-50 px-4 md:px-10 h-16 flex items-center justify-between backdrop-blur-md shadow-lg shadow-black/20 relative" style={{ background: 'linear-gradient(90deg, rgba(11,15,26,0.96) 0%, rgba(17,23,42,0.96) 50%, rgba(11,15,26,0.96) 100%)' }}>
         <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-500" />
-        <div className="flex items-center gap-3 relative">
-          <div className="bg-white rounded-xl p-1.5 shadow-lg shadow-amber-500/30 ring-2 ring-amber-300/40">
-            <img src="/logo.jpg" alt="Goldenray Energy NZ" className="h-11 w-auto object-contain" />
+        <div className="flex items-center gap-3 relative min-w-0">
+          <div className="bg-white rounded-xl p-1.5 shadow-lg shadow-amber-500/30 ring-2 ring-amber-300/40 flex-shrink-0">
+            <img src="/logo.jpg" alt="Goldenray Energy NZ" className="h-9 md:h-11 w-auto object-contain" />
           </div>
-          <div className="leading-tight">
-            <div className="text-[14px] font-extrabold font-display tracking-tight text-white">GOLDENRAY <span className="bg-gradient-to-r from-amber-300 via-orange-300 to-emerald-300 bg-clip-text text-transparent">ENERGY NZ</span></div>
-            <div className="text-[9px] text-amber-200/80 italic">Powering a Sustainable Future</div>
+          <div className="leading-tight min-w-0">
+            <div className="text-[12px] md:text-[14px] font-extrabold font-display tracking-tight text-white truncate">GOLDENRAY <span className="bg-gradient-to-r from-amber-300 via-orange-300 to-emerald-300 bg-clip-text text-transparent">ENERGY NZ</span></div>
+            <div className="hidden sm:block text-[9px] text-amber-200/80 italic">Powering a Sustainable Future</div>
           </div>
         </div>
-        <div className="flex items-center gap-6 relative">
-          {['Products', 'How It Works', 'Calculator', 'Case Studies', 'Testimonials', 'FAQ', 'Contact'].map(l => (
-            <a key={l} href={`#${l.toLowerCase().replace(/\s+/g, '-')}`} className="text-sm text-gray-200 hover:text-amber-300 font-medium transition">{l}</a>
-          ))}
+        <div className="flex items-center gap-3 md:gap-6 relative">
+          {/* Section anchors hidden on mobile — users scroll instead */}
+          <div className="hidden lg:flex items-center gap-6">
+            {['Products', 'How It Works', 'Calculator', 'Case Studies', 'Testimonials', 'FAQ', 'Contact'].map(l => (
+              <a key={l} href={`#${l.toLowerCase().replace(/\s+/g, '-')}`} className="text-sm text-gray-200 hover:text-amber-300 font-medium transition">{l}</a>
+            ))}
+          </div>
           <button
             onClick={() => setFinanceModalOpen(true)}
-            className="text-sm font-semibold bg-gradient-to-r from-amber-300 via-orange-300 to-emerald-300 bg-clip-text text-transparent hover:from-amber-200 hover:to-white transition"
+            className="text-xs md:text-sm font-semibold bg-gradient-to-r from-amber-300 via-orange-300 to-emerald-300 bg-clip-text text-transparent hover:from-amber-200 hover:to-white transition whitespace-nowrap"
           >
             💰 Finance
           </button>
-          <ThemeToggle className="bg-white/10 border-white/10 text-amber-300 hover:bg-white/20 hover:text-amber-200" />
+          <ThemeToggle className="hidden md:flex bg-white/10 border-white/10 text-amber-300 hover:bg-white/20 hover:text-amber-200" />
           <Link to="/login">
-            <Button size="sm" icon={Lock}>Employee Login</Button>
+            <Button size="sm" icon={Lock}><span className="hidden sm:inline">Employee </span>Login</Button>
           </Link>
         </div>
       </nav>
 
       {/* Hero */}
-      <section className="min-h-screen flex items-center px-16 bg-mesh-vibrant relative overflow-hidden">
+      <section className="min-h-[80vh] md:min-h-screen flex items-center px-4 md:px-16 pt-20 md:pt-0 bg-mesh-vibrant relative overflow-hidden">
         <div className="absolute -top-20 -left-20 w-[420px] h-[420px] rounded-full bg-gradient-to-br from-amber-400 to-orange-500 opacity-25 blur-3xl animate-blob" />
         <div className="absolute top-[10%] right-[-80px] w-[460px] h-[460px] rounded-full bg-gradient-to-br from-orange-500 to-amber-500 opacity-25 blur-3xl animate-blob-delay-2" />
         <div className="absolute bottom-[-100px] left-[30%] w-[400px] h-[400px] rounded-full bg-gradient-to-br from-blue-500 to-emerald-500 opacity-20 blur-3xl animate-blob-delay-4" />
@@ -148,18 +151,18 @@ export default function WebsitePage() {
           <div className="inline-flex items-center px-4 py-1.5 rounded-full bg-white dark:bg-brand-dark-1 border border-amber-300 dark:border-amber-500/40 shadow-sm shadow-amber-200/60 dark:shadow-none mb-6">
             <span className="text-xs font-bold text-gradient-warm">NEW ZEALAND'S SOLAR ENERGY EXPERTS</span>
           </div>
-          <h1 className="text-5xl font-extrabold font-display leading-tight mb-5 dark:text-gray-100">
+          <h1 className="text-3xl md:text-5xl font-extrabold font-display leading-tight mb-5 dark:text-gray-100">
             Clean Energy for<br />New Zealand's <span className="text-gradient-warm animate-gradient">Future</span>
           </h1>
           <p className="text-base text-gray-600 dark:text-gray-300 leading-relaxed max-w-lg mb-8">
             From single-family homes to large commercial sites, <span className="font-semibold text-orange-600 dark:text-orange-400">GoldenRay Energy NZ</span> designs, installs, and supports solar systems built around your usage — with transparent pricing and detailed proposals.
           </p>
-          <div className="flex gap-3 flex-wrap">
+          <div className="flex gap-2 md:gap-3 flex-wrap">
             <a href="#calculator"><Button size="lg" icon={Zap}>Get Free Quote</Button></a>
             <Button onClick={() => setFinanceModalOpen(true)} variant="success" size="lg" icon={DollarSign}>$0 Upfront Finance</Button>
-            <Button variant="dark" size="lg" icon={Phone}>+64 21 839 356</Button>
+            <a href="tel:+6421839356"><Button variant="dark" size="lg" icon={Phone}>+64 21 839 356</Button></a>
           </div>
-          <div className="flex gap-12 mt-12">
+          <div className="grid grid-cols-2 md:flex md:gap-12 gap-4 mt-10 md:mt-12">
             {[
               { n: '1,800+', l: 'Installations', c: 'from-amber-500 to-orange-500' },
               { n: '$32M+', l: 'Savings',       c: 'from-emerald-500 to-emerald-600' },
@@ -167,8 +170,8 @@ export default function WebsitePage() {
               { n: '98%', l: 'Satisfaction',    c: 'from-amber-500 to-blue-500' },
             ].map((s, i) => (
               <div key={i}>
-                <div className={`text-2xl font-extrabold font-display bg-gradient-to-br ${s.c} bg-clip-text text-transparent`}>{s.n}</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">{s.l}</div>
+                <div className={`text-xl md:text-2xl font-extrabold font-display bg-gradient-to-br ${s.c} bg-clip-text text-transparent`}>{s.n}</div>
+                <div className="text-[11px] md:text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">{s.l}</div>
               </div>
             ))}
           </div>
@@ -176,12 +179,12 @@ export default function WebsitePage() {
       </section>
 
       {/* Products */}
-      <section id="products" className="py-24 px-16 bg-gradient-to-b from-white via-amber-50/40 to-white dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
+      <section id="products" className="py-16 md:py-24 px-4 md:px-16 bg-gradient-to-b from-white via-amber-50/40 to-white dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
         <div className="text-center mb-12">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-solar">PRODUCTS</div>
-          <h2 className="text-3xl font-extrabold font-display dark:text-gray-100">Solar Solutions for <span className="text-gradient-warm">New Zealand</span></h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display dark:text-gray-100">Solar Solutions for <span className="text-gradient-warm">New Zealand</span></h2>
         </div>
-        <div className="grid grid-cols-3 gap-5 max-w-5xl mx-auto">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5 max-w-5xl mx-auto">
           {[
             { name: 'Home Rooftop',    size: '3-10kW',    price: 'From $8,500',  priceColor: 'from-blue-500 to-blue-600',      badge: 'from-blue-500 to-blue-600',        img: 'https://images.unsplash.com/photo-1509391366360-2e959784a276?w=800&h=400&fit=crop&auto=format&q=80',  alt: 'Rooftop solar panels on residential home' },
             { name: 'Solar + Battery', size: '5-15kW',    price: 'From $18,000', priceColor: 'from-emerald-500 to-emerald-600', badge: 'from-emerald-500 to-emerald-600',  img: 'https://images.unsplash.com/photo-1559302504-64aae6ca6b6d?w=800&h=400&fit=crop&auto=format&q=80',  alt: 'Home solar with battery storage' },
@@ -207,13 +210,13 @@ export default function WebsitePage() {
       </section>
 
       {/* How It Works */}
-      <section id="how-it-works" className="py-24 px-16 bg-gradient-to-br from-blue-50 via-white to-emerald-50 dark:from-brand-dark-1 dark:via-brand-dark dark:to-brand-dark-1 transition-colors">
+      <section id="how-it-works" className="py-16 md:py-24 px-4 md:px-16 bg-gradient-to-br from-blue-50 via-white to-emerald-50 dark:from-brand-dark-1 dark:via-brand-dark dark:to-brand-dark-1 transition-colors">
         <div className="text-center mb-14">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-cool">HOW IT WORKS</div>
-          <h2 className="text-3xl font-extrabold font-display dark:text-gray-100">Solar in <span className="text-gradient-warm">4 Simple Steps</span></h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display dark:text-gray-100">Solar in <span className="text-gradient-warm">4 Simple Steps</span></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 max-w-lg mx-auto">From first enquiry to switch-on, our team manages every step — design, council consents, installation, and grid connection.</p>
         </div>
-        <div className="max-w-5xl mx-auto grid grid-cols-4 gap-6 relative">
+        <div className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-6 relative">
           <div className="absolute top-12 left-[12.5%] right-[12.5%] h-1 bg-gradient-to-r from-blue-400 via-amber-400 via-orange-400 to-emerald-400 hidden md:block rounded-full opacity-60" />
           {[
             { step: '01', icon: Eye,    title: 'Free Consultation',    desc: 'We review your power bills, roof orientation, and energy goals, then prepare a tailored proposal within one business day.',     gradient: 'from-blue-500 to-blue-600',       ring: 'ring-blue-200 dark:ring-blue-800/40' },
@@ -242,7 +245,7 @@ export default function WebsitePage() {
         <div className="absolute bottom-20 -left-32 w-80 h-80 rounded-full bg-gradient-to-br from-blue-400 to-emerald-400 opacity-20 blur-3xl animate-blob-delay-2" />
         <div className="text-center mb-12 relative">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-warm">FREE SOLAR CALCULATOR</div>
-          <h2 className="text-3xl font-extrabold font-display">Get Your <span className="text-gradient-warm">Instant Solar Quote</span></h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display">Get Your <span className="text-gradient-warm">Instant Solar Quote</span></h2>
           <p className="text-sm text-gray-500 mt-2 max-w-lg mx-auto">Enter your electricity details to see system size, projected savings, and payback period — and download a detailed PDF quote.</p>
         </div>
 
@@ -547,12 +550,12 @@ export default function WebsitePage() {
       </section>
 
       {/* Testimonials */}
-      <section id="testimonials" className="py-24 px-16 bg-gradient-to-br from-amber-50 via-white to-emerald-50 dark:from-brand-dark-1 dark:via-brand-dark dark:to-brand-dark-1 transition-colors">
+      <section id="testimonials" className="py-16 md:py-24 px-4 md:px-16 bg-gradient-to-br from-amber-50 via-white to-emerald-50 dark:from-brand-dark-1 dark:via-brand-dark dark:to-brand-dark-1 transition-colors">
         <div className="text-center mb-12">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-solar">TESTIMONIALS</div>
-          <h2 className="text-3xl font-extrabold font-display dark:text-gray-100">What Our <span className="text-gradient-warm">Customers Say</span></h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display dark:text-gray-100">What Our <span className="text-gradient-warm">Customers Say</span></h2>
         </div>
-        <div className="grid grid-cols-3 gap-5 max-w-5xl mx-auto">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 max-w-5xl mx-auto">
           {[
             { name: 'Tane & Maia',  text: '6kW system dropped our bill from $380 to $45/month!', loc: 'Auckland',     accent: 'from-amber-500 to-orange-500',   bg: 'from-amber-50/70 to-white dark:from-amber-500/5 dark:to-brand-dark-1' },
             { name: 'Sarah Chen',   text: '120kW powers our winery. $4,000+/month savings.',     loc: 'Marlborough',  accent: 'from-emerald-500 to-emerald-600', bg: 'from-emerald-50/70 to-white dark:from-emerald-500/5 dark:to-brand-dark-1' },
@@ -577,10 +580,10 @@ export default function WebsitePage() {
       </section>
 
       {/* Case Studies */}
-      <section id="case-studies" className="py-24 px-16 bg-gradient-to-b from-white via-blue-50/30 to-white dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
+      <section id="case-studies" className="py-16 md:py-24 px-4 md:px-16 bg-gradient-to-b from-white via-blue-50/30 to-white dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
         <div className="text-center mb-12">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-cool">CASE STUDIES</div>
-          <h2 className="text-3xl font-extrabold font-display dark:text-gray-100">Real Projects, <span className="text-gradient-warm">Real Savings</span></h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display dark:text-gray-100">Real Projects, <span className="text-gradient-warm">Real Savings</span></h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 max-w-lg mx-auto">A look at the system specs, costs, and savings behind recent installations across New Zealand.</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
@@ -632,7 +635,7 @@ export default function WebsitePage() {
       </section>
 
       {/* Our Mission */}
-      <section className="py-24 px-16 text-white relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #0B0F1A 0%, #11172A 40%, #1C2340 100%)' }}>
+      <section className="py-16 md:py-24 px-4 md:px-16 text-white relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #0B0F1A 0%, #11172A 40%, #1C2340 100%)' }}>
         <div className="absolute -top-20 -left-20 w-96 h-96 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 opacity-25 blur-3xl animate-blob" />
         <div className="absolute -bottom-32 -right-20 w-[420px] h-[420px] rounded-full bg-gradient-to-br from-orange-500 to-amber-500 opacity-25 blur-3xl animate-blob-delay-2" />
         <div className="absolute top-1/3 right-1/4 w-80 h-80 rounded-full bg-gradient-to-br from-blue-500 to-emerald-500 opacity-20 blur-3xl animate-blob-delay-4" />
@@ -647,13 +650,13 @@ export default function WebsitePage() {
         </div>
         <div className="max-w-4xl mx-auto text-center relative z-10">
           <div className="inline-block text-xs font-extrabold tracking-widest mb-3 px-4 py-1.5 rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-emerald-400 bg-clip-text text-transparent border border-amber-400/30 backdrop-blur">OUR MISSION</div>
-          <h2 className="text-4xl font-extrabold font-display mb-6">
+          <h2 className="text-2xl md:text-4xl font-extrabold font-display mb-6">
             Powering <span className="bg-gradient-to-r from-amber-300 via-orange-300 to-emerald-300 bg-clip-text text-transparent animate-gradient">New Zealand</span> with Trusted Solar
           </h2>
           <p className="text-base text-gray-200 leading-relaxed max-w-2xl mx-auto mb-10">
             We design, install, and support solar systems that lower power bills, reduce carbon emissions, and give homes and businesses across New Zealand long-term control over their energy. Clean, affordable energy should be accessible to everyone — that is the standard we build to.
           </p>
-          <div className="grid grid-cols-3 gap-6 max-w-2xl mx-auto">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-2xl mx-auto">
             {[
               { icon: DollarSign, label: 'Real Savings',         desc: 'Average 85% reduction in electricity bills', gradient: 'from-amber-400 to-orange-500' },
               { icon: Leaf,       label: 'Lower Emissions',      desc: '12,000+ tonnes of CO₂ offset and counting',   gradient: 'from-emerald-400 to-emerald-600' },
@@ -672,7 +675,7 @@ export default function WebsitePage() {
       </section>
 
       {/* Partners & Certifications */}
-      <section className="py-16 px-16 bg-gradient-to-b from-white via-amber-50/40 to-white dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
+      <section className="py-12 md:py-16 px-4 md:px-16 bg-gradient-to-b from-white via-amber-50/40 to-white dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
         <div className="text-center mb-10">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-solar">TRUSTED BY</div>
           <h2 className="text-2xl font-extrabold font-display dark:text-gray-100">Our Partners & <span className="text-gradient-warm">Certifications</span></h2>
@@ -696,10 +699,10 @@ export default function WebsitePage() {
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="py-24 px-16 bg-gradient-to-br from-amber-50 via-white to-emerald-50 dark:from-brand-dark-1 dark:via-brand-dark dark:to-brand-dark-1 transition-colors">
+      <section id="faq" className="py-16 md:py-24 px-4 md:px-16 bg-gradient-to-br from-amber-50 via-white to-emerald-50 dark:from-brand-dark-1 dark:via-brand-dark dark:to-brand-dark-1 transition-colors">
         <div className="text-center mb-12">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-warm">FAQ</div>
-          <h2 className="text-3xl font-extrabold font-display dark:text-gray-100">Frequently Asked <span className="text-gradient-warm">Questions</span></h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display dark:text-gray-100">Frequently Asked <span className="text-gradient-warm">Questions</span></h2>
         </div>
         <div className="max-w-3xl mx-auto space-y-3">
           {[
@@ -729,12 +732,12 @@ export default function WebsitePage() {
       </section>
 
       {/* Contact */}
-      <section id="contact" className="py-24 px-16 bg-gradient-to-br from-white via-blue-50/40 to-emerald-50/30 dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
+      <section id="contact" className="py-16 md:py-24 px-4 md:px-16 bg-gradient-to-br from-white via-blue-50/40 to-emerald-50/30 dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
         <div className="text-center mb-12">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-cool">CONTACT</div>
-          <h2 className="text-3xl font-extrabold font-display dark:text-gray-100">Talk to a <span className="text-gradient-warm">Solar Specialist</span></h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display dark:text-gray-100">Talk to a <span className="text-gradient-warm">Solar Specialist</span></h2>
         </div>
-        <div className="max-w-3xl mx-auto grid grid-cols-2 gap-6">
+        <div className="max-w-3xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="bg-white dark:bg-brand-dark-1 rounded-2xl p-6 border border-gray-100 dark:border-white/5 space-y-3">
             {['Name', 'Phone', 'Email'].map(l => (
               <div key={l}>
