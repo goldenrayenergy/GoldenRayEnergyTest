@@ -1,6 +1,7 @@
 {
   "name": "goldenray-energy",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "cd server && npm run dev",
@@ -8,7 +9,11 @@
     "install:all": "npm install && cd server && npm install && cd ../client && npm install",
     "db:setup": "cd server && npm run db:setup",
     "build": "cd client && npm run build",
-    "start": "cd server && npm start"
+    "start": "cd server && npm start",
+    "vercel-build": "cd client && npm run build"
+  },
+  "dependencies": {
+    "serverless-http": "^3.2.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

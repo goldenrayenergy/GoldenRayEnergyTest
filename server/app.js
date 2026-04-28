@@ -28,7 +28,18 @@ const PORT = process.env.PORT || 5000;
 
 // ── Middleware ──
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true }));
+// CORS — allow the configured client URL, localhost in dev, and any vercel.app
+// preview deployment so we don't have to redeploy every time we get a new URL.
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // server-to-server, curl, etc.
+    if (origin === process.env.CLIENT_URL) return cb(null, true);
+    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
+    if (/^https:\/\/[\w-]+\.vercel\.app$/.test(origin)) return cb(null, true);
+    cb(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+}));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
@@ -84,5 +95,12 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => console.log(`⚡ GoldenRay API running on port ${PORT}`));
+// Only start a long-lived listener when running directly via `node app.js`
+// or `nodemon`. On Vercel the app is wrapped by serverless-http and the
+// platform invokes it once per request — calling listen() there would hang
+// the function and waste billing time.
+if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  app.listen(PORT, () => console.log(`⚡ GoldenRay API running on port ${PORT}`));
+}
+
 export default app;
