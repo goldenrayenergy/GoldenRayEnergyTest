@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import Task from '../models/Task.js';
+import { authenticate } from '../middleware/auth.js';
+const router = Router();
+router.use(authenticate);
+router.get('/', async (req, res) => { try { res.json(await Task.findAll(req.query)); } catch(e) { res.status(500).json({error:e.message}); } });
+router.post('/', async (req, res) => { try { res.status(201).json(await Task.create(req.body)); } catch(e) { res.status(500).json({error:e.message}); } });
+router.patch('/:id', async (req, res) => { try { res.json(await Task.update(req.params.id, req.body)); } catch(e) { res.status(500).json({error:e.message}); } });
+router.delete('/:id', async (req, res) => { try { await Task.delete(req.params.id); res.json({success:true}); } catch(e) { res.status(500).json({error:e.message}); } });
+export default router;

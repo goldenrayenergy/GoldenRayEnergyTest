@@ -1,0 +1,31 @@
+{
+  "name": "goldenray-server",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon app.js",
+    "start": "node app.js",
+    "db:setup": "node db/setup.js",
+    "seed": "node db/seed-only.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.12.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.2.0",
+    "express-validator": "^7.0.1",
+    "puppeteer": "^22.6.0",
+    "nodemailer": "^6.9.13",
+    "@sendgrid/mail": "^8.1.3",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "@supabase/supabase-js": "^2.45.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}

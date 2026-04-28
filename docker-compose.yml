@@ -1,0 +1,18 @@
+version: '3.9'
+services:
+  server:
+    build: ./server
+    ports: ["5000:5000"]
+    env_file: .env
+    volumes: [./server:/app, /app/node_modules]
+
+  client:
+    build: ./client
+    ports: ["5173:5173"]
+    depends_on: [server]
+    volumes: [./client:/app, /app/node_modules]
+    environment:
+      - VITE_SUPABASE_URL=${SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+
+# No local PostgreSQL — using Supabase hosted database

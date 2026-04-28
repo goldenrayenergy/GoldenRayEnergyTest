@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { scroll-behavior: smooth; }
+  body { @apply font-body bg-white text-gray-900 transition-colors duration-200; font-feature-settings: "ss01", "cv11"; }
+  html.dark body { background-color: #0B0F1A; color: #F3F4F6; }
+  .font-display { letter-spacing: -0.03em; }
+  h1, h2, h3, h4 { @apply font-display; letter-spacing: -0.035em; }
+  ::selection { background: #F5A623; color: #fff; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #F5A623, #FF6A00, #2ECC71); border-radius: 4px; }
+  html.dark ::-webkit-scrollbar-track { background: #0B0F1A; }
+}
+
+@layer utilities {
+  .text-gradient-warm { background-image: linear-gradient(135deg, #F5A623 0%, #FF6A00 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .text-gradient-solar { background-image: linear-gradient(135deg, #F5A623 0%, #FF6A00 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .text-gradient-cool { background-image: linear-gradient(135deg, #1E90FF 0%, #2ECC71 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .text-gradient-energy { background-image: linear-gradient(135deg, #F5A623 0%, #FF6A00 40%, #2ECC71 80%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  .bg-mesh-vibrant {
+    background-color: #fff7ed;
+    background-image:
+      radial-gradient(at 12% 18%, rgba(245,166,35,0.22) 0px, transparent 45%),
+      radial-gradient(at 88% 12%, rgba(255,106,0,0.18) 0px, transparent 50%),
+      radial-gradient(at 78% 88%, rgba(30,144,255,0.14) 0px, transparent 50%),
+      radial-gradient(at 10% 92%, rgba(46,204,113,0.15) 0px, transparent 45%);
+  }
+  html.dark .bg-mesh-vibrant {
+    background-color: #0B0F1A;
+    background-image:
+      radial-gradient(at 12% 18%, rgba(245,166,35,0.22) 0px, transparent 45%),
+      radial-gradient(at 88% 12%, rgba(255,106,0,0.20) 0px, transparent 50%),
+      radial-gradient(at 78% 88%, rgba(30,144,255,0.22) 0px, transparent 50%),
+      radial-gradient(at 10% 92%, rgba(46,204,113,0.18) 0px, transparent 45%);
+  }
+
+  .bg-mesh-calc {
+    background-color: #ffffff;
+    background-image:
+      radial-gradient(at 5% 8%, rgba(245,166,35,0.15) 0px, transparent 45%),
+      radial-gradient(at 95% 8%, rgba(255,106,0,0.15) 0px, transparent 45%),
+      radial-gradient(at 95% 92%, rgba(30,144,255,0.13) 0px, transparent 50%),
+      radial-gradient(at 5% 92%, rgba(46,204,113,0.13) 0px, transparent 50%);
+  }
+  html.dark .bg-mesh-calc {
+    background-color: #0B0F1A;
+    background-image:
+      radial-gradient(at 5% 8%, rgba(245,166,35,0.18) 0px, transparent 45%),
+      radial-gradient(at 95% 8%, rgba(255,106,0,0.18) 0px, transparent 45%),
+      radial-gradient(at 95% 92%, rgba(30,144,255,0.18) 0px, transparent 50%),
+      radial-gradient(at 5% 92%, rgba(46,204,113,0.15) 0px, transparent 50%);
+  }
+
+  .shadow-color-glow { box-shadow: 0 20px 45px -15px rgba(255,106,0,0.35), 0 10px 25px -8px rgba(245,166,35,0.25); }
+  html.dark .shadow-color-glow { box-shadow: 0 20px 45px -15px rgba(255,106,0,0.45), 0 10px 25px -8px rgba(245,166,35,0.30); }
+}
+
+@keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.animate-spin-slow { animation: spin-slow 60s linear infinite; }
+
+@keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade-in { animation: fade-in 0.3s ease-out; }
+
+@keyframes blob-float { 0%,100% { transform: translate(0,0) scale(1); } 33% { transform: translate(30px,-40px) scale(1.08); } 66% { transform: translate(-25px,20px) scale(.94); } }
+.animate-blob { animation: blob-float 18s ease-in-out infinite; }
+.animate-blob-delay-2 { animation: blob-float 22s ease-in-out infinite; animation-delay: -6s; }
+.animate-blob-delay-4 { animation: blob-float 26s ease-in-out infinite; animation-delay: -12s; }
+
+@keyframes gradient-shift { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+.animate-gradient { background-size: 200% 200%; animation: gradient-shift 8s ease infinite; }
