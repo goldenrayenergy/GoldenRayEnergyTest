@@ -9,7 +9,7 @@ import { useAuth } from '../../context/AuthContext';
 import {
   ArrowLeft, Calendar, Activity as ActivityIcon, Sun, User as UserIcon,
   Mail, Phone, MapPin, Zap, DollarSign, CheckSquare, Square, Clock, ChevronDown, Lock, ShieldAlert,
-  Flame, Snowflake, ThermometerSun, FileText, Home, Save,
+  Flame, Snowflake, ThermometerSun, FileText, Home, Save, RefreshCw, Download, Send, Eye, FileCheck2, TrendingUp, Leaf, Plus,
 } from 'lucide-react';
 
 const CALL_OUTCOMES = [
@@ -193,6 +193,310 @@ function EnquiryTab({ enquiry }) {
         <Row label="Enquiry ID"      value={<span className="font-mono text-[10px]">{enquiry.id}</span>} />
       </Card>
     </div>
+  );
+}
+
+// ── Selling-stage tabs ─────────────────────────────────────────────────────
+// OnlineProposalTab — in-app, customer-facing proposal display. Shows the
+// latest proposal for this project; if none exists, offers a "Generate" CTA.
+function OnlineProposalTab({ project, customer }) {
+  const [proposals, setProposals] = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [error,     setError]     = useState('');
+
+  const load = () => {
+    setLoading(true);
+    api.get(`/proposals?project_id=${project.id}`)
+      .then(r => setProposals(r.data || []))
+      .catch(e => setError(e.response?.data?.error || 'Failed to load proposals'))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, [project.id]);
+
+  const generate = async () => {
+    setGenerating(true);
+    setError('');
+    try {
+      await api.post('/proposals/generate', { project_id: project.id });
+      load();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Generate failed');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  if (loading) return <Card className="py-12 text-center"><div className="animate-spin w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full mx-auto" /></Card>;
+
+  const latest = proposals[0];
+  const fmt$ = (n) => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
+
+  if (!latest) {
+    return (
+      <Card className="py-12 text-center">
+        <div className="w-14 h-14 rounded-full bg-amber-50 flex items-center justify-center mx-auto mb-3">
+          <FileCheck2 size={24} className="text-amber-500" />
+        </div>
+        <h3 className="text-sm font-bold text-gray-700">No proposal yet</h3>
+        <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">
+          Generate a proposal from the customer's monthly bill, system size, and roof data. You can always create a v2, v3, etc. afterwards.
+        </p>
+        {error && <p className="text-[11px] text-red-500 mt-2">{error}</p>}
+        <button
+          onClick={generate}
+          disabled={generating}
+          className="mt-4 px-5 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-bold disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
+          {generating ? <RefreshCw size={13} className="animate-spin" /> : <Plus size={13} />}
+          {generating ? 'Generating…' : 'Generate proposal'}
+        </button>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header strip */}
+      <Card className="!p-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center"><FileCheck2 size={18} className="text-amber-500" /></div>
+            <div>
+              <div className="text-sm font-bold">Proposal v{latest.version || 1}</div>
+              <div className="text-[10px] text-gray-400">For {customer?.name || 'customer'} · created {fmtDate(latest.created_at)}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge color={latest.status === 'accepted' ? '#10b981' : latest.status === 'sent' ? '#3b82f6' : latest.status === 'viewed' ? '#8b5cf6' : '#9ca3af'}>{latest.status}</Badge>
+            <button
+              onClick={generate}
+              disabled={generating}
+              className="px-3 py-1.5 rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 text-[11px] font-semibold text-gray-700 inline-flex items-center gap-1 disabled:opacity-50"
+              title="Create a new version"
+            >
+              {generating ? <RefreshCw size={11} className="animate-spin" /> : <Plus size={11} />}
+              New version
+            </button>
+          </div>
+        </div>
+      </Card>
+
+      {/* Customer-facing proposal preview */}
+      <Card className="!p-0 overflow-hidden">
+        <div className="px-7 py-6 text-white" style={{ background: 'linear-gradient(135deg,#f59e0b 0%,#d97706 50%,#b45309 100%)' }}>
+          <div className="text-[10px] font-bold tracking-widest opacity-90">SOLAR PROPOSAL</div>
+          <h2 className="text-2xl font-extrabold font-display mt-1">For {customer?.name || 'You'}</h2>
+          <div className="text-xs mt-2 opacity-95">{project.address || customer?.location || 'New Zealand'}</div>
+        </div>
+
+        <div className="p-7 space-y-6">
+          {/* System specs */}
+          <section>
+            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Recommended system</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Stat icon={Sun}  label="System size" value={`${latest.system_size_kw} kW`} accent="#f59e0b" />
+              <Stat icon={Zap}  label="Panels"      value={latest.panel_count} accent="#3b82f6" />
+              <Stat icon={Home} label="Battery"     value={latest.battery_kwh > 0 ? `${latest.battery_kwh} kWh` : 'No battery'} accent="#8b5cf6" />
+              <Stat icon={Leaf} label="CO₂/yr"      value={`${latest.co2_tons_year || 0} t`} accent="#10b981" />
+            </div>
+          </section>
+
+          {/* Investment block */}
+          <section className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-5 border border-amber-100">
+            <div className="text-[10px] font-bold text-amber-700 uppercase tracking-widest mb-2">Total investment</div>
+            <div className="text-4xl font-extrabold font-display text-gray-900">{fmt$(latest.total_cost)}</div>
+            <div className="text-xs text-gray-500 mt-1">incl. GST · supply, install, grid connection, monitoring app</div>
+          </section>
+
+          {/* Savings */}
+          <section>
+            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Your savings</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Stat icon={DollarSign} label="Monthly"   value={fmt$(latest.monthly_savings)} accent="#10b981" />
+              <Stat icon={DollarSign} label="Annual"    value={fmt$(latest.annual_savings)} accent="#10b981" />
+              <Stat icon={Clock}      label="Payback"   value={`${latest.payback_years || 0} yrs`} accent="#f59e0b" />
+              <Stat icon={TrendingUp} label="ROI"       value={`${latest.roi_percent || 0}%`} accent="#3b82f6" />
+            </div>
+          </section>
+
+          {/* Lifetime */}
+          <section className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 text-center">
+            <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">25-Year savings</div>
+            <div className="text-3xl font-extrabold font-display text-emerald-700 mt-1">{fmt$((latest.annual_savings || 0) * 25)}</div>
+            <div className="text-xs text-emerald-600 mt-1">Solar panels are warranted for 25 years of performance.</div>
+          </section>
+
+          {/* What's included */}
+          <section>
+            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">What's included</div>
+            <ul className="space-y-1.5 text-sm text-gray-700">
+              {[
+                `${latest.panel_count} Tier-1 monocrystalline solar panels (25-yr performance warranty)`,
+                'Premium hybrid inverter (10-yr warranty)',
+                latest.battery_kwh > 0 ? `${latest.battery_kwh} kWh battery storage (10-yr warranty)` : null,
+                'Mounting, wiring, and DC isolators (10-yr workmanship guarantee)',
+                'Council consent + grid connection paperwork',
+                'Live monitoring app (smartphone access)',
+                'Free annual system health check (year 1)',
+              ].filter(Boolean).map((item, i) => (
+                <li key={i} className="flex gap-2">
+                  <CheckSquare size={14} className="text-emerald-500 flex-shrink-0 mt-0.5" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {/* Footer note */}
+          <div className="border-t border-gray-100 pt-4 text-[10px] text-gray-400 leading-relaxed">
+            Proposal valid for 30 days from {fmtDate(latest.created_at)}. Final pricing subject to a site survey to confirm roof structure, shading, and electrical capacity. Finance options available — talk to your advisor.
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+const Stat = ({ icon: Icon, label, value, accent }) => (
+  <div className="bg-white border border-gray-100 rounded-lg p-3">
+    <div className="flex items-center gap-2 mb-1.5">
+      <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{ background: accent + '15' }}>
+        <Icon size={14} style={{ color: accent }} />
+      </div>
+      <div className="text-[9px] text-gray-400 uppercase font-semibold tracking-wide">{label}</div>
+    </div>
+    <div className="text-base font-extrabold text-gray-800">{value}</div>
+  </div>
+);
+
+// PdfProposalTab — generate, download, and email PDF versions.
+function PdfProposalTab({ project, customer }) {
+  const [proposals, setProposals]   = useState([]);
+  const [loading,   setLoading]     = useState(true);
+  const [busyId,    setBusyId]      = useState('');
+  const [error,     setError]       = useState('');
+  const [success,   setSuccess]     = useState('');
+
+  const load = () => {
+    setLoading(true);
+    api.get(`/proposals?project_id=${project.id}`)
+      .then(r => setProposals(r.data || []))
+      .catch(e => setError(e.response?.data?.error || 'Failed to load proposals'))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, [project.id]);
+
+  const downloadPdf = async (id, version) => {
+    setBusyId(id + ':pdf');
+    setError(''); setSuccess('');
+    try {
+      const r = await api.post(`/proposals/${id}/pdf`, {}, { responseType: 'blob' });
+      const blob = new Blob([r.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(customer?.name || 'customer').replace(/\s+/g, '-')}-Proposal-v${version || 1}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setSuccess('PDF downloaded');
+    } catch (e) {
+      setError('PDF generation failed: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const sendPdf = async (id) => {
+    setBusyId(id + ':send');
+    setError(''); setSuccess('');
+    try {
+      const r = await api.post(`/proposals/${id}/send`);
+      setSuccess(r.data?.message || 'Proposal email sent.');
+      load();
+    } catch (e) {
+      setError('Send failed: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const generate = async () => {
+    setBusyId('new');
+    setError(''); setSuccess('');
+    try {
+      await api.post('/proposals/generate', { project_id: project.id });
+      load();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Generate failed');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  if (loading) return <Card className="py-12 text-center"><div className="animate-spin w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full mx-auto" /></Card>;
+
+  return (
+    <Card title="Proposal versions" subtitle={`${proposals.length} version${proposals.length === 1 ? '' : 's'} on file`}>
+      {error   && <div className="mb-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-600">{error}</div>}
+      {success && <div className="mb-3 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-700">{success}</div>}
+
+      <div className="flex justify-end mb-3">
+        <button
+          onClick={generate}
+          disabled={busyId === 'new'}
+          className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
+          {busyId === 'new' ? <RefreshCw size={11} className="animate-spin" /> : <Plus size={11} />}
+          {busyId === 'new' ? 'Generating…' : 'Generate new version'}
+        </button>
+      </div>
+
+      {proposals.length === 0 ? (
+        <div className="text-xs text-gray-400 italic text-center py-6">No proposals yet — generate one above.</div>
+      ) : (
+        <ul className="space-y-2">
+          {proposals.map(p => {
+            const fmt$ = (n) => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
+            return (
+              <li key={p.id} className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 hover:border-gray-200 hover:bg-gray-50 transition">
+                <div className="w-9 h-9 rounded-md bg-amber-50 flex items-center justify-center flex-shrink-0"><FileText size={16} className="text-amber-500" /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold flex items-center gap-2">
+                    <span>v{p.version || 1}</span>
+                    <Badge color={p.status === 'accepted' ? '#10b981' : p.status === 'sent' ? '#3b82f6' : p.status === 'viewed' ? '#8b5cf6' : '#9ca3af'}>{p.status}</Badge>
+                  </div>
+                  <div className="text-[11px] text-gray-400">
+                    {p.system_size_kw} kW · {fmt$(p.total_cost)} · created {fmtDate(p.created_at)}
+                    {p.sent_at && ` · sent ${fmtDate(p.sent_at)}`}
+                  </div>
+                </div>
+                <button
+                  onClick={() => downloadPdf(p.id, p.version)}
+                  disabled={busyId === p.id + ':pdf'}
+                  className="px-3 py-1.5 rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 text-[11px] font-semibold text-gray-700 inline-flex items-center gap-1 disabled:opacity-50"
+                  title="Generate + download PDF"
+                >
+                  {busyId === p.id + ':pdf' ? <RefreshCw size={11} className="animate-spin" /> : <Download size={11} />} PDF
+                </button>
+                <button
+                  onClick={() => sendPdf(p.id)}
+                  disabled={busyId === p.id + ':send' || !customer?.email}
+                  title={customer?.email ? `Email PDF to ${customer.email} (dev mode redirects to test mailbox)` : 'No customer email on file'}
+                  className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-50"
+                >
+                  {busyId === p.id + ':send' ? <RefreshCw size={11} className="animate-spin" /> : <Send size={11} />} Email PDF
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <p className="text-[10px] text-gray-400 mt-4 leading-relaxed">
+        <strong>Dev mode:</strong> emails are redirected to <code>goldenrayenergy.nz@gmail.com</code> regardless of the customer's address — set <code>NODE_ENV=production</code> to send to real customers.
+      </p>
+    </Card>
   );
 }
 
@@ -545,9 +849,11 @@ export default function ProjectDetailPage() {
         </div>
       </div>
 
-      {/* Tab routing — manage + enquiry are implemented; the rest fall back to a Phase 2 placeholder */}
-      {activeTab === 'enquiry' && <EnquiryTab enquiry={enquiry} />}
-      {activeTab !== 'manage' && activeTab !== 'enquiry' && <TabPlaceholder tabId={activeTab} stageLabel={stage.label} />}
+      {/* Tab routing — manage + enquiry + online-proposal + pdf-proposal are implemented; rest fall back to placeholder */}
+      {activeTab === 'enquiry'         && <EnquiryTab enquiry={enquiry} />}
+      {activeTab === 'online-proposal' && <OnlineProposalTab project={project} customer={customer} />}
+      {activeTab === 'pdf-proposal'    && <PdfProposalTab    project={project} customer={customer} />}
+      {!['manage', 'enquiry', 'online-proposal', 'pdf-proposal'].includes(activeTab) && <TabPlaceholder tabId={activeTab} stageLabel={stage.label} />}
 
       {/* Manage tab content */}
       {activeTab === 'manage' && (

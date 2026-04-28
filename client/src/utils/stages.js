@@ -39,7 +39,7 @@ export const STAGE_TABS = {
 };
 
 // Which tabs are fully implemented (rest render a placeholder)
-export const IMPLEMENTED_TABS = new Set(['manage', 'enquiry']);
+export const IMPLEMENTED_TABS = new Set(['manage', 'enquiry', 'online-proposal', 'pdf-proposal']);
 
 // Per-stage guidance shown in the Manage tab.
 // Required items gate forward stage transitions (admins can override).
