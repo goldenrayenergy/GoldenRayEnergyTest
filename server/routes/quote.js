@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { calculateSolar } from '../services/calcService.js';
 import { generateQuotePDF } from '../services/quotePdfService.js';
 import { createProjectFromEnquiry } from '../services/projectService.js';
-import { sendQuoteEmail, sendTeamNewLeadEmail } from '../services/emailService.js';
+import { sendQuoteEmail, sendTeamNewLeadEmail, sendCustomerAckEmail } from '../services/emailService.js';
 import { supabaseAdmin } from '../config/supabase.js';
 
 const router = Router();
@@ -172,25 +172,38 @@ router.post('/submit', async (req, res) => {
       },
     });
 
-    // ── 6. Notify the team. Recipients: project owner (if assigned at intake)
-    //      + every admin user. Non-fatal — we never block the API response on
-    //      email problems.
-    try {
-      const { data: admins } = await supabaseAdmin
-        .from('users')
-        .select('email')
-        .eq('role', 'admin')
-        .eq('is_active', true);
-      const recipients = (admins || []).map(u => u.email).filter(Boolean);
-      await sendTeamNewLeadEmail({
-        form,
-        calculation,
-        leadScore,
-        recipients,
-        projectCode: project?.code,
-      });
-    } catch (mailErr) {
-      console.error('Team notification email failed (non-fatal):', mailErr.message);
+    // ── 6. Notify the team + send customer acknowledgment in parallel.
+    //      Both non-fatal — we never block the API response on email problems.
+    Promise.all([
+      (async () => {
+        try {
+          const { data: admins } = await supabaseAdmin
+            .from('users')
+            .select('email')
+            .eq('role', 'admin')
+            .eq('is_active', true);
+          const recipients = (admins || []).map(u => u.email).filter(Boolean);
+          await sendTeamNewLeadEmail({ form, calculation, leadScore, recipients, projectCode: project?.code });
+        } catch (e) { console.error('Team notification email failed (non-fatal):', e.message); }
+      })(),
+      (async () => {
+        try {
+          await sendCustomerAckEmail({ form, projectCode: project?.code });
+        } catch (e) { console.error('Customer ack email failed (non-fatal):', e.message); }
+      })(),
+    ]);
+
+    // ── 7. Set the first-call SLA timestamp so the dashboard can flag overdue
+    //      leads. 24-hour standard for residential solar in NZ.
+    if (project?.id) {
+      try {
+        await supabaseAdmin
+          .from('projects')
+          .update({ sla_first_call_due_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })
+          .eq('id', project.id);
+      } catch (e) {
+        console.error('SLA timestamp failed (non-fatal):', e.message);
+      }
     }
 
     res.status(201).json({ success: true, id: enquiry.id, contact_id: contact.id });

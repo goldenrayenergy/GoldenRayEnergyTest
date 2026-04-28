@@ -20,6 +20,7 @@ import otpRoutes from './routes/otp.js';
 import financeRoutes from './routes/finance.js';
 import enquiryRoutes from './routes/enquiries.js';
 import projectRoutes from './routes/projects.js';
+import overrideRoutes from './routes/overrides.js';
 
 dotenv.config({ path: '../.env' });
 
@@ -83,6 +84,7 @@ app.use('/api/otp', otpRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/enquiries', enquiryRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/overrides', overrideRoutes);
 
 // ── Health Check ──
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));

@@ -1,15 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../../services/api';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
 import { fmt$, fmtDateLong, fmtDate } from '../../utils/format';
-import { PROJECT_STAGES, getStage, stageIndex, STAGE_CHECKLISTS, STAGE_TABS, TAB_CATALOG, IMPLEMENTED_TABS, stageCompletion } from '../../utils/stages';
+import { PROJECT_STAGES, getStage, stageIndex, STAGE_CHECKLISTS, STAGE_TABS, TAB_CATALOG, IMPLEMENTED_TABS, STAGES_REQUIRING_CUSTOMER_ACTION, stageCompletion } from '../../utils/stages';
 import { useAuth } from '../../context/AuthContext';
 import {
   ArrowLeft, Calendar, Activity as ActivityIcon, Sun, User as UserIcon,
   Mail, Phone, MapPin, Zap, DollarSign, CheckSquare, Square, Clock, ChevronDown, Lock, ShieldAlert,
-  Flame, Snowflake, ThermometerSun, FileText, Home, Save, RefreshCw, Download, Send, Eye, FileCheck2, TrendingUp, Leaf, Plus,
+  Flame, Snowflake, ThermometerSun, FileText, Home, Save, RefreshCw, Download, Send, Eye, FileCheck2, TrendingUp, Leaf, Plus, CheckCircle2, X, ArrowRight, AlertTriangle,
 } from 'lucide-react';
 
 const CALL_OUTCOMES = [
@@ -59,9 +59,24 @@ function StageProgressBar({ currentStage }) {
 
 function StageMoveDropdown({ currentStage, onMove, disabled, completion, isAdmin }) {
   const [open, setOpen] = useState(false);
+  const [backwardTarget, setBackwardTarget] = useState(null); // { id, label } when admin clicked a backward stage
+  const [resetProgress, setResetProgress] = useState(false);
+  const [advancingBackward, setAdvancingBackward] = useState(false);
   const currentIdx = stageIndex(currentStage);
   const forwardBlocked = !isAdmin && !completion.complete;
   const missingCount = completion.total - completion.done;
+
+  const confirmBackward = async () => {
+    if (!backwardTarget) return;
+    setAdvancingBackward(true);
+    try {
+      await onMove(backwardTarget.id, { reset_progress: resetProgress });
+      setBackwardTarget(null);
+      setResetProgress(false);
+    } finally {
+      setAdvancingBackward(false);
+    }
+  };
 
   return (
     <div className="relative">
@@ -81,21 +96,35 @@ function StageMoveDropdown({ currentStage, onMove, disabled, completion, isAdmin
           )}
           {PROJECT_STAGES.map(s => {
             const i = stageIndex(s.id);
-            const isCurrent = s.id === currentStage;
-            const isForwardMove = i > currentIdx;
-            const blocked = isCurrent || (isForwardMove && forwardBlocked);
+            const isCurrent  = s.id === currentStage;
+            const isForwardMove  = i > currentIdx;
+            const isBackwardMove = i < currentIdx;
+            const forwardLocked  = isForwardMove  && forwardBlocked;
+            const backwardLocked = isBackwardMove && !isAdmin; // only admins can move backward
+            const blocked = isCurrent || forwardLocked || backwardLocked;
+            const onClickStage = () => {
+              setOpen(false);
+              if (isBackwardMove) {
+                // Don't fire the move yet — open the confirmation modal first.
+                setBackwardTarget({ id: s.id, label: s.label });
+              } else {
+                onMove(s.id);
+              }
+            };
             return (
               <button
                 key={s.id}
                 disabled={blocked}
-                onClick={() => { setOpen(false); onMove(s.id); }}
-                title={isCurrent ? 'Current stage' : blocked ? 'Complete required items first' : `Move to ${s.label}`}
+                onClick={onClickStage}
+                title={isCurrent ? 'Current stage' : forwardLocked ? 'Complete required items first' : backwardLocked ? 'Backward moves require admin role' : isBackwardMove ? `Move backward to ${s.label}` : `Move to ${s.label}`}
                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-amber-50 dark:hover:bg-white/5 text-gray-700 dark:text-gray-200 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
               >
                 <span>{s.icon}</span>
                 <span className="flex-1">{s.label}</span>
                 {isCurrent && <span className="text-[9px] text-amber-600 dark:text-amber-400 font-bold">CURRENT</span>}
-                {!isCurrent && isForwardMove && forwardBlocked && <Lock size={11} className="text-gray-300 dark:text-gray-500" />}
+                {!isCurrent && forwardLocked && <Lock size={11} className="text-gray-300 dark:text-gray-500" />}
+                {!isCurrent && isBackwardMove && isAdmin && <span className="text-[9px] text-gray-400">↩ back</span>}
+                {!isCurrent && backwardLocked && <Lock size={11} className="text-gray-300 dark:text-gray-500" />}
               </button>
             );
           })}
@@ -116,6 +145,138 @@ function StageMoveDropdown({ currentStage, onMove, disabled, completion, isAdmin
           )}
         </div>
       )}
+
+      {/* Backward-move confirmation modal. Triggered when an admin clicks an
+          earlier stage in the dropdown — explains exactly what data is
+          preserved and offers an optional checklist-progress reset. */}
+      {backwardTarget && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm animate-fade-in" onClick={() => !advancingBackward && setBackwardTarget(null)}>
+          <div className="relative w-full max-w-lg bg-white dark:bg-brand-dark-1 rounded-2xl shadow-2xl border border-gray-100 dark:border-white/10 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => !advancingBackward && setBackwardTarget(null)}
+              disabled={advancingBackward}
+              className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white/80 hover:bg-gray-100 dark:bg-brand-dark-2 dark:hover:bg-brand-dark-3 flex items-center justify-center text-gray-500 dark:text-gray-300 transition z-10 disabled:opacity-50">
+              <X size={14} />
+            </button>
+            <div className="p-6 text-white" style={{ background: 'linear-gradient(135deg,#7c2d12 0%,#9f1239 50%,#500724 100%)' }}>
+              <h3 className="text-lg font-extrabold font-display flex items-center gap-2">
+                <ShieldAlert size={18} /> Move project backward?
+              </h3>
+              <p className="text-xs text-white/85 mt-1.5 leading-relaxed">
+                You're about to move this project from <strong>{stageIndex(currentStage) >= 0 ? PROJECT_STAGES[stageIndex(currentStage)].label : currentStage}</strong> back to <strong>{backwardTarget.label}</strong>. This is unusual — confirm the implications below.
+              </p>
+            </div>
+            <div className="p-6 space-y-5 max-h-[60vh] overflow-y-auto">
+              <section>
+                <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2">What stays attached</div>
+                <ul className="space-y-1.5 text-xs text-gray-700 dark:text-gray-200">
+                  <li className="flex items-start gap-2"><CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0 mt-0.5" /><span>Linked proposals (any version, any status — accepted ones stay accepted)</span></li>
+                  <li className="flex items-start gap-2"><CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0 mt-0.5" /><span>Outstanding tasks (including any starter tasks from later stages)</span></li>
+                  <li className="flex items-start gap-2"><CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0 mt-0.5" /><span>Qualification data (owner, call notes, quality, qualified-at timestamp)</span></li>
+                  <li className="flex items-start gap-2"><CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0 mt-0.5" /><span>Activity history (this move adds an audit entry)</span></li>
+                </ul>
+              </section>
+              <section className="pt-3 border-t border-gray-100 dark:border-white/10">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetProgress}
+                    onChange={e => setResetProgress(e.target.checked)}
+                    disabled={advancingBackward}
+                    className="mt-0.5 w-4 h-4 accent-amber-500"
+                  />
+                  <div className="flex-1">
+                    <div className="text-xs font-semibold text-gray-800 dark:text-gray-100">Also reset checklist progress for {backwardTarget.label} and beyond</div>
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">
+                      Clears the stage-progress JSON for the target stage and every stage after it. Earlier-stage history is preserved. Useful if you're rolling back because items shouldn't have been ticked.
+                    </div>
+                  </div>
+                </label>
+              </section>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 italic">
+                If you wanted a brand-new project, cancel here and create one from a fresh website enquiry.
+              </p>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 dark:border-white/10 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setBackwardTarget(null)}
+                disabled={advancingBackward}
+                className="px-4 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-300 text-xs font-semibold hover:bg-gray-50 dark:hover:bg-white/5 disabled:opacity-50">
+                Cancel
+              </button>
+              <button
+                onClick={confirmBackward}
+                disabled={advancingBackward}
+                className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold disabled:opacity-50 inline-flex items-center gap-1.5">
+                {advancingBackward ? <RefreshCw size={12} className="animate-spin" /> : <ShieldAlert size={12} />}
+                Move backward to {backwardTarget.label}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Reusable confirmation modal for stage transitions. Shows what was just
+// completed (or auto-bypassed) and what will happen on advance, then asks
+// for explicit confirmation.
+function StageAdvanceModal({ open, onClose, onConfirm,
+  title, subtitle, completed = [], nextActions = [],
+  ctaLabel = 'Continue', confirming = false }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm animate-fade-in" onClick={onClose}>
+      <div className="relative w-full max-w-lg bg-white dark:bg-brand-dark-1 rounded-2xl shadow-2xl border border-gray-100 dark:border-white/10 overflow-hidden" onClick={e => e.stopPropagation()}>
+        <button onClick={onClose} disabled={confirming}
+          className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white/80 hover:bg-gray-100 dark:bg-brand-dark-2 dark:hover:bg-brand-dark-3 flex items-center justify-center text-gray-500 dark:text-gray-300 transition z-10 disabled:opacity-50">
+          <X size={14} />
+        </button>
+        <div className="p-6 text-white" style={{ background: 'linear-gradient(135deg,#0f766e 0%,#0e7490 50%,#1e40af 100%)' }}>
+          <h3 className="text-lg font-extrabold font-display">{title}</h3>
+          {subtitle && <p className="text-xs text-white/85 mt-1.5 leading-relaxed">{subtitle}</p>}
+        </div>
+        <div className="p-6 space-y-5 max-h-[60vh] overflow-y-auto">
+          {completed.length > 0 && (
+            <section>
+              <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2">What's been done</div>
+              <ul className="space-y-1.5">
+                {completed.map((c, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-gray-700 dark:text-gray-200">
+                    <CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0 mt-0.5" />
+                    <span>{c}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {nextActions.length > 0 && (
+            <section>
+              <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2">What happens next</div>
+              <ul className="space-y-1.5">
+                {nextActions.map((a, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-gray-700 dark:text-gray-200">
+                    <ArrowRight size={13} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                    <span>{a}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 dark:border-white/10 flex items-center justify-end gap-2">
+          <button onClick={onClose} disabled={confirming}
+            className="px-4 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-300 text-xs font-semibold hover:bg-gray-50 dark:hover:bg-white/5 disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={onConfirm} disabled={confirming}
+            className="px-5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold disabled:opacity-50 inline-flex items-center gap-1.5">
+            {confirming ? <RefreshCw size={12} className="animate-spin" /> : null}
+            {ctaLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -131,6 +292,152 @@ function TabPlaceholder({ tabId, stageLabel }) {
       <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">{meta?.desc}</p>
       <p className="text-[10px] text-gray-300 mt-3 italic">Available at the {stageLabel} stage once built.</p>
     </Card>
+  );
+}
+
+// Reusable "Accept proposal" button. Server gates acceptance on the selling
+// checklist; if the rep hits a 409 with `requires_override`, we surface the
+// missing items and give admins a one-click "Force accept" path.
+function AcceptProposalButton({ proposal, onAccepted }) {
+  const { user } = useAuth();
+  const isAdmin  = user?.role === 'admin';
+  const [busy,    setBusy]    = useState(false);
+  const [error,   setError]   = useState('');
+  const [missing, setMissing] = useState([]);
+  const [confirm, setConfirm] = useState(false);
+
+  if (proposal.status === 'accepted') {
+    return (
+      <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold">
+        <CheckCircle2 size={12} /> Accepted
+      </div>
+    );
+  }
+
+  const doAccept = async (override = false) => {
+    setBusy(true);
+    setError('');
+    setMissing([]);
+    try {
+      const r = await api.post(`/proposals/${proposal.id}/accept`, override ? { override: true } : {});
+      onAccepted?.(r.data);
+      setConfirm(false);
+    } catch (e) {
+      const data = e.response?.data || {};
+      setError(data.error || 'Accept failed');
+      if (Array.isArray(data.missing)) setMissing(data.missing);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="inline-flex flex-col items-start gap-1">
+      {!confirm ? (
+        <button
+          onClick={() => { setConfirm(true); setError(''); setMissing([]); }}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold transition"
+        >
+          <CheckCircle2 size={12} /> Mark as accepted
+        </button>
+      ) : (
+        <div className="inline-flex items-center gap-1.5 text-[11px]">
+          <span className="text-gray-600 font-semibold">Confirm: customer accepted v{proposal.version || 1}?</span>
+          <button onClick={() => doAccept(false)} disabled={busy} className="px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-400 text-white font-bold disabled:opacity-50">
+            {busy ? '...' : 'Yes'}
+          </button>
+          <button onClick={() => { setConfirm(false); setError(''); setMissing([]); }} disabled={busy} className="px-2.5 py-1 rounded border border-gray-200 text-gray-600">
+            Cancel
+          </button>
+        </div>
+      )}
+      {error && (
+        <div className="mt-1 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[11px] max-w-md">
+          <div className="font-semibold mb-1">{error}</div>
+          {missing.length > 0 && (
+            <ul className="list-disc ml-4 space-y-0.5 mb-2">
+              {missing.map(m => <li key={m.id}>{m.label}</li>)}
+            </ul>
+          )}
+          {missing.length > 0 && isAdmin && (
+            <button
+              onClick={() => doAccept(true)}
+              disabled={busy}
+              className="mt-1 px-2.5 py-1 rounded bg-red-500 hover:bg-red-400 text-white font-bold disabled:opacity-50 inline-flex items-center gap-1"
+              title="Admin: accept the proposal even though selling-stage requirements are incomplete. The skipped items stay un-ticked for audit."
+            >
+              <ShieldAlert size={11} /> Force accept (admin override)
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Header buttons: Mark Lost / Put on Hold / Reactivate. Updates project.sub_status.
+function ProjectStatusControls({ project, onChange }) {
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+
+  const setStatus = async (sub_status) => {
+    setBusy(sub_status || 'clear');
+    setError('');
+    try {
+      await api.patch(`/projects/${project.id}`, { sub_status });
+      onChange?.();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Update failed');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  if (project.sub_status) {
+    const labels = { lost: '✕ Lost', on_hold: '⏸ On hold', cancelled: '✕ Cancelled', disqualified: '⊘ Disqualified' };
+    return (
+      <div className="inline-flex items-center gap-2">
+        <span className="px-2 py-1 rounded text-[10px] font-bold bg-gray-100 dark:bg-brand-dark-2 text-gray-600 dark:text-gray-300">{labels[project.sub_status] || project.sub_status}</span>
+        <button
+          onClick={() => setStatus(null)}
+          disabled={!!busy}
+          className="px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
+          <RefreshCw size={11} /> Reactivate
+        </button>
+        {error && <span className="text-[10px] text-red-500">{error}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <button
+        onClick={() => setStatus('on_hold')}
+        disabled={!!busy}
+        title="Put project on hold (no cancellation)"
+        className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-white/10 hover:border-amber-300 hover:bg-amber-50 text-xs font-semibold text-gray-600 disabled:opacity-50 inline-flex items-center gap-1"
+      >
+        ⏸ Hold
+      </button>
+      <button
+        onClick={() => setStatus('lost')}
+        disabled={!!busy}
+        title="Lost: customer was real but went elsewhere. Cancels nurture cadence + sends a courtesy close email."
+        className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-white/10 hover:border-red-300 hover:bg-red-50 text-xs font-semibold text-gray-600 disabled:opacity-50 inline-flex items-center gap-1"
+      >
+        ✕ Lost
+      </button>
+      <button
+        onClick={() => setStatus('disqualified')}
+        disabled={!!busy}
+        title="Disqualified: not a real lead (spam, wrong number, out of service area, not a homeowner). Cancels nurture cadence."
+        className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-white/10 hover:border-gray-400 hover:bg-gray-50 text-xs font-semibold text-gray-600 disabled:opacity-50 inline-flex items-center gap-1"
+      >
+        ⊘ Disqualify
+      </button>
+      {error && <span className="text-[10px] text-red-500">{error}</span>}
+    </div>
   );
 }
 
@@ -199,7 +506,7 @@ function EnquiryTab({ enquiry }) {
 // ── Selling-stage tabs ─────────────────────────────────────────────────────
 // OnlineProposalTab — in-app, customer-facing proposal display. Shows the
 // latest proposal for this project; if none exists, offers a "Generate" CTA.
-function OnlineProposalTab({ project, customer }) {
+function OnlineProposalTab({ project, customer, onProjectChange }) {
   const [proposals, setProposals] = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -214,12 +521,21 @@ function OnlineProposalTab({ project, customer }) {
   };
   useEffect(load, [project.id]);
 
+  // After any proposal action that may have moved the project's stage
+  // (generate from Design = Trigger 2, accept = Trigger 3), reload BOTH
+  // the local proposal list AND the parent project so the header badge,
+  // tabs, and stage progress bar update immediately.
+  const reloadAll = () => {
+    load();
+    onProjectChange?.();
+  };
+
   const generate = async () => {
     setGenerating(true);
     setError('');
     try {
       await api.post('/proposals/generate', { project_id: project.id });
-      load();
+      reloadAll();
     } catch (e) {
       setError(e.response?.data?.error || 'Generate failed');
     } finally {
@@ -267,8 +583,9 @@ function OnlineProposalTab({ project, customer }) {
               <div className="text-[10px] text-gray-400">For {customer?.name || 'customer'} · created {fmtDate(latest.created_at)}</div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Badge color={latest.status === 'accepted' ? '#10b981' : latest.status === 'sent' ? '#3b82f6' : latest.status === 'viewed' ? '#8b5cf6' : '#9ca3af'}>{latest.status}</Badge>
+            <AcceptProposalButton proposal={latest} onAccepted={reloadAll} />
             <button
               onClick={generate}
               disabled={generating}
@@ -283,11 +600,21 @@ function OnlineProposalTab({ project, customer }) {
       </Card>
 
       {/* Customer-facing proposal preview */}
-      <Card className="!p-0 overflow-hidden">
+      <Card className="!p-0 overflow-hidden relative">
+        {latest.mode === 'preliminary' && (
+          <div className="absolute top-3 right-3 z-10 px-2.5 py-1 rounded-full bg-amber-100 border border-amber-300 text-amber-800 text-[10px] font-extrabold tracking-widest shadow-sm" title="No site visit logged. Numbers may shift after the visit.">
+            ⚠ PRELIMINARY
+          </div>
+        )}
         <div className="px-7 py-6 text-white" style={{ background: 'linear-gradient(135deg,#f59e0b 0%,#d97706 50%,#b45309 100%)' }}>
-          <div className="text-[10px] font-bold tracking-widest opacity-90">SOLAR PROPOSAL</div>
+          <div className="text-[10px] font-bold tracking-widest opacity-90">{latest.mode === 'final' ? 'FINAL SOLAR PROPOSAL' : 'PRELIMINARY ESTIMATE'}</div>
           <h2 className="text-2xl font-extrabold font-display mt-1">For {customer?.name || 'You'}</h2>
           <div className="text-xs mt-2 opacity-95">{project.address || customer?.location || 'New Zealand'}</div>
+          {latest.mode === 'preliminary' && (
+            <div className="mt-3 px-3 py-2 rounded-lg bg-white/15 backdrop-blur text-[11px] leading-relaxed">
+              ⚠ This is a <strong>preliminary estimate</strong> based on self-reported bill data. A site visit is needed to confirm roof orientation, shading, and structural fit. Final pricing may shift up to ±15%.
+            </div>
+          )}
         </div>
 
         <div className="p-7 space-y-6">
@@ -371,7 +698,7 @@ const Stat = ({ icon: Icon, label, value, accent }) => (
 );
 
 // PdfProposalTab — generate, download, and email PDF versions.
-function PdfProposalTab({ project, customer }) {
+function PdfProposalTab({ project, customer, onProjectChange }) {
   const [proposals, setProposals]   = useState([]);
   const [loading,   setLoading]     = useState(true);
   const [busyId,    setBusyId]      = useState('');
@@ -386,6 +713,13 @@ function PdfProposalTab({ project, customer }) {
       .finally(() => setLoading(false));
   };
   useEffect(load, [project.id]);
+
+  // Reload local proposals + parent project (so stage badge updates after
+  // a proposal acceptance bumps the project to Installation).
+  const reloadAll = () => {
+    load();
+    onProjectChange?.();
+  };
 
   const downloadPdf = async (id, version) => {
     setBusyId(id + ':pdf');
@@ -426,7 +760,7 @@ function PdfProposalTab({ project, customer }) {
     setError(''); setSuccess('');
     try {
       await api.post('/proposals/generate', { project_id: project.id });
-      load();
+      reloadAll();
     } catch (e) {
       setError(e.response?.data?.error || 'Generate failed');
     } finally {
@@ -465,6 +799,8 @@ function PdfProposalTab({ project, customer }) {
                   <div className="text-sm font-bold flex items-center gap-2">
                     <span>v{p.version || 1}</span>
                     <Badge color={p.status === 'accepted' ? '#10b981' : p.status === 'sent' ? '#3b82f6' : p.status === 'viewed' ? '#8b5cf6' : '#9ca3af'}>{p.status}</Badge>
+                    {p.mode === 'preliminary' && <Badge color="#f59e0b">⚠ preliminary</Badge>}
+                    {p.mode === 'final' && <Badge color="#059669">final</Badge>}
                   </div>
                   <div className="text-[11px] text-gray-400">
                     {p.system_size_kw} kW · {fmt$(p.total_cost)} · created {fmtDate(p.created_at)}
@@ -487,6 +823,7 @@ function PdfProposalTab({ project, customer }) {
                 >
                   {busyId === p.id + ':send' ? <RefreshCw size={11} className="animate-spin" /> : <Send size={11} />} Email PDF
                 </button>
+                <AcceptProposalButton proposal={p} onAccepted={reloadAll} />
               </li>
             );
           })}
@@ -500,6 +837,402 @@ function PdfProposalTab({ project, customer }) {
   );
 }
 
+// Shows the customer-cadence email schedule for a project, derived from
+// qualified_at + the fixed [3, 7, 14] day cadence we use server-side. Done
+// purely client-side (no Resend API roundtrip) to stay free-tier-friendly.
+function CadenceScheduleCard({ project }) {
+  if (!project.qualified_at) return null;
+  const qualifiedAt = new Date(project.qualified_at).getTime();
+  const now = Date.now();
+  const ids = project.cadence_email_ids || [];
+  const hasEmails = ids.length > 0;
+  const cancelled = !hasEmails && project.qualified_at; // Lost/Disqualified clears the IDs
+
+  const steps = [
+    { day: 3,  label: 'D+3 nurture · savings calculator + case studies' },
+    { day: 7,  label: 'D+7 nurture · "ready for a tailored proposal?"' },
+    { day: 14, label: 'D+14 final · "still a good time to talk solar?"' },
+  ];
+
+  return (
+    <Card title="Customer email cadence" subtitle={cancelled ? 'Cancelled when project was marked Lost or Disqualified' : `Auto-scheduled when lead was qualified${project.quality ? ` (${project.quality})` : ''}`}>
+      <ul className="space-y-2">
+        {steps.map(s => {
+          const due = qualifiedAt + s.day * 86400000;
+          const sent = !cancelled && due < now;
+          const scheduled = !cancelled && due >= now;
+          const dotColor = cancelled ? 'bg-gray-300' : sent ? 'bg-emerald-500' : 'bg-amber-400';
+          const statusLabel = cancelled ? 'cancelled' : sent ? `sent ${Math.floor((now - due) / 86400000)}d ago` : `scheduled ${new Date(due).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' })}`;
+          return (
+            <li key={s.day} className="flex items-start gap-2 text-xs">
+              <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${dotColor}`} />
+              <div className="flex-1 min-w-0">
+                <div className={cancelled ? 'text-gray-400 line-through' : 'text-gray-700 dark:text-gray-200 font-medium'}>{s.label}</div>
+                <div className="text-[10px] text-gray-400 mt-0.5">
+                  {sent      && <span className="text-emerald-600 dark:text-emerald-400">✓ </span>}
+                  {scheduled && <span>⏳ </span>}
+                  {statusLabel}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {!cancelled && (
+        <p className="text-[10px] text-gray-400 italic mt-3 pt-3 border-t border-gray-100 dark:border-white/10">
+          Resend handles delivery server-side. Mark project Lost or Disqualified to cancel pending emails.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+// ── Universal "Stage requirements" panel ───────────────────────────────────
+// Shown on every stage's Manage tab (in addition to the stage-specific
+// cards). Lists what's required to advance, lets reps tick off items that
+// don't have a backing UI yet (Phase 2 placeholders), and exposes an
+// "Advance to next stage" button that opens a confirmation modal explaining
+// what was done and what will happen.
+const STAGE_LABELS = {
+  new: 'New', design: 'Design', selling: 'Selling',
+  installation: 'Installation', maintenance: 'Maintenance', exit: 'Exit',
+};
+
+const NEXT_STAGE = {
+  new: 'design', design: 'selling', selling: 'installation',
+  installation: 'maintenance', maintenance: 'exit', exit: null,
+};
+
+// What auto-actions happen when the rep clicks Advance from each stage.
+// Used to populate the "What will happen" list in the confirmation modal.
+const NEXT_ACTIONS_BY_STAGE = {
+  new: [
+    'Project moves to Design and the Site / Design / Energy tabs become available',
+    'Three follow-up emails (D+3, D+7, D+14) are scheduled to the customer if not already',
+  ],
+  design: [
+    'Project moves to Selling and the Online Proposal / PDF Proposal tabs become available',
+    'Design checklist items are marked as bypassed so the gate doesn\'t trip on the next move',
+  ],
+  selling: [
+    'Project moves to Installation and the Schedule / SLD / Payments / Documents tabs become available',
+    'Five starter tasks are seeded for the install team: deposit, schedule, crew, SLD, supplier order',
+    'Selling checklist items are marked as bypassed',
+  ],
+  installation: [
+    'Project moves to Maintenance — the system is commissioned and the customer is generating power',
+    'Annual + 6-month performance check tasks become trackable',
+  ],
+  maintenance: [
+    'Project moves to Exit — final invoice settled and NPS survey sent',
+    'Project becomes read-only / archived for reporting',
+  ],
+};
+
+function StageRequirementsPanel({ project, onProjectChange }) {
+  const stage = project.stage;
+  const next  = NEXT_STAGE[stage];
+  const checklist = STAGE_CHECKLISTS[stage]?.required || [];
+  const completion = stageCompletion(stage, project.stage_progress);
+  const [savingItem, setSavingItem] = useState('');
+  const [error, setError] = useState('');
+
+  // Don't show on Exit (no further stage) or New (NewStagePanel covers it)
+  if (!next || stage === 'new') return null;
+
+  const toggle = async (itemId, completed) => {
+    setSavingItem(itemId);
+    setError('');
+    try {
+      await api.patch(`/projects/${project.id}/checklist`, { itemId, completed });
+      onProjectChange?.();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Save failed');
+    } finally {
+      setSavingItem('');
+    }
+  };
+
+  return (
+    <Card
+      title={`${STAGE_LABELS[stage]} stage requirements`}
+      subtitle={completion.complete
+        ? `All ${completion.total} required items complete — ready to advance to ${STAGE_LABELS[next]}.`
+        : `${completion.done} of ${completion.total} complete · ${completion.total - completion.done} still required to advance to ${STAGE_LABELS[next]}.`}
+    >
+      {error && <div className="mb-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-600 text-xs">{error}</div>}
+
+      <ul className="space-y-1.5">
+        {checklist.map(item => {
+          const done = project.stage_progress?.[item.id] === true;
+          const saving = savingItem === item.id;
+          return (
+            <li key={item.id}>
+              <button
+                onClick={() => toggle(item.id, !done)}
+                disabled={saving}
+                className={`w-full flex items-start gap-2 text-left text-xs rounded-md px-2 py-2 transition
+                  ${done ? 'bg-emerald-50 dark:bg-emerald-500/10' : 'hover:bg-gray-50 dark:hover:bg-white/5'}
+                  ${saving ? 'opacity-60' : ''}`}
+              >
+                {done
+                  ? <CheckSquare size={14} className="text-emerald-500 mt-0.5 flex-shrink-0" />
+                  : <Square      size={14} className="text-amber-400 dark:text-amber-500 mt-0.5 flex-shrink-0" />}
+                <span className={done ? 'line-through text-gray-400 dark:text-gray-500' : 'text-gray-700 dark:text-gray-200'}>{item.label}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      {!completion.complete && (
+        <div className="mt-3 pt-3 border-t border-gray-100 dark:border-white/5 text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
+          Complete all required items above. Once the last item is ticked, you'll be prompted to confirm the move to <strong className="text-gray-700 dark:text-gray-200">{STAGE_LABELS[next]}</strong>.
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ── Stage-specific Manage cards ────────────────────────────────────────────
+// Replaces the bare Tasks list once the lead has graduated past New. Each
+// stage shows a contextual snapshot card that surfaces the data + decisions
+// most relevant at that point.
+
+// Design: system being designed + key customer numbers
+function SystemSpecSnapshot({ project, customer }) {
+  const fmt$ = (n) => n ? '$' + Number(n).toLocaleString('en-NZ', { maximumFractionDigits: 0 }) : '—';
+  const Row = ({ label, value, highlight }) => (
+    <div className="flex justify-between items-center py-2 border-b border-gray-100 dark:border-white/5 last:border-0">
+      <span className="text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-wide font-semibold">{label}</span>
+      <span className={`text-sm font-bold ${highlight === 'amber' ? 'text-amber-600' : highlight === 'emerald' ? 'text-emerald-600' : 'text-gray-800 dark:text-gray-100'}`}>{value || '—'}</span>
+    </div>
+  );
+  return (
+    <Card title="System being designed" subtitle="Working numbers — these become the proposal once you click Generate">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-0">
+        <div>
+          <Row label="System size"   value={project.system_size_kw ? `${project.system_size_kw} kW` : null} highlight="amber" />
+          <Row label="Panels"        value={project.panels} />
+          <Row label="Battery"       value={project.battery_kwh > 0 ? `${project.battery_kwh} kWh` : 'No battery'} />
+          <Row label="System type"   value={project.system_type} />
+        </div>
+        <div>
+          <Row label="Est. value"    value={fmt$(project.estimated_value)} highlight="emerald" />
+          <Row label="Monthly bill"  value={customer?.monthly_bill ? `${fmt$(customer.monthly_bill)}/mo` : null} />
+          <Row label="Address"       value={project.address} />
+          <Row label="Quality"       value={project.quality ? project.quality.toUpperCase() : null} highlight={project.quality === 'hot' ? 'amber' : null} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// Selling: latest proposal status + customer engagement signals
+function ProposalStatusSnapshot({ project }) {
+  const [latest, setLatest] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get(`/proposals?project_id=${project.id}`)
+      .then(r => setLatest((r.data || [])[0] || null))
+      .catch(() => setLatest(null))
+      .finally(() => setLoading(false));
+  }, [project.id]);
+
+  if (loading) return <Card className="py-6 text-center"><div className="animate-spin w-5 h-5 border-2 border-amber-500 border-t-transparent rounded-full mx-auto" /></Card>;
+  if (!latest) return (
+    <Card title="Proposal status" subtitle="No proposal generated yet">
+      <p className="text-xs text-gray-400 italic">Switch to the Online Proposal tab to create one.</p>
+    </Card>
+  );
+
+  const fmt$ = (n) => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
+  const statusColor = latest.status === 'accepted' ? '#10b981'
+    : latest.status === 'sent'     ? '#3b82f6'
+    : latest.status === 'viewed'   ? '#8b5cf6'
+    : latest.status === 'rejected' ? '#ef4444'
+                                    : '#9ca3af';
+  const daysAgo = (iso) => iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : null;
+
+  return (
+    <Card title="Latest proposal" subtitle={`v${latest.version || 1} · created ${fmtDate(latest.created_at)}`}>
+      <div className="flex items-center gap-3 mb-4">
+        <Badge color={statusColor}>{latest.status}</Badge>
+        <span className="text-xs text-gray-500">
+          {latest.system_size_kw} kW · {latest.panel_count} panels · {fmt$(latest.total_cost)}
+        </span>
+      </div>
+      <div className="space-y-2 border-t border-gray-100 dark:border-white/5 pt-3">
+        {[
+          { label: 'Drafted',  done: !!latest.created_at, when: latest.created_at },
+          { label: 'Sent',     done: !!latest.sent_at,    when: latest.sent_at },
+          { label: 'Viewed',   done: !!latest.viewed_at,  when: latest.viewed_at },
+          { label: 'Accepted', done: latest.status === 'accepted', when: latest.status === 'accepted' ? latest.updated_at : null },
+        ].map((step, i) => (
+          <div key={i} className="flex items-center gap-2 text-xs">
+            <div className={`w-3 h-3 rounded-full flex-shrink-0 ${step.done ? 'bg-emerald-500' : 'bg-gray-200 dark:bg-white/10'}`} />
+            <span className={step.done ? 'text-gray-700 dark:text-gray-200 font-medium' : 'text-gray-400 dark:text-gray-500'}>{step.label}</span>
+            {step.when && <span className="text-[10px] text-gray-400">· {daysAgo(step.when)}d ago</span>}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// Installation+: project install snapshot
+function ProjectSnapshot({ project, customer }) {
+  const fmt$ = (n) => n ? '$' + Number(n).toLocaleString('en-NZ', { maximumFractionDigits: 0 }) : '—';
+  return (
+    <Card title="Project snapshot" subtitle="Quick view for the install + handover phase">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-amber-50 dark:bg-amber-500/10 rounded-lg p-3">
+          <div className="text-[9px] text-amber-700 uppercase font-bold tracking-wider">System</div>
+          <div className="text-base font-extrabold text-amber-700 mt-0.5">{project.system_size_kw ? `${project.system_size_kw} kW` : '—'}</div>
+          <div className="text-[10px] text-amber-600 mt-0.5">{project.panels ? `${project.panels} panels` : ''}{project.battery_kwh > 0 ? ` · ${project.battery_kwh} kWh` : ''}</div>
+        </div>
+        <div className="bg-emerald-50 dark:bg-emerald-500/10 rounded-lg p-3">
+          <div className="text-[9px] text-emerald-700 uppercase font-bold tracking-wider">Contract value</div>
+          <div className="text-base font-extrabold text-emerald-700 mt-0.5">{fmt$(project.estimated_value)}</div>
+          <div className="text-[10px] text-emerald-600 mt-0.5">incl. supply + install</div>
+        </div>
+        <div className="col-span-2 bg-gray-50 dark:bg-brand-dark-2 rounded-lg p-3">
+          <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider">Customer</div>
+          <div className="text-sm font-bold mt-0.5 dark:text-gray-100">{customer?.name || '—'}</div>
+          <div className="text-[11px] text-gray-500 truncate">{customer?.email || customer?.phone || ''}</div>
+          <div className="text-[11px] text-gray-500 truncate">{project.address || ''}</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// Last N activities — replaces the obsolete Tasks list in Design+
+function RecentActivityFeed({ activities, limit = 6 }) {
+  const recent = (activities || []).slice(0, limit);
+  if (recent.length === 0) return (
+    <Card title="Recent activity">
+      <p className="text-xs text-gray-400 italic py-3 text-center">No activity yet.</p>
+    </Card>
+  );
+  const typeStyle = (t) => ({
+    system:  { bg: 'bg-blue-50 dark:bg-blue-500/10',     dot: 'bg-blue-400'    },
+    call:    { bg: 'bg-emerald-50 dark:bg-emerald-500/10', dot: 'bg-emerald-400' },
+    email:   { bg: 'bg-amber-50 dark:bg-amber-500/10',   dot: 'bg-amber-400'   },
+    meeting: { bg: 'bg-violet-50 dark:bg-violet-500/10', dot: 'bg-violet-400'  },
+    note:    { bg: 'bg-gray-50 dark:bg-brand-dark-2',    dot: 'bg-gray-300'    },
+  })[t] || { bg: 'bg-gray-50 dark:bg-brand-dark-2', dot: 'bg-gray-300' };
+  return (
+    <Card title={`Recent activity (${activities.length})`} subtitle="Most recent events on this project">
+      <ul className="space-y-2.5">
+        {recent.map(a => {
+          const s = typeStyle(a.type);
+          return (
+            <li key={a.id} className={`flex gap-3 p-2.5 rounded-lg ${s.bg}`}>
+              <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${s.dot}`} />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-700 dark:text-gray-200">{a.description}</div>
+                <div className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">{fmtDateLong(a.created_at)} · <span className="uppercase tracking-wide">{a.type}</span></div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
+  );
+}
+
+// Filter out nurture cadence tasks (they're noise once the lead is engaged).
+// We tag them in projects.js with title prefix "Follow-up #N — ".
+function relevantTasks(tasks, stage) {
+  if (stage === 'new') return tasks; // nurture tasks are still useful at intake
+  return (tasks || []).filter(t => !/^Follow-up #\d+\b/.test(t.title || ''));
+}
+
+// Quick-action panel for the Design stage. The Design tabs (Site, Design,
+// Energy) are Phase-2 placeholders, but salespeople still need a path forward.
+// Generating a proposal from here fires the Design → Selling auto-trigger
+// server-side and lands the user on the proposal flow.
+function DesignStagePanel({ project, onProjectChange }) {
+  const [busy,  setBusy]  = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [siteVisitBusy, setSiteVisitBusy] = useState(false);
+
+  const generate = async () => {
+    setBusy(true);
+    setError('');
+    setSuccess('');
+    try {
+      const r = await api.post('/proposals/generate', { project_id: project.id });
+      const v    = r.data?.proposal?.version || 1;
+      const mode = r.data?.proposal?.mode    || 'preliminary';
+      setSuccess(`✓ Proposal v${v} created — ${mode === 'final' ? 'FINAL mode' : 'PRELIMINARY (no site visit yet)'}`);
+      onProjectChange?.();
+      setTimeout(() => setSuccess(''), 6000);
+    } catch (e) {
+      setError(e.response?.data?.error || 'Generate failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleSiteVisit = async () => {
+    setSiteVisitBusy(true);
+    try {
+      await api.patch(`/projects/${project.id}/site-visit`, { done: !project.site_visit_done_at });
+      onProjectChange?.();
+    } finally {
+      setSiteVisitBusy(false);
+    }
+  };
+
+  const visitDone = !!project.site_visit_done_at;
+
+  return (
+    <Card title="Generate the customer-facing proposal" subtitle="Generate a preliminary proposal at any time. Mark the site visit done to switch future proposals to FINAL mode (no preliminary watermark).">
+      {/* Site-visit gate. Without it, any proposal generated is labelled
+          PRELIMINARY on the customer-facing PDF + online preview. */}
+      <div className={`mb-4 px-3 py-2.5 rounded-lg border ${visitDone ? 'border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30' : 'border-amber-200 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30'}`}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[11px] flex items-center gap-1.5">
+            {visitDone
+              ? <><CheckCircle2 size={13} className="text-emerald-600" /><span className="text-emerald-800 dark:text-emerald-200 font-semibold">Site visit complete</span><span className="text-emerald-700 dark:text-emerald-300">— future proposals will be FINAL mode</span></>
+              : <><AlertTriangle size={13} className="text-amber-600" /><span className="text-amber-800 dark:text-amber-200 font-semibold">No site visit logged</span><span className="text-amber-700 dark:text-amber-300">— proposals will be marked PRELIMINARY</span></>}
+          </div>
+          <button
+            onClick={toggleSiteVisit}
+            disabled={siteVisitBusy}
+            className={`px-2.5 py-1 rounded text-[11px] font-bold disabled:opacity-50 ${visitDone ? 'bg-white border border-emerald-300 text-emerald-700' : 'bg-amber-500 hover:bg-amber-400 text-white'}`}
+          >
+            {siteVisitBusy ? '...' : visitDone ? 'Revert' : 'Mark site visit done'}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0"><FileCheck2 size={18} className="text-amber-500" /></div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-gray-500 leading-relaxed mb-3">
+            We'll calculate system size from <strong>{project.contacts?.monthly_bill ? `$${project.contacts.monthly_bill}/mo` : 'the customer\'s bill'}</strong>{project.system_type ? ` and the ${project.system_type} system type` : ''}, then create a v1 proposal you can refine.
+          </p>
+          {error   && <p className="text-[11px] text-red-500 mb-2">{error}</p>}
+          {success && <p className="text-[11px] text-emerald-700 dark:text-emerald-300 mb-2 px-2 py-1.5 rounded bg-emerald-50 dark:bg-emerald-500/10">{success}</p>}
+          <button
+            onClick={generate}
+            disabled={busy}
+            className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-bold disabled:opacity-50 inline-flex items-center gap-1.5"
+          >
+            {busy ? <RefreshCw size={13} className="animate-spin" /> : <FileCheck2 size={13} />}
+            {busy ? 'Generating…' : visitDone ? 'Generate FINAL proposal' : 'Generate preliminary proposal'}
+          </button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 // Data-capture panel for the New stage — replaces the bare checkbox toggles
 // for "Assign owner / Call customer / Qualify". Saving these fields auto-ticks
 // the corresponding checklist items server-side and unlocks the Design stage.
@@ -508,6 +1241,7 @@ function NewStagePanel({ project, users, onSave, saving }) {
   const [callOutcome, setCallOutcome] = useState(project.call_outcome || '');
   const [callNotes,   setCallNotes]   = useState(project.call_notes || '');
   const [quality,     setQuality]     = useState(project.quality || '');
+  const [success,     setSuccess]     = useState('');
 
   // Sales pool for the owner picker — sales executives + sales managers.
   const salesUsers = users.filter(u => u.role === 'sales_exec' || u.role === 'sales_mgr');
@@ -518,17 +1252,27 @@ function NewStagePanel({ project, users, onSave, saving }) {
     callNotes   !== (project.call_notes   || '') ||
     quality     !== (project.quality      || '');
 
-  const submit = () => {
+  const submit = async () => {
     const patch = {};
     if (ownerId     !== (project.owner_id     || '')) patch.owner_id     = ownerId || null;
     if (callOutcome !== (project.call_outcome || '')) patch.call_outcome = callOutcome || null;
     if (callNotes   !== (project.call_notes   || '')) patch.call_notes   = callNotes;
     if (quality     !== (project.quality      || '')) patch.quality     = quality || null;
-    onSave(patch);
+    const wasFirstQualification = !project.quality && quality;
+    await onSave(patch);
+    if (wasFirstQualification) {
+      setSuccess(`✓ Lead qualified as ${quality.toUpperCase()}. 3 follow-up emails scheduled (D+3, D+7, D+14). All requirements complete — confirm the move to Design above.`);
+      setTimeout(() => setSuccess(''), 8000);
+    }
   };
 
   return (
     <Card title="Qualify this lead" subtitle="Fill these fields to unlock the Design stage. A follow-up cadence is auto-created when quality is set.">
+      {success && (
+        <div className="mb-4 px-4 py-3 rounded-lg bg-emerald-50 border border-emerald-200 dark:bg-emerald-500/10 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200 text-xs leading-relaxed animate-fade-in">
+          {success}
+        </div>
+      )}
       {/* Assign owner */}
       <div className="mb-4">
         <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1.5">
@@ -635,6 +1379,10 @@ export default function ProjectDetailPage() {
   const [checkSaving, setCheckSaving] = useState('');
   const [savingNew, setSavingNew] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [completionModalOpen, setCompletionModalOpen] = useState(false);
+  const [completionDismissed, setCompletionDismissed] = useState(false);
+  const [advancingFromCompletion, setAdvancingFromCompletion] = useState(false);
+  const prevCompleteRef = useRef(null);
 
   const loadProject = () => {
     api.get(`/projects/${id}`)
@@ -655,6 +1403,52 @@ export default function ProjectDetailPage() {
     api.get('/auth/users').then(r => setUsers(r.data || [])).catch(() => setUsers([]));
   }, []);
 
+  // Detect when the current stage's required checklist becomes complete.
+  // Fires the central completion modal on the false→true transition only —
+  // never on initial page load — so users aren't ambushed by a popup the
+  // moment they open a project that was already complete but not advanced.
+  //
+  // Skipped for stages where the actual transition is driven by a customer
+  // fact rather than checklist completion (e.g. Selling — the rep finishing
+  // their prep work doesn't mean the customer has accepted the proposal).
+  // Those stages get a "ready" banner instead.
+  useEffect(() => {
+    if (!project) return;
+    const stageId = project.stage;
+    if (!stageId || stageId === 'exit') return;
+    if (STAGES_REQUIRING_CUSTOMER_ACTION.has(stageId)) {
+      // Track completion for the banner, but never auto-fire the modal.
+      const c = stageCompletion(stageId, project.stage_progress);
+      prevCompleteRef.current = c.complete;
+      return;
+    }
+    const c = stageCompletion(stageId, project.stage_progress);
+    const prev = prevCompleteRef.current;
+    if (prev === false && c.complete) {
+      setCompletionModalOpen(true);
+      setCompletionDismissed(false);
+    }
+    prevCompleteRef.current = c.complete;
+  }, [project?.stage, project?.stage_progress]);
+
+  // Advance to the next stage from the completion modal acknowledgment.
+  const advanceFromCompletion = async () => {
+    if (!project) return;
+    const next = NEXT_STAGE[project.stage];
+    if (!next) { setCompletionModalOpen(false); return; }
+    setAdvancingFromCompletion(true);
+    try {
+      await api.patch(`/projects/${project.id}`, { stage: next, previous_stage: project.stage });
+      setCompletionModalOpen(false);
+      setCompletionDismissed(false);
+      loadProject();
+    } catch (e) {
+      alert(e.response?.data?.error || 'Advance failed');
+    } finally {
+      setAdvancingFromCompletion(false);
+    }
+  };
+
   const saveNewStageQualification = async (patch) => {
     setSavingNew(true);
     try {
@@ -674,6 +1468,7 @@ export default function ProjectDetailPage() {
         stage: newStage,
         previous_stage: project.stage,
         override: !!opts.override,
+        reset_progress: !!opts.reset_progress,
       });
       loadProject();
     } catch (e) {
@@ -739,7 +1534,7 @@ export default function ProjectDetailPage() {
           <Badge color={stage.color}>{stage.icon} {stage.label}</Badge>
           {project.sub_status && <Badge color="#ef4444">{project.sub_status}</Badge>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <StageMoveDropdown
             currentStage={project.stage}
             onMove={moveStage}
@@ -747,9 +1542,7 @@ export default function ProjectDetailPage() {
             completion={completion}
             isAdmin={isAdmin}
           />
-          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-brand-dark-1 hover:border-amber-300 hover:bg-amber-50 dark:hover:bg-white/5 text-xs font-semibold text-gray-700 dark:text-gray-200">
-            <Calendar size={13} /> Schedule
-          </button>
+          <ProjectStatusControls project={project} onChange={loadProject} />
           <button
             onClick={() => setLogOpen(v => !v)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-brand-dark-1 hover:border-amber-300 hover:bg-amber-50 dark:hover:bg-white/5 text-xs font-semibold text-gray-700 dark:text-gray-200"
@@ -758,6 +1551,44 @@ export default function ProjectDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* "Ready" banner. Two variants:
+          - For stages whose transition is driven by checklist completion
+            (New, Design, Installation, Maintenance), this banner re-opens
+            the completion modal if the user previously dismissed it.
+          - For Selling (customer-action-driven), this banner is a self-check
+            confirmation — "rep prep work is done, awaiting customer accept".
+            No advance button; clicking through to Online Proposal tab is the
+            natural next step. */}
+      {completion.complete && NEXT_STAGE[project.stage] && (
+        STAGES_REQUIRING_CUSTOMER_ACTION.has(project.stage) ? (
+          <div className="rounded-xl border border-blue-200 dark:border-blue-500/30 bg-gradient-to-r from-blue-50 to-sky-50 dark:from-blue-500/10 dark:to-sky-500/10 px-4 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-blue-800 dark:text-blue-200">
+              <CheckCircle2 size={16} className="flex-shrink-0" />
+              <span><strong>Selling prep complete.</strong> Awaiting customer decision — use <em>Mark as accepted</em> on the Online Proposal tab when they sign.</span>
+            </div>
+            <button
+              onClick={() => setTab('online-proposal')}
+              className="px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-white text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <FileCheck2 size={11} /> Open proposal
+            </button>
+          </div>
+        ) : completionDismissed ? (
+          <div className="rounded-xl border border-emerald-200 dark:border-emerald-500/30 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-500/10 dark:to-teal-500/10 px-4 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-200">
+              <CheckCircle2 size={16} className="flex-shrink-0" />
+              <span><strong>{stage.label} requirements complete.</strong> Ready to move to {STAGE_LABELS[NEXT_STAGE[project.stage]]}.</span>
+            </div>
+            <button
+              onClick={() => { setCompletionModalOpen(true); setCompletionDismissed(false); }}
+              className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <ArrowRight size={11} /> Advance
+            </button>
+          </div>
+        ) : null
+      )}
 
       {/* Stage progress bar */}
       <Card className="py-5 px-6">
@@ -851,8 +1682,8 @@ export default function ProjectDetailPage() {
 
       {/* Tab routing — manage + enquiry + online-proposal + pdf-proposal are implemented; rest fall back to placeholder */}
       {activeTab === 'enquiry'         && <EnquiryTab enquiry={enquiry} />}
-      {activeTab === 'online-proposal' && <OnlineProposalTab project={project} customer={customer} />}
-      {activeTab === 'pdf-proposal'    && <PdfProposalTab    project={project} customer={customer} />}
+      {activeTab === 'online-proposal' && <OnlineProposalTab project={project} customer={customer} onProjectChange={loadProject} />}
+      {activeTab === 'pdf-proposal'    && <PdfProposalTab    project={project} customer={customer} onProjectChange={loadProject} />}
       {!['manage', 'enquiry', 'online-proposal', 'pdf-proposal'].includes(activeTab) && <TabPlaceholder tabId={activeTab} stageLabel={stage.label} />}
 
       {/* Manage tab content */}
@@ -867,6 +1698,17 @@ export default function ProjectDetailPage() {
                 saving={savingNew}
               />
             )}
+            {project.stage === 'design' && (
+              <DesignStagePanel project={project} onProjectChange={loadProject} />
+            )}
+            {project.stage !== 'new' && (
+              <StageRequirementsPanel project={project} onProjectChange={loadProject} />
+            )}
+            {/* Legacy unified checklist card. Hidden for non-New stages because
+                StageRequirementsPanel covers the same checklist + advance flow.
+                Kept for New stage only — that's where the data-driven items
+                (owner / call / quality) need to be visible as ticked. */}
+            {project.stage === 'new' && (
             <Card
               title={`${stage.label} checklist`}
               subtitle={completion.total > 0
@@ -947,27 +1789,78 @@ export default function ProjectDetailPage() {
                 )}
               </div>
             </Card>
+            )}
 
-            <Card title={`Tasks (${tasks.length})`} subtitle="Action items linked to this project">
-              {tasks.length === 0 ? (
-                <div className="text-xs text-gray-400 italic py-4 text-center">No tasks yet.</div>
-              ) : (
-                <ul className="space-y-2">
-                  {tasks.map(t => (
-                    <li key={t.id} className="flex items-start justify-between gap-3 p-2 rounded-lg border border-gray-100 hover:bg-gray-50">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-semibold text-gray-800">{t.title}</div>
-                        {t.description && <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">{t.description}</div>}
-                      </div>
-                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                        <Badge color={t.priority === 'high' ? '#ef4444' : t.priority === 'low' ? '#9ca3af' : '#f59e0b'}>{t.priority}</Badge>
-                        {t.due_date && <span className="text-[10px] text-gray-400 flex items-center gap-1"><Clock size={9} /> {fmtDate(t.due_date)}</span>}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Card>
+            {/* Stage-specific Manage content. New stage shows the Tasks list as
+                normal (the nurture cadence tasks are useful at intake). Other
+                stages get a snapshot card for the work that matters here. */}
+            {project.stage === 'new' && (
+              <Card title={`Tasks (${tasks.length})`} subtitle="Action items linked to this project">
+                {tasks.length === 0 ? (
+                  <div className="text-xs text-gray-400 italic py-4 text-center">No tasks yet.</div>
+                ) : (
+                  <ul className="space-y-2">
+                    {tasks.map(t => (
+                      <li key={t.id} className="flex items-start justify-between gap-3 p-2 rounded-lg border border-gray-100 hover:bg-gray-50">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-gray-800">{t.title}</div>
+                          {t.description && <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">{t.description}</div>}
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <Badge color={t.priority === 'high' ? '#ef4444' : t.priority === 'low' ? '#9ca3af' : '#f59e0b'}>{t.priority}</Badge>
+                          {t.due_date && <span className="text-[10px] text-gray-400 flex items-center gap-1"><Clock size={9} /> {fmtDate(t.due_date)}</span>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            )}
+
+            {project.stage === 'design'  && <SystemSpecSnapshot   project={project} customer={customer} />}
+            {project.stage === 'selling' && <ProposalStatusSnapshot project={project} />}
+            {(project.stage === 'installation' || project.stage === 'maintenance' || project.stage === 'exit') && (
+              <ProjectSnapshot project={project} customer={customer} />
+            )}
+            {/* Cadence schedule — visible from Design onwards while the
+                cadence is active. Helps reps know what the customer is
+                receiving in the background. */}
+            {project.qualified_at && project.stage !== 'new' && (
+              <CadenceScheduleCard project={project} />
+            )}
+
+            {/* Recent Activity replaces the noisy Tasks list in non-New stages.
+                It surfaces system events (auto-triggers, emails, calls) so the
+                rep sees exactly what's happened. The handful of relevant
+                non-nurture tasks (e.g. installation starter tasks) are shown
+                in a lighter list below it. */}
+            {project.stage !== 'new' && (
+              <>
+                <RecentActivityFeed activities={activities} />
+                {(() => {
+                  const ts = relevantTasks(tasks, project.stage);
+                  if (ts.length === 0) return null;
+                  return (
+                    <Card title={`Tasks (${ts.length})`} subtitle="Outstanding items on this project (nurture cadence hidden)">
+                      <ul className="space-y-2">
+                        {ts.map(t => (
+                          <li key={t.id} className="flex items-start justify-between gap-3 p-2 rounded-lg border border-gray-100 hover:bg-gray-50">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-semibold text-gray-800">{t.title}</div>
+                              {t.description && <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">{t.description}</div>}
+                            </div>
+                            <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                              <Badge color={t.priority === 'high' ? '#ef4444' : t.priority === 'low' ? '#9ca3af' : '#f59e0b'}>{t.priority}</Badge>
+                              {t.due_date && <span className="text-[10px] text-gray-400 flex items-center gap-1"><Clock size={9} /> {fmtDate(t.due_date)}</span>}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </Card>
+                  );
+                })()}
+              </>
+            )}
 
             <Card title="Internal notes" subtitle="Team-only — not shown to customer">
               <textarea
@@ -1006,6 +1899,23 @@ export default function ProjectDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Central stage-completion modal — fires when the current stage's
+          checklist transitions from incomplete to complete. Hoisted to the
+          top-level page so it survives the actual stage-move re-render. */}
+      <StageAdvanceModal
+        open={completionModalOpen}
+        onClose={() => { setCompletionModalOpen(false); setCompletionDismissed(true); }}
+        onConfirm={advanceFromCompletion}
+        confirming={advancingFromCompletion}
+        title={`${stage.label} stage complete`}
+        subtitle={NEXT_STAGE[project.stage]
+          ? `All required activities for the ${stage.label} stage are done. Ready to move to ${STAGE_LABELS[NEXT_STAGE[project.stage]]}?`
+          : `All required activities for the ${stage.label} stage are done.`}
+        completed={(STAGE_CHECKLISTS[project.stage]?.required || []).map(it => `${it.label} ✓`)}
+        nextActions={NEXT_ACTIONS_BY_STAGE[project.stage] || []}
+        ctaLabel={NEXT_STAGE[project.stage] ? `Acknowledge & move to ${STAGE_LABELS[NEXT_STAGE[project.stage]]}` : 'Acknowledge'}
+      />
 
       {/* Activity log drawer */}
       {logOpen && (

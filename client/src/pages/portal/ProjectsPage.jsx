@@ -4,7 +4,7 @@ import api from '../../services/api';
 import { PROJECT_STAGES, stageIndex, stageCompletion } from '../../utils/stages';
 import { useAuth } from '../../context/AuthContext';
 import { fmt$ } from '../../utils/format';
-import { Search, Briefcase, ChevronRight, Lock } from 'lucide-react';
+import { Search, Briefcase, ChevronRight, Lock, RefreshCw } from 'lucide-react';
 
 function daysSince(date) {
   if (!date) return 0;
@@ -123,10 +123,27 @@ export default function ProjectsPage() {
   const [projects, setProjects] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [moving, setMoving] = useState('');
 
+  const load = (showSpinner = true) => {
+    if (showSpinner) setRefreshing(true);
+    return api.get('/projects')
+      .then(r => setProjects(r.data))
+      .finally(() => { setLoading(false); setRefreshing(false); });
+  };
+
+  // Initial load + refetch when the tab regains focus (covers the common
+  // "I navigated to project detail, advanced its stage, came back" flow).
   useEffect(() => {
-    api.get('/projects').then(r => setProjects(r.data)).finally(() => setLoading(false));
+    load();
+    const onFocus = () => load(false);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
   }, []);
 
   const filtered = search
@@ -171,7 +188,17 @@ export default function ProjectsPage() {
           </h2>
           <p className="text-[11px] text-gray-400">Lifecycle tracking from lead to maintenance.</p>
         </div>
-        <div className="text-[11px] text-gray-400">{projects.length} total</div>
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] text-gray-400">{projects.length} total</span>
+          <button
+            onClick={() => load(true)}
+            disabled={refreshing}
+            title="Refresh"
+            className="p-1.5 rounded-lg border border-gray-200 dark:border-white/10 hover:border-amber-300 hover:bg-amber-50 text-gray-500 disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+          </button>
+        </div>
       </div>
 
       <div className="relative max-w-md">

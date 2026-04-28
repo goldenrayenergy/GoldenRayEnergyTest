@@ -165,6 +165,64 @@ export async function sendTeamNewLeadEmail({ form, calculation, leadScore, recip
   });
 }
 
+// ── New: customer acknowledgment email at form submit ─────────────────────
+// Fires immediately when a website form is submitted. Confirms the enquiry
+// arrived and sets expectations: the team will call within 24 hours. Closes
+// the "did my form even submit?" loop that costs the most leads.
+export async function sendCustomerAckEmail({ form, projectCode, ownerName }) {
+  if (!form?.email) {
+    console.log('No customer email — skipping ack email');
+    return null;
+  }
+  const friendly = (form.firstName || form.lastName) ? [form.firstName, form.lastName].filter(Boolean).join(' ').trim() : 'there';
+  const monthlyBillStr = form.monthlyBill ? `$${form.monthlyBill}/month` : null;
+  const body = `
+    <p style="font-size:14px">Kia ora <strong>${friendly}</strong>,</p>
+    <p style="color:#4b5563;font-size:13px">Thanks for reaching out to ${COMPANY.name}. We've received your solar enquiry${projectCode ? ` (reference <code style="background:#fef3c7;padding:1px 5px;border-radius:3px">${projectCode}</code>)` : ''} and a specialist will be in touch within <strong>one business day</strong>.</p>
+    <div style="background:#f8fafc;border-radius:8px;padding:14px;margin:14px 0">
+      <div style="font-size:11px;color:#6b7280;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Your enquiry</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        ${form.address      ? `<tr><td style="padding:3px 0;color:#6b7280">Address</td><td style="padding:3px 0;font-weight:600;text-align:right">${form.address}</td></tr>` : ''}
+        ${monthlyBillStr    ? `<tr><td style="padding:3px 0;color:#6b7280">Monthly bill</td><td style="padding:3px 0;font-weight:600;text-align:right">${monthlyBillStr}</td></tr>` : ''}
+        ${form.installationType ? `<tr><td style="padding:3px 0;color:#6b7280">Installation</td><td style="padding:3px 0;font-weight:600;text-align:right">${form.installationType}</td></tr>` : ''}
+        ${form.batteryOption    ? `<tr><td style="padding:3px 0;color:#6b7280">Battery</td><td style="padding:3px 0;font-weight:600;text-align:right">${form.batteryOption}</td></tr>` : ''}
+        ${form.installationTimeframe ? `<tr><td style="padding:3px 0;color:#6b7280">Timeframe</td><td style="padding:3px 0;font-weight:600;text-align:right">${form.installationTimeframe}</td></tr>` : ''}
+      </table>
+    </div>
+    <p style="color:#4b5563;font-size:13px"><strong>What happens next</strong></p>
+    <ol style="color:#4b5563;font-size:13px;line-height:1.7;padding-left:18px;margin:8px 0">
+      <li>${ownerName || 'A solar specialist'} reviews your details and calls you within 24 hours</li>
+      <li>We discuss your goals and book a free site assessment</li>
+      <li>You receive a tailored proposal with system size, costs, and savings</li>
+    </ol>
+    <p style="color:#4b5563;font-size:13px">In the meantime, you can reply to this email with any questions or call us on <strong>${COMPANY.phone}</strong>.</p>
+    <p style="font-size:13px;margin-top:18px">Talk soon,<br><strong>The ${COMPANY.name} team</strong></p>`;
+  return send({
+    to: form.email,
+    subject: `We've received your solar enquiry, ${friendly} — we'll call within 24 hours`,
+    html: wrap({ body, footerNote: 'Please add this address to your contacts so future emails from us land in your inbox.' }),
+  });
+}
+
+// ── New: courtesy "we're closing your enquiry" when marked Lost/Disqualified ─
+// Sent once when sub_status is set to lost or disqualified. Polite close-out
+// so the customer doesn't think we ghosted them.
+export async function sendCourtesyCloseEmail({ customerEmail, customerName, projectCode, reason }) {
+  if (!customerEmail) return null;
+  const friendly = customerName?.split(' ')[0] || 'there';
+  const body = `
+    <p style="font-size:14px">Hi <strong>${friendly}</strong>,</p>
+    <p style="color:#4b5563;font-size:13px">We're closing your solar enquiry${projectCode ? ` (${projectCode})` : ''} for now. ${reason || 'No further action needed on your side.'}</p>
+    <p style="color:#4b5563;font-size:13px">If circumstances change — different home, new timeframe, more info needed — get in touch any time. The savings calculator on our website is always available, and we'd be happy to revisit.</p>
+    <p style="color:#4b5563;font-size:13px">Thanks for considering ${COMPANY.name}.</p>
+    <p style="font-size:13px;margin-top:18px">All the best,<br><strong>The ${COMPANY.name} team</strong></p>`;
+  return send({
+    to: customerEmail,
+    subject: `Closing your ${COMPANY.name} enquiry`,
+    html: wrap({ body, footerNote: 'You will not receive further automated emails from this enquiry.' }),
+  });
+}
+
 // ── New: customer follow-up cadence ────────────────────────────────────────
 // Three scheduled emails (D+3 / D+7 / D+14) sent via Resend's scheduled_at,
 // fired off once a project's quality is first set. Cold leads still get the
@@ -245,4 +303,33 @@ export async function scheduleCustomerCadence({ customerEmail, customerName, qua
   }
   console.log(`📬 Scheduled ${results.filter(r => !r.error).length}/3 follow-up emails for ${customerName} (${projectCode || 'no code'})`);
   return results;
+}
+
+// ── New: cancel scheduled Resend emails ────────────────────────────────────
+// Resend's DELETE /emails/:id cancels a scheduled email if it hasn't been
+// dispatched yet. Used when a project is marked Lost or Disqualified so
+// nurture emails don't keep firing at someone who told us "no thanks".
+export async function cancelScheduledEmails(emailIds = []) {
+  if (!emailIds.length) return { cancelled: 0, failed: 0 };
+  const key = process.env.RESEND_API_KEY;
+  if (!key) {
+    console.log(`📭 [DEV log-only] Would cancel ${emailIds.length} scheduled email(s)`);
+    return { cancelled: emailIds.length, failed: 0 };
+  }
+  let cancelled = 0, failed = 0;
+  for (const id of emailIds) {
+    if (!id) continue;
+    try {
+      const r = await fetch(`https://api.resend.com/emails/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      if (r.ok) cancelled++; else failed++;
+    } catch (e) {
+      console.error(`Cancel email ${id} failed:`, e.message);
+      failed++;
+    }
+  }
+  console.log(`📭 Cancelled ${cancelled}/${emailIds.length} scheduled emails (${failed} failed)`);
+  return { cancelled, failed };
 }

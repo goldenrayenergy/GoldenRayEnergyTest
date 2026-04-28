@@ -8,7 +8,18 @@ export default function PipelinePage() {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { api.get('/leads').then(r => setLeads(r.data)).finally(() => setLoading(false)); }, []);
+  const load = () => api.get('/leads').then(r => setLeads(r.data)).finally(() => setLoading(false));
+
+  useEffect(() => {
+    load();
+    const onFocus = () => load();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, []);
 
   const move = async (id, stage) => {
     await api.patch(`/leads/${id}`, { stage });

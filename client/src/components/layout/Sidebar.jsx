@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { LayoutDashboard, Briefcase, TrendingUp, CheckCircle, GitBranch, Megaphone, Mail, Target, Users, Building2, BarChart3, Settings, LogOut, Inbox, FolderKanban, CreditCard } from 'lucide-react';
+import api from '../../services/api';
+import { LayoutDashboard, Briefcase, TrendingUp, CheckCircle, GitBranch, Megaphone, Mail, Target, Users, Building2, BarChart3, Settings, LogOut, Inbox, FolderKanban, CreditCard, ShieldAlert } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 
 const NAV = [
@@ -23,13 +25,38 @@ const NAV = [
     { to: '/portal/companies', label: 'Companies', icon: Building2 },
     { to: '/portal/reports', label: 'Reports', icon: BarChart3 },
   ]},
+  { header: 'Approvals', items: [{ to: '/portal/overrides', label: 'Override Requests', icon: ShieldAlert }] },
   { header: 'Finance', items: [{ to: '/portal/finance', label: 'Applications', icon: CreditCard }], adminOnly: true },
   { header: 'Settings', items: [{ to: '/portal/admin', label: 'Admin', icon: Settings }], adminOnly: true },
 ];
 
+// Map nav `to` paths to badge keys returned by /api/reports/sidebar-counts
+const BADGE_KEY_BY_PATH = {
+  '/portal/projects':  'atRisk',
+  '/portal/overrides': 'pendingOverrides',
+};
+
 export default function Sidebar() {
   const { user, logout } = useAuth();
   const sections = user?.role === 'admin' ? NAV : NAV.filter(s => !s.adminOnly);
+  const [counts, setCounts] = useState({ pendingOverrides: 0, atRisk: 0 });
+
+  // Refresh counts on mount + every time the tab regains focus.
+  useEffect(() => {
+    const load = () => api.get('/reports/sidebar-counts').then(r => setCounts(r.data || { pendingOverrides: 0, atRisk: 0 })).catch(() => {});
+    load();
+    const onFocus = () => load();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    // Also refresh every 60 seconds — light polling so badges don't go stale
+    // mid-session. Single endpoint, head-counts only, very cheap.
+    const interval = setInterval(load, 60000);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+      clearInterval(interval);
+    };
+  }, []);
 
   return (
     <aside className="w-56 flex-shrink-0 bg-white dark:bg-brand-dark-1 border-r border-gray-100 dark:border-white/5 flex flex-col transition-colors">
@@ -46,16 +73,26 @@ export default function Sidebar() {
         {sections.map((section, si) => (
           <div key={si} className="mb-2">
             <div className="px-3 py-1.5 text-[9px] font-bold text-gray-300 dark:text-gray-600 uppercase tracking-widest">{section.header}</div>
-            {section.items.map(item => (
-              <NavLink key={item.to} to={item.to} end={item.end}
-                className={({ isActive }) => `flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium mb-0.5 transition-all
-                  ${isActive
-                    ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold'
-                    : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 hover:text-gray-700 dark:hover:text-gray-200'}`}>
-                <item.icon size={14} />
-                {item.label}
-              </NavLink>
-            ))}
+            {section.items.map(item => {
+              const badgeKey = BADGE_KEY_BY_PATH[item.to];
+              const count = badgeKey ? counts[badgeKey] : 0;
+              const badgeColor = badgeKey === 'pendingOverrides' ? 'bg-red-500' : 'bg-amber-500';
+              return (
+                <NavLink key={item.to} to={item.to} end={item.end}
+                  className={({ isActive }) => `flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium mb-0.5 transition-all
+                    ${isActive
+                      ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold'
+                      : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 hover:text-gray-700 dark:hover:text-gray-200'}`}>
+                  <item.icon size={14} />
+                  <span className="flex-1 truncate">{item.label}</span>
+                  {count > 0 && (
+                    <span className={`${badgeColor} text-white text-[9px] font-extrabold rounded-full px-1.5 py-0.5 leading-none min-w-[16px] text-center`}>
+                      {count > 99 ? '99+' : count}
+                    </span>
+                  )}
+                </NavLink>
+              );
+            })}
           </div>
         ))}
       </nav>

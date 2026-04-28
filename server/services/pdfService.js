@@ -35,9 +35,19 @@ function buildProposalHTML(p) {
   table { width:100%; border-collapse:collapse; margin:16px 0; }
   td { padding:8px 0; border-bottom:1px solid #eee; font-size:13px; }
   .total td { border-top:2px solid #f59e0b; font-weight:800; font-size:16px; }
+  .prelim-banner { background:#fef3c7; border:2px solid #f59e0b; border-radius:8px; padding:12px 16px; margin-bottom:16px; color:#92400e; }
+  .prelim-banner .label { font-weight:800; font-size:13px; letter-spacing:0.05em; text-transform:uppercase; }
+  .prelim-banner .body { font-size:11px; margin-top:4px; line-height:1.5; }
+  .watermark { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%) rotate(-30deg); font-size:120px; font-weight:900; color:#f59e0b; opacity:0.1; pointer-events:none; z-index:-1; }
 </style></head><body>
+  ${p.mode === 'preliminary' ? `<div class="watermark">PRELIMINARY</div>` : ''}
   <div class="header"><div><div class="brand">GoldenRay Energy</div><div style="font-size:11px;color:#888">hello@goldenrayenergy.co.nz | +64 21 839 356</div></div>
-  <div style="text-align:right;font-size:11px;color:#999">SOLAR QUOTE<br>${new Date().toLocaleDateString('en-NZ')}</div></div>
+  <div style="text-align:right;font-size:11px;color:#999">${p.mode === 'preliminary' ? 'PRELIMINARY ESTIMATE' : 'SOLAR QUOTE'}<br>${new Date().toLocaleDateString('en-NZ')}</div></div>
+  ${p.mode === 'preliminary' ? `
+    <div class="prelim-banner">
+      <div class="label">⚠ Preliminary estimate — site visit pending</div>
+      <div class="body">Numbers below are calculated from your self-reported electricity bill and our standard NZ irradiance model. A site visit is required to confirm roof orientation, shading, structural fit, and switchboard capacity. <strong>Final pricing may shift up to ±15%</strong> after the visit.</div>
+    </div>` : ''}
   <div style="background:#f8f9fa;border-radius:8px;padding:14px;margin-bottom:16px"><div style="font-size:18px;font-weight:700">${p.name || 'Customer'}</div><div style="font-size:12px;color:#666">${p.email || ''} | ${p.location || 'New Zealand'}</div></div>
   <div class="grid">
     <div class="stat"><div class="lbl">System</div><div class="val">${p.system_size_kw}kW</div></div>

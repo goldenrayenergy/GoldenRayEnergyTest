@@ -41,6 +41,12 @@ export const STAGE_TABS = {
 // Which tabs are fully implemented (rest render a placeholder)
 export const IMPLEMENTED_TABS = new Set(['manage', 'enquiry', 'online-proposal', 'pdf-proposal']);
 
+// Stages where the checklist is a *self-check* — completion means "rep is
+// ready" but the actual stage transition is driven by an explicit
+// customer-fact action (e.g. customer accepts the proposal). For these
+// stages we don't auto-fire the completion modal; we show a banner instead.
+export const STAGES_REQUIRING_CUSTOMER_ACTION = new Set(['selling']);
+
 // Per-stage guidance shown in the Manage tab.
 // Required items gate forward stage transitions (admins can override).
 export const STAGE_CHECKLISTS = {
