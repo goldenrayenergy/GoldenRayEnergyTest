@@ -1,20 +1,18 @@
 # Files in this list never get uploaded to Vercel during deploy.
-# Keep this in sync with .gitignore for anything secret-bearing.
+# This deploy is FRONTEND-ONLY — the Express backend lives on Render.
+# We exclude server/, scripts/, and DB migrations entirely so Vercel
+# doesn't trace + bundle them.
 
 .env
 .env.local
 .env.*.local
 
-# Local-only operations / scripts not needed in production
+# Backend — deployed separately to Render via render.yaml
+server/
 scripts/
-server/db/apply-migration-*.js
-server/db/apply-schema-only.js
-server/db/restore-grants.js
-server/db/update-company-phone.js
 
-# Docker — using Vercel instead
+# Docker — using Vercel + Render instead
 docker-compose.yml
-server/Dockerfile
 
 # Misc
 *.log
@@ -22,5 +20,4 @@ server/Dockerfile
 node_modules
 client/dist
 client/node_modules
-server/node_modules
 .git

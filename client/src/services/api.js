@@ -1,9 +1,16 @@
 import axios from 'axios';
 
+// API base URL resolution:
+//   - VITE_API_BASE_URL set → use it (production: points at Render backend)
+//   - otherwise → relative '/api' which Vite's dev proxy forwards to localhost:5000
+// Strip trailing slash so axios doesn't end up calling //api/...
+const rawBase = import.meta.env.VITE_API_BASE_URL || '';
+const baseURL = rawBase ? `${rawBase.replace(/\/+$/, '')}/api` : '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 30000,
+  timeout: 60000, // raised from 30s — Render free tier has 30s cold starts
 });
 
 // Request interceptor — attach token

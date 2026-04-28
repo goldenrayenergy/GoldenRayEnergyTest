@@ -1,0 +1,64 @@
+# Render Blueprint — describes the backend web service so Render can
+# auto-deploy from this repo. Import once via Render dashboard ("New +"
+# → "Blueprint" → pick this repo), then push to Test to redeploy.
+#
+# Notes:
+#   - Free tier sleeps after 15 minutes of inactivity. Wake-up adds
+#     ~30 seconds to the first request after idle.
+#   - Puppeteer's Chromium is downloaded during `npm install`, so the
+#     first build takes ~3-4 minutes. Subsequent builds are cached.
+#   - Secrets (RESEND_API_KEY, SUPABASE_*, JWT_SECRET, DATABASE_URL) are
+#     declared with `sync: false` — Render will prompt for them in the
+#     dashboard at first deploy and keep them encrypted.
+
+services:
+  - type: web
+    name: goldenray-api
+    runtime: node
+    region: oregon            # closest free-tier region; switch to singapore if NZ users complain about latency
+    plan: free
+    branch: Test
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node app.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+
+    envVars:
+      # ── Server config ──
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000           # Render assigns ports via $PORT but defaulting to 10000 is safe
+      - key: CLIENT_URL
+        sync: false            # Will be set to the Vercel URL after first frontend deploy
+
+      # ── JWT ──
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 24h
+
+      # ── Supabase ──
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_DATABASE_URL
+        sync: false
+
+      # ── Resend (email) ──
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: GoldenRay Energy
+      - key: EMAIL_FROM_ADDRESS
+        value: onboarding@resend.dev
+      - key: EMAIL_REPLY_TO
+        value: goldenrayenergy.nz@gmail.com
+      - key: EMAIL_TEST_RECIPIENT
+        value: goldenrayenergy.nz@gmail.com
