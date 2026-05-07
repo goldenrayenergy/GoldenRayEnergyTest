@@ -80,17 +80,16 @@ CREATE INDEX IF NOT EXISTS idx_products_search           ON products USING GIN (
   COALESCE(name,'') || ' ' || COALESCE(description,'') || ' ' || COALESCE(brand,'')
 ));
 
--- Auto-bump updated_at on every UPDATE
-CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS TRIGGER AS $$
+-- Auto-bump updated_at on every UPDATE.
+-- Reuses the existing update_modified_column() function defined in
+-- schema.sql (used by users, contacts, companies, deals, etc.) — no
+-- new function created, no risk of overwriting an existing one.
+DO $$
 BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_products_updated_at ON products;
-CREATE TRIGGER trg_products_updated_at
-  BEFORE UPDATE ON products
-  FOR EACH ROW
-  EXECUTE FUNCTION set_updated_at();
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_products_updated_at') THEN
+    CREATE TRIGGER trg_products_updated_at
+      BEFORE UPDATE ON products
+      FOR EACH ROW
+      EXECUTE FUNCTION update_modified_column();
+  END IF;
+END $$;
