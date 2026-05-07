@@ -63,6 +63,7 @@ app.get('/', (req, res) => {
       activities: '/api/activities',
       reports: '/api/reports',
       proposals: '/api/proposals',
+      products: '/api/products',
       config: '/api/config'
     },
     timestamp: new Date().toISOString()

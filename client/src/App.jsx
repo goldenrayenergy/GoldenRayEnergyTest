@@ -26,6 +26,7 @@ import ProjectsPage from './pages/portal/ProjectsPage';
 import ProjectDetailPage from './pages/portal/ProjectDetailPage';
 import FinanceApplicationsPage from './pages/portal/FinanceApplicationsPage';
 import OverrideRequestsPage from './pages/portal/OverrideRequestsPage';
+import ProductsPage from './pages/portal/ProductsPage';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -67,6 +68,7 @@ export default function App() {
         <Route path="admin" element={<AdminPage />} />
         <Route path="finance" element={<AdminRoute><FinanceApplicationsPage /></AdminRoute>} />
         <Route path="overrides" element={<OverrideRequestsPage />} />
+        <Route path="products" element={<ProductsPage />} />
       </Route>
     </Routes>
   );
