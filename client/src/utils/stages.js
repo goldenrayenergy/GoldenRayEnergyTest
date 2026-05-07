@@ -39,7 +39,7 @@ export const STAGE_TABS = {
 };
 
 // Which tabs are fully implemented (rest render a placeholder)
-export const IMPLEMENTED_TABS = new Set(['manage', 'enquiry', 'online-proposal', 'pdf-proposal']);
+export const IMPLEMENTED_TABS = new Set(['manage', 'enquiry', 'online-proposal', 'pdf-proposal', 'design']);
 
 // Stages where the checklist is a *self-check* — completion means "rep is
 // ready" but the actual stage transition is driven by an explicit
