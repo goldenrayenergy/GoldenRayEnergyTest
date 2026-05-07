@@ -3,7 +3,6 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { LayoutDashboard, Briefcase, TrendingUp, CheckCircle, GitBranch, Megaphone, Mail, Target, Users, Building2, BarChart3, Settings, LogOut, Inbox, FolderKanban, CreditCard, ShieldAlert } from 'lucide-react';
-import ThemeToggle from '../ui/ThemeToggle';
 
 const NAV = [
   { header: 'Overview', items: [{ to: '/portal', label: 'Dashboard', icon: LayoutDashboard, end: true }] },
@@ -106,7 +105,6 @@ export default function Sidebar() {
             <div className="text-xs font-semibold truncate text-gray-900 dark:text-gray-100">{user?.name}</div>
             <div className="text-[9px] text-gray-400 dark:text-gray-500 capitalize">{user?.role?.replace('_', ' ')}</div>
           </div>
-          <ThemeToggle />
         </div>
         <button onClick={logout}
           className="flex items-center gap-1.5 w-full px-2 py-1 border border-gray-200 dark:border-white/10 rounded-md bg-gray-50 dark:bg-brand-dark-2 text-gray-500 dark:text-gray-400 text-[10px] hover:bg-gray-100 dark:hover:bg-brand-dark-3 transition">
