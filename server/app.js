@@ -22,6 +22,7 @@ import enquiryRoutes from './routes/enquiries.js';
 import projectRoutes from './routes/projects.js';
 import overrideRoutes from './routes/overrides.js';
 import productRoutes from './routes/products.js';
+import lineItemRoutes from './routes/lineItems.js';
 
 dotenv.config({ path: '../.env' });
 
@@ -88,6 +89,7 @@ app.use('/api/enquiries', enquiryRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/overrides', overrideRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/projects/:projectId/line-items', lineItemRoutes);
 
 // ── Health Check ──
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
