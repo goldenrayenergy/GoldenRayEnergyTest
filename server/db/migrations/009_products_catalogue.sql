@@ -31,8 +31,9 @@ CREATE TABLE IF NOT EXISTS products (
   subcategory         VARCHAR(80),     -- "Mono Panels", "Single Phase Hybrid", ...
   brand               VARCHAR(80),     -- "Fronius", "REC", "Phono Solar", ...
 
-  -- Display
-  name                VARCHAR(255) NOT NULL,
+  -- Display (TEXT, not VARCHAR — some real product names embed kit
+  -- bill-of-materials and exceed 255 chars; see migration 010 for history)
+  name                TEXT NOT NULL,
   description         TEXT,
 
   -- Pricing (cost only — sell prices computed on display)
