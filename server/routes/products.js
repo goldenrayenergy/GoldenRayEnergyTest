@@ -198,17 +198,35 @@ router.post('/import', upload.single('file'), async (req, res) => {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: null });
     if (rows.length === 0) return res.status(400).json({ error: 'No rows in spreadsheet' });
 
-    let inserted = 0, updated = 0, skipped = 0;
+    // ── Step 1: pre-fetch existing products into in-memory lookup maps.
+    //   - skuMap     keyed by SKU
+    //   - nullSkuMap keyed by name (for stubs without supplier SKU)
+    // One query instead of 200 — turns the import from 30+ seconds of
+    // sequential round-trips into a few bulk operations.
+    const { data: existing, error: existingErr } = await supabaseAdmin
+      .from('products')
+      .select('id, sku, name');
+    if (existingErr) throw existingErr;
+
+    const skuMap = new Map();
+    const nullSkuMap = new Map();
+    for (const row of existing || []) {
+      if (row.sku) skuMap.set(row.sku, row.id);
+      else if (row.name) nullSkuMap.set(row.name, row.id);
+    }
+
+    // ── Step 2: build insert + update batches in memory
+    const toInsert = [];
+    const toUpdate = [];          // [{ id, ...record }]
     const errors = [];
+    let skipped = 0;
 
     for (const [i, row] of rows.entries()) {
       try {
-        // Normalise keys to lowercase, trim values
         const r = {};
         for (const [k, v] of Object.entries(row)) {
           r[k.toString().trim().toLowerCase()] = typeof v === 'string' ? v.trim() : v;
         }
-
         if (!r.name) { skipped++; continue; }
 
         const specs = {};
@@ -240,53 +258,56 @@ router.post('/import', upload.single('file'), async (req, res) => {
           is_active:          true,
         };
 
-        if (record.sku) {
-          // Upsert by SKU — existing row updated, otherwise inserted
-          const { data: existing } = await supabaseAdmin
-            .from('products')
-            .select('id')
-            .eq('sku', record.sku)
-            .maybeSingle();
-          if (existing) {
-            const { error } = await supabaseAdmin
-              .from('products')
-              .update(record)
-              .eq('id', existing.id);
-            if (error) throw error;
-            updated++;
-          } else {
-            const { error } = await supabaseAdmin
-              .from('products')
-              .insert(record);
-            if (error) throw error;
-            inserted++;
-          }
-        } else {
-          // No SKU → match by exact name among other un-SKU'd rows so
-          // re-imports are idempotent. Once an admin assigns a real SKU
-          // through the UI, that row joins the SKU'd upsert path above.
-          const { data: existing } = await supabaseAdmin
-            .from('products')
-            .select('id')
-            .is('sku', null)
-            .eq('name', record.name)
-            .maybeSingle();
-          if (existing) {
-            const { error } = await supabaseAdmin
-              .from('products')
-              .update(record)
-              .eq('id', existing.id);
-            if (error) throw error;
-            updated++;
-          } else {
-            const { error } = await supabaseAdmin.from('products').insert(record);
-            if (error) throw error;
-            inserted++;
-          }
-        }
+        const existingId = record.sku
+          ? skuMap.get(record.sku)
+          : nullSkuMap.get(record.name);
+
+        if (existingId) toUpdate.push({ id: existingId, ...record });
+        else            toInsert.push(record);
       } catch (rowErr) {
-        errors.push({ row: i + 2 /* +2 because row 1 is header in spreadsheet */, error: rowErr.message });
+        errors.push({ row: i + 2, error: rowErr.message });
       }
+    }
+
+    // ── Step 3: send insert and update batches in chunks of 100.
+    // If a chunk fails, fall back to row-by-row for that chunk so the
+    // error report still pinpoints which row went wrong.
+    const CHUNK = 100;
+    let inserted = 0, updated = 0;
+
+    const flushInsertChunk = async (chunk) => {
+      const { error } = await supabaseAdmin.from('products').insert(chunk);
+      if (error) {
+        // Fall back row-by-row to pinpoint
+        for (const rec of chunk) {
+          const { error: e2 } = await supabaseAdmin.from('products').insert(rec);
+          if (e2) errors.push({ row: '?', sku: rec.sku, name: rec.name, error: e2.message });
+          else inserted++;
+        }
+      } else {
+        inserted += chunk.length;
+      }
+    };
+    const flushUpdateChunk = async (chunk) => {
+      // Upsert with onConflict='id' acts as a bulk update for known IDs
+      const { error } = await supabaseAdmin.from('products').upsert(chunk, { onConflict: 'id' });
+      if (error) {
+        for (const rec of chunk) {
+          const { id, ...rest } = rec;
+          const { error: e2 } = await supabaseAdmin.from('products').update(rest).eq('id', id);
+          if (e2) errors.push({ row: '?', id, sku: rec.sku, name: rec.name, error: e2.message });
+          else updated++;
+        }
+      } else {
+        updated += chunk.length;
+      }
+    };
+
+    for (let i = 0; i < toInsert.length; i += CHUNK) {
+      await flushInsertChunk(toInsert.slice(i, i + CHUNK));
+    }
+    for (let i = 0; i < toUpdate.length; i += CHUNK) {
+      await flushUpdateChunk(toUpdate.slice(i, i + CHUNK));
     }
 
     res.json({ inserted, updated, skipped, errors, total: rows.length });
