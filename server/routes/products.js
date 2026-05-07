@@ -262,10 +262,27 @@ router.post('/import', upload.single('file'), async (req, res) => {
             inserted++;
           }
         } else {
-          // No SKU → always insert (these are stub products to be SKU'd later)
-          const { error } = await supabaseAdmin.from('products').insert(record);
-          if (error) throw error;
-          inserted++;
+          // No SKU → match by exact name among other un-SKU'd rows so
+          // re-imports are idempotent. Once an admin assigns a real SKU
+          // through the UI, that row joins the SKU'd upsert path above.
+          const { data: existing } = await supabaseAdmin
+            .from('products')
+            .select('id')
+            .is('sku', null)
+            .eq('name', record.name)
+            .maybeSingle();
+          if (existing) {
+            const { error } = await supabaseAdmin
+              .from('products')
+              .update(record)
+              .eq('id', existing.id);
+            if (error) throw error;
+            updated++;
+          } else {
+            const { error } = await supabaseAdmin.from('products').insert(record);
+            if (error) throw error;
+            inserted++;
+          }
         }
       } catch (rowErr) {
         errors.push({ row: i + 2 /* +2 because row 1 is header in spreadsheet */, error: rowErr.message });
