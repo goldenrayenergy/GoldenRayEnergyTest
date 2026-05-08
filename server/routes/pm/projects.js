@@ -17,6 +17,7 @@ import {
   CROSS_LANE_GATES,
   validateTransition,
 } from '../../services/pm/laneDefinitions.js';
+import { systemIsVppCapable, vppHardwareCatalog } from '../../services/pm/vppLookup.js';
 
 const router = Router();
 router.use(authenticate);
@@ -521,6 +522,76 @@ router.delete('/:id/comments/:commentId', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── POST /api/pm/projects/:id/commission — populate asset fields ──────────
+// Called by the CommissioningForm specialized UX. Copies serial numbers,
+// warranty windows, monitoring credentials from the commissioning_form
+// fields onto the projects_v2 row, computes vpp_capable_hardware via the
+// hardware lookup, and sets commissioned_at.
+router.post('/:id/commission', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { id } = req.params;
+    const f = req.body?.fields || {};
+
+    // Required to commission
+    const required = ['inverter_make', 'inverter_model', 'inverter_serial', 'panel_make', 'panel_model', 'commissioned_by'];
+    const missing = required.filter(k => !f[k]);
+    if (missing.length > 0) {
+      return res.status(400).json({ error: 'Required fields missing for commissioning', missing });
+    }
+
+    const vppCapable = systemIsVppCapable({
+      inverter_make:  f.inverter_make,
+      inverter_model: f.inverter_model,
+      battery_make:   f.battery_make,
+      battery_model:  f.battery_model,
+    });
+
+    const patch = {
+      inverter_make:               f.inverter_make,
+      inverter_model:              f.inverter_model,
+      inverter_serial:             f.inverter_serial,
+      battery_make:                f.battery_make || null,
+      battery_model:               f.battery_model || null,
+      battery_serial:              f.battery_serial || null,
+      panel_make:                  f.panel_make,
+      panel_model:                 f.panel_model,
+      panel_warranty_until:        f.panel_warranty_until || null,
+      inverter_warranty_until:     f.inverter_warranty_until || null,
+      battery_warranty_until:      f.battery_warranty_until || null,
+      workmanship_warranty_until:  f.workmanship_warranty_until || null,
+      monitoring_provider:         f.monitoring_provider || null,
+      monitoring_external_id:      f.monitoring_external_id || null,
+      vpp_capable_hardware:        vppCapable,
+      vpp_consented:               f.vpp_consented === true,
+      commissioned_at:             f.commissioned_at || new Date().toISOString(),
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from('projects_v2')
+      .update(patch)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    await writeEvent(req, {
+      project_id: id, lane: 'operations', item_key: 'commissioning_form',
+      event_type: 'state_changed',
+      payload: { from: 'submitted', to: 'asset_populated', vpp_capable: vppCapable },
+    });
+
+    res.json({ project: data, vpp_capable_hardware: vppCapable });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/pm/vpp-catalog — exposes VPP-compatible hardware list ────────
+router.get('/_/vpp-catalog', async (_req, res) => {
+  res.json(vppHardwareCatalog());
 });
 
 // ── DELETE /api/pm/projects/:id — soft cancel (sets status='cancelled') ────

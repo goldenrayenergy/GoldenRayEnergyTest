@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "description": "Hardware models that support VPP dispatch protocols suitable for the Goldenray aggregation platform. Used by the commissioning form to auto-set vpp_capable_hardware = true. Conservative — when in doubt, mark false and let the engineer override manually.",
+    "last_updated": "2026-05-08",
+    "criteria": "Inverter must support remote control via vendor API (Modbus TCP / cloud API / OpenADR). Battery must be paired with a compatible inverter."
+  },
+
+  "inverters": [
+    { "make": "Sungrow", "model_prefix": "SH", "vpp_capable": true, "notes": "SH series hybrid — full VPP support via iSolarCloud API" },
+    { "make": "Sungrow", "model_prefix": "SG",  "vpp_capable": false, "notes": "SG single-phase grid-tie, no battery interface" },
+
+    { "make": "Fronius", "model_prefix": "GEN24", "vpp_capable": true, "notes": "Fronius GEN24 with Smart Meter + Solar.web Premium" },
+    { "make": "Fronius", "model_prefix": "Symo",  "vpp_capable": false, "notes": "Symo grid-tie only" },
+
+    { "make": "Tesla",   "model_prefix": "Powerwall",  "vpp_capable": true, "notes": "Tesla Gateway integration" },
+
+    { "make": "SolarEdge", "model_prefix": "SE",      "vpp_capable": true, "notes": "SolarEdge with StorEdge + Energy Hub" },
+
+    { "make": "Enphase", "model_prefix": "IQ8H",      "vpp_capable": true, "notes": "Enphase IQ8 with Encharge battery + Envoy" },
+    { "make": "Enphase", "model_prefix": "IQ7",       "vpp_capable": false,"notes": "IQ7 microinverters, no battery interface" },
+
+    { "make": "Huawei",  "model_prefix": "SUN2000",   "vpp_capable": true, "notes": "Huawei FusionSolar with LUNA battery" },
+
+    { "make": "Growatt", "model_prefix": "SPH",       "vpp_capable": true, "notes": "Growatt SPH hybrid + ShinePhone Cloud" },
+    { "make": "Growatt", "model_prefix": "MIN",       "vpp_capable": false,"notes": "MIN-TL grid-tie only" },
+
+    { "make": "GoodWe",  "model_prefix": "ET",        "vpp_capable": true, "notes": "GoodWe ET hybrid" }
+  ],
+
+  "batteries": [
+    { "make": "Tesla",   "model_prefix": "Powerwall", "vpp_capable": true },
+    { "make": "Sungrow", "model_prefix": "SBR",       "vpp_capable": true },
+    { "make": "Sungrow", "model_prefix": "SBP",       "vpp_capable": true },
+    { "make": "BYD",     "model_prefix": "Premium",   "vpp_capable": true, "notes": "BYD Premium HVS/HVM" },
+    { "make": "LG",      "model_prefix": "RESU",      "vpp_capable": true, "notes": "LG Chem RESU with compatible inverter" },
+    { "make": "Pylontech","model_prefix": "Force",    "vpp_capable": true },
+    { "make": "Enphase", "model_prefix": "IQ Battery","vpp_capable": true }
+  ]
+}

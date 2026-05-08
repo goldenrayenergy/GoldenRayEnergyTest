@@ -42,3 +42,8 @@ export const pmCommentsAPI = {
   create:  (projectId, body)   => api.post(`/pm/projects/${projectId}/comments`, body),
   remove:  (projectId, commentId) => api.delete(`/pm/projects/${projectId}/comments/${commentId}`),
 };
+
+export const pmCommissionAPI = {
+  commission: (projectId, fields) => api.post(`/pm/projects/${projectId}/commission`, { fields }),
+  vppCatalog: () => api.get('/pm/projects/_/vpp-catalog'),
+};

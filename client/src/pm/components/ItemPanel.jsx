@@ -7,6 +7,13 @@ import StateMachineControl from './StateMachineControl';
 import ActivityTimeline from './ActivityTimeline';
 import CommentsThread from './CommentsThread';
 
+// Specialized work-surface components
+import SiteSurveyForm     from './specialized/SiteSurveyForm';
+import SystemDesignForm   from './specialized/SystemDesignForm';
+import CommissioningForm  from './specialized/CommissioningForm';
+import CocForm            from './specialized/CocForm';
+import ProposalForm       from './specialized/ProposalForm';
+
 // ────────────────────────────────────────────────────────────────────────────
 // ItemPanel — Phase A.2 split-panel work surface for a single task.
 //
@@ -19,6 +26,26 @@ import CommentsThread from './CommentsThread';
 // a specialized component takes over the work surface — the activity rail
 // stays the same.
 // ────────────────────────────────────────────────────────────────────────────
+
+// ── Resolves specialized component by ux marker, or falls back to generic. ──
+function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, onSave, onProjectChanged }) {
+  switch (ux) {
+    case 'site_survey':
+      return <SiteSurveyForm projectId={projectId} lane={lane} itemKey={itemKey} schema={schema} values={values} currentState={currentState} artifacts={artifacts} onSave={onSave} onProjectChanged={onProjectChanged} />;
+    case 'system_design':
+      return <SystemDesignForm schema={schema} values={values} currentState={currentState} onSave={onSave} />;
+    case 'commissioning_form':
+      return <CommissioningForm projectId={projectId} lane={lane} itemKey={itemKey} schema={schema} values={values} currentState={currentState} onSave={onSave} onProjectChanged={onProjectChanged} />;
+    case 'coc':
+      return <CocForm schema={schema} values={values} currentState={currentState} onSave={onSave} />;
+    case 'initial_proposal':
+      return <ProposalForm stage="initial" schema={schema} values={values} currentState={currentState} onSave={onSave} />;
+    case 'final_proposal':
+      return <ProposalForm stage="final" schema={schema} values={values} currentState={currentState} onSave={onSave} />;
+    default:
+      return <TaskFormGeneric schema={schema} values={values} currentState={currentState} onSave={onSave} />;
+  }
+}
 
 export default function ItemPanel({ projectId, lane, itemDef, laneState, artifacts, onClose, onChange }) {
   const { user } = useAuth();
@@ -166,35 +193,22 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
               busy={busy}
             />
 
-            {/* Structured form (schema-driven) */}
-            {itemDef.ux === 'generic' ? (
-              <section>
-                <div className="text-xs font-semibold text-slate-500 uppercase mb-2">Fields</div>
-                <TaskFormGeneric
-                  schema={itemDef.schema}
-                  values={meta.fields}
-                  currentState={currentState}
-                  onSave={saveFields}
-                />
-              </section>
-            ) : (
-              <section className="bg-amber-50 border border-amber-200 rounded p-3">
-                <div className="text-xs text-amber-800 font-semibold mb-1">
-                  Specialized UX: {itemDef.ux}
-                </div>
-                <p className="text-sm text-amber-900">
-                  This task has a custom interface coming next. For now, structured fields are below.
-                </p>
-                <div className="mt-3">
-                  <TaskFormGeneric
-                    schema={itemDef.schema}
-                    values={meta.fields}
-                    currentState={currentState}
-                    onSave={saveFields}
-                  />
-                </div>
-              </section>
-            )}
+            {/* Work surface — generic or specialized component based on ux marker */}
+            <section>
+              <div className="text-xs font-semibold text-slate-500 uppercase mb-2">Work surface</div>
+              <SpecializedOrGeneric
+                ux={itemDef.ux}
+                projectId={projectId}
+                lane={lane}
+                itemKey={itemKey}
+                schema={itemDef.schema}
+                values={meta.fields}
+                currentState={currentState}
+                artifacts={artifacts}
+                onSave={saveFields}
+                onProjectChanged={onChange}
+              />
+            </section>
 
             {/* Artifacts */}
             {itemDef.artifactType && (
