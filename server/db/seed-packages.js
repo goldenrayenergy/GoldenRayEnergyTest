@@ -47,7 +47,7 @@ const PACKAGES = [
       'Best for: 1-2 person homes with $150-220 monthly bills.\n\n' +
       'What\'s inside: 8× REC TP4 370W panels (proven NZ-grade module with 25-year power warranty), Fronius Primo 3.0 GEN24 single-phase hybrid inverter (battery upgradable in future), Fronius smart meter for self-consumption monitoring, full DC isolation and surge protection, Hopergy NZ-tested racking.\n\n' +
       'Performance: ~4,200 kWh/year in Auckland (north-facing roof, 25° pitch). Average payback 7-9 years.',
-    hero_image_url: null,
+    hero_image_url: 'https://images.unsplash.com/photo-1509391366360-2e959784a276?w=1200&h=800&fit=crop&auto=format&q=80',
     system_kw: 2.96,
     battery_kwh: null,
     estimated_annual_savings: 1200,
@@ -79,7 +79,7 @@ const PACKAGES = [
       'What\'s inside: 12× Phono Solar 595W Draco panels (premium high-output module, 30-year performance warranty), Fronius Primo 5.0 GEN24 single-phase hybrid inverter (Austrian-engineered, 10-year warranty, hybrid upgrade keeps your options open), Fronius smart meter for live solar feed-in tracking, NZ-compliant DC isolation and PV fuses, Hopergy SAA-approved racking.\n\n' +
       'Performance: ~10,500 kWh/year typical Auckland install. Annual bill drops by 60-80%. Standard payback 6-8 years.\n\n' +
       'Why this is the most-installed package: it covers the typical NZ 3-4 BR home\'s daytime use, banks credits for evening use, and the 5.0 inverter has plenty of headroom if you add an EV charger or battery in 2-3 years.',
-    hero_image_url: null,
+    hero_image_url: 'https://images.unsplash.com/photo-1611365892117-00ac5ef43c90?w=1200&h=800&fit=crop&auto=format&q=80',
     system_kw: 7.14,    // 12 × 595W = 7.14 kW DC (slightly oversized to a 5kW inverter, NZ-standard)
     battery_kwh: null,
     estimated_annual_savings: 2200,
@@ -111,7 +111,7 @@ const PACKAGES = [
       'What\'s inside: 14× Phono Solar 475W Quasar Clear-Back-Contact ALL-BLACK panels (no visible grid lines, premium aesthetic, 25-year power warranty), Fronius Primo 6.0 GEN24 single-phase hybrid inverter, Fronius smart meter, premium black Hopergy racking and clamps, NZ-compliant DC components.\n\n' +
       'Performance: ~9,800 kWh/year typical Auckland install. Strong fit for households starting EV charging.\n\n' +
       'Hybrid-ready: add Fronius Reserva or Tesla Powerwall in the future without replacing the inverter.',
-    hero_image_url: null,
+    hero_image_url: 'https://images.unsplash.com/photo-1605980776566-0486c3ac7617?w=1200&h=800&fit=crop&auto=format&q=80',
     system_kw: 6.65,
     battery_kwh: null,
     estimated_annual_savings: 2400,
@@ -143,7 +143,7 @@ const PACKAGES = [
       'What\'s inside: 12× Phono Solar 595W Draco panels (7.14 kW DC), Fronius Primo 6.0 GEN24 single-phase hybrid inverter, BYD Battery Box HVS modules (4× 2.56 kWh = 10.2 kWh stack), Fronius smart meter, full DC isolation, Hopergy racking.\n\n' +
       'Performance: ~11,200 kWh/year solar generation, ~85% self-consumption with the battery. Annual bill drops 80-90% for typical households. Backup keeps essentials running for 8-12 hours during a grid outage.\n\n' +
       'Payback: 8-10 years (longer than solar-only, but you get blackout backup the whole time).',
-    hero_image_url: null,
+    hero_image_url: 'https://images.unsplash.com/photo-1559302504-64aae6ca6b6d?w=1200&h=800&fit=crop&auto=format&q=80',
     system_kw: 7.14,
     battery_kwh: 10.24,
     estimated_annual_savings: 3000,
@@ -176,7 +176,7 @@ const PACKAGES = [
       'What\'s inside: 22× Phono Solar 595W Draco panels (13.09 kW DC, oversized to a 10 kW inverter for maximum yield), Fronius SYMO 10.0 GEN24 three-phase hybrid inverter (top-tier German engineering), Freedom Won LiTE2 Home 10/8 lithium battery (10 kWh storage, 8 kWh usable, 10-year warranty), three-phase Fronius smart meter, full DC isolation, Hopergy racking.\n\n' +
       'Performance: ~17,500 kWh/year solar generation, peak 90%+ self-consumption with the battery. Most large homes go effectively off-bill (only fixed charges remain). Backup keeps an entire household running for 12-18 hours.\n\n' +
       'Future-proof: the SYMO inverter and three-phase battery setup support adding EV charging, additional battery capacity, or hot-water diversion without re-engineering the system.',
-    hero_image_url: null,
+    hero_image_url: 'https://images.unsplash.com/photo-1542665952-14513db15293?w=1200&h=800&fit=crop&auto=format&q=80',
     system_kw: 13.09,
     battery_kwh: 10.0,
     estimated_annual_savings: 4200,
