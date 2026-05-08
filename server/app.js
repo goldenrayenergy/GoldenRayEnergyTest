@@ -27,6 +27,7 @@ import lineItemRoutes from './routes/lineItems.js';
 import packageRoutes from './routes/packages.js';
 import shopRoutes from './routes/shop.js';
 import tradeRequestRoutes from './routes/tradeRequests.js';
+import billAnalysisRoutes from './routes/billAnalysis.js';
 
 dotenv.config({ path: '../.env' });
 
@@ -98,6 +99,7 @@ app.use('/api/projects/:projectId/line-items', lineItemRoutes);
 app.use('/api/packages', packageRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/trade-requests', tradeRequestRoutes);
+app.use('/api/bill-analysis', billAnalysisRoutes);
 
 // ── Health Check ──
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
