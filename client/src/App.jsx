@@ -1,5 +1,9 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
 import { useAuth } from './context/AuthContext';
+
+// PM Tool (Phase A) — lazy-loaded so it never enters the bundle on portal/website pages.
+const PmApp = lazy(() => import('./pm/PmApp'));
 
 // Website pages
 import WebsitePage from './pages/WebsitePage';
@@ -60,6 +64,15 @@ export default function App() {
       <Route path="/shop" element={<ShopPage />} />
       <Route path="/shop/:sku" element={<ShopProductDetailPage />} />
       <Route path="/bill-analysis" element={<BillAnalysisPage />} />
+
+      <Route
+        path="/pm/*"
+        element={
+          <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full" /></div>}>
+            <PmApp />
+          </Suspense>
+        }
+      />
 
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
         <Route index element={<DashboardPage />} />

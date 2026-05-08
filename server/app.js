@@ -28,6 +28,7 @@ import packageRoutes from './routes/packages.js';
 import shopRoutes from './routes/shop.js';
 import tradeRequestRoutes from './routes/tradeRequests.js';
 import billAnalysisRoutes from './routes/billAnalysis.js';
+import pmRoutes from './routes/pm/index.js';
 
 dotenv.config({ path: '../.env' });
 
@@ -100,6 +101,7 @@ app.use('/api/packages', packageRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/trade-requests', tradeRequestRoutes);
 app.use('/api/bill-analysis', billAnalysisRoutes);
+app.use('/api/pm', pmRoutes);  // PM tool (Phase A) — parallel project model, no overlap with /api/projects
 
 // ── Health Check ──
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
