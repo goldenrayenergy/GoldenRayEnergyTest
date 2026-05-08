@@ -32,6 +32,7 @@ import FinanceApplicationsPage from './pages/portal/FinanceApplicationsPage';
 import OverrideRequestsPage from './pages/portal/OverrideRequestsPage';
 import ProductsPage from './pages/portal/ProductsPage';
 import PackagesPage from './pages/portal/PackagesPage';
+import TradeRequestsPage from './pages/portal/TradeRequestsPage';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -79,6 +80,7 @@ export default function App() {
         <Route path="overrides" element={<OverrideRequestsPage />} />
         <Route path="products" element={<ProductsPage />} />
         <Route path="packages" element={<PackagesPage />} />
+        <Route path="trade-requests" element={<TradeRequestsPage />} />
       </Route>
     </Routes>
   );
