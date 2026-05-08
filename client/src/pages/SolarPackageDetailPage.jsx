@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { publicApi } from '../services/api';
 import {
   Sun, Battery, Zap, ArrowRight, Phone, Shield, CheckCircle, Loader2, ArrowLeft, AlertTriangle,
   TrendingUp, Clock, Leaf, Award, FileText,
@@ -20,7 +20,7 @@ export default function SolarPackageDetailPage() {
 
   useEffect(() => {
     setLoading(true); setError('');
-    axios.get(`/api/packages/public/${slug}`)
+    publicApi.get(`/packages/public/${slug}`)
       .then(r => setPkg(r.data))
       .catch(e => setError(e.response?.status === 404 ? 'Package not found' : (e.response?.data?.error || 'Failed to load')))
       .finally(() => setLoading(false));

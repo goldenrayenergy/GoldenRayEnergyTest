@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import axios from 'axios';
+import { publicApi } from '../services/api';
 import {
   Search, ShoppingCart, Package, Phone, Lock, ArrowRight, Loader2, Plus,
   AlertTriangle, Truck, FileText, Clock,
@@ -26,7 +26,7 @@ export default function ShopPage() {
       if (filters.q) params.q = filters.q;
       if (filters.category) params.category = filters.category;
       if (filters.brand) params.brand = filters.brand;
-      const { data } = await axios.get('/api/shop/products', { params });
+      const { data } = await publicApi.get('/shop/products', { params });
       setProducts(data.products || []);
     } finally { setLoading(false); }
   };
@@ -38,7 +38,7 @@ export default function ShopPage() {
   }, [filters.q, filters.category, filters.brand]);
 
   useEffect(() => {
-    axios.get('/api/shop/facets').then(r => setFacets(r.data)).catch(() => {});
+    publicApi.get('/shop/facets').then(r => setFacets(r.data)).catch(() => {});
   }, []);
 
   return (

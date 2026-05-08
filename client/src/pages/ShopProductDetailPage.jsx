@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import axios from 'axios';
+import { publicApi } from '../services/api';
 import { Package, ArrowLeft, Plus, Minus, Loader2, AlertTriangle, FileText, Truck, Clock } from 'lucide-react';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import TradeCartDrawer from '../components/website/TradeCartDrawer';
@@ -21,7 +21,7 @@ export default function ShopProductDetailPage() {
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`/api/shop/products/${sku}`)
+    publicApi.get(`/shop/products/${sku}`)
       .then(r => setProduct(r.data))
       .catch(e => setError(e.response?.status === 404 ? 'Product not found' : (e.response?.data?.error || 'Failed to load')))
       .finally(() => setLoading(false));

@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import axios from 'axios';
+import { publicApi } from '../services/api';
 import {
   Sun, Battery, Zap, ArrowRight, Phone, Shield, Award, Clock, CheckCircle, Loader2,
   Sparkles, Package as PackageIcon, MapPin, ChevronDown, X, Building2,
@@ -57,7 +57,7 @@ export default function SolarPackagesPage() {
   };
 
   useEffect(() => {
-    axios.get('/api/packages/public')
+    publicApi.get('/packages/public')
       .then(r => setPackages(r.data || []))
       .catch(e => setError(e.response?.data?.error || 'Failed to load packages'))
       .finally(() => setLoading(false));

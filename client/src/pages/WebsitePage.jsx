@@ -7,6 +7,7 @@ import SolarChatbot from '../components/website/SolarChatbot';
 import WhatsAppAssistant from '../components/website/WhatsAppAssistant';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import axios from 'axios';
+import { publicApi } from '../services/api';
 
 const SYSTEM_TYPES = [
   { value: 'on-grid', label: 'On-Grid', desc: 'Grid-connected, sell excess back', icon: '🔌' },
@@ -46,7 +47,7 @@ export default function WebsitePage() {
     if (!form.phone) return;
     setOtpState(s => ({ ...s, loading: true, error: '', demoCode: '' }));
     try {
-      const { data } = await axios.post('/api/otp/send', { phone: form.phone });
+      const { data } = await publicApi.post('/otp/send', { phone: form.phone });
       setOtpState(s => ({ ...s, loading: false, sent: true, demoCode: data.demoOtp || '' }));
     } catch (e) {
       setOtpState(s => ({ ...s, loading: false, error: e.response?.data?.error || 'Failed to send OTP.' }));
@@ -56,7 +57,7 @@ export default function WebsitePage() {
   const verifyOtp = async () => {
     setOtpState(s => ({ ...s, loading: true, error: '' }));
     try {
-      await axios.post('/api/otp/verify', { phone: form.phone, otp: otpState.value });
+      await publicApi.post('/otp/verify', { phone: form.phone, otp: otpState.value });
       setOtpState(s => ({ ...s, loading: false, verified: true, sent: false, demoCode: '' }));
     } catch (e) {
       setOtpState(s => ({ ...s, loading: false, error: e.response?.data?.error || 'Invalid OTP.' }));
@@ -66,7 +67,7 @@ export default function WebsitePage() {
   const submitEnquiry = async () => {
     setSubmitState({ loading: true, done: false, error: '', id: '' });
     try {
-      const { data } = await axios.post('/api/quote/submit', { form });
+      const { data } = await publicApi.post('/quote/submit', { form });
       setSubmitState({ loading: false, done: true, error: '', id: data.id });
       setForm(INITIAL_FORM);
       setPowerBillFile(null);
@@ -107,7 +108,7 @@ export default function WebsitePage() {
     const params = new URLSearchParams(window.location.search);
     const slug = params.get('package');
     if (!slug) return;
-    axios.get(`/api/packages/public/${slug}`)
+    publicApi.get(`/packages/public/${slug}`)
       .then(r => {
         const p = r.data?.prefill || {};
         const hasBattery = (r.data?.battery_kwh || 0) > 0;

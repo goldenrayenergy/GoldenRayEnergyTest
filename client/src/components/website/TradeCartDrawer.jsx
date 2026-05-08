@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import axios from 'axios';
+import { publicApi } from '../../services/api';
 import { ShoppingCart, X, Plus, Minus, Trash2, ArrowRight, CheckCircle, Loader2, Building2, User, Mail, Phone, MapPin, FileText } from 'lucide-react';
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
@@ -115,7 +115,7 @@ function RequestQuoteForm({ cart, onBack, onDone, subtotalExcl, gst, subtotalInc
     setBusy(true); setError('');
     try {
       const items = cart.items.map(i => ({ product_id: i.product_id, qty: i.qty }));
-      const { data } = await axios.post('/api/shop/request-quote', { ...form, items });
+      const { data } = await publicApi.post('/shop/request-quote', { ...form, items });
       onDone(data);
     } catch (err) {
       setError(err.response?.data?.error || err.message);
