@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { pmProjectsAPI } from '../services/pmApi';
 import { fmtDateLong } from '../../utils/format';
+import ItemPanel from '../components/ItemPanel';
 
 const LANES = ['sales', 'engineering', 'compliance', 'operations', 'finance'];
 
@@ -44,6 +45,9 @@ export default function ProjectDetailPage() {
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState(null);
 
+  // Currently-open item panel: { lane, itemDef } or null
+  const [openItem, setOpenItem] = useState(null);
+
   function load() {
     setLoading(true);
     pmProjectsAPI.get(id)
@@ -52,25 +56,6 @@ export default function ProjectDetailPage() {
   }
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
-
-  async function toggleItem(lane, itemKey, currentValue) {
-    setBusyKey(`${lane}.${itemKey}`);
-    setError('');
-    try {
-      await pmProjectsAPI.updateLane(id, lane, { item: itemKey, value: !currentValue });
-      load();
-    } catch (e) {
-      const data = e.response?.data;
-      if (data?.blockers?.length) {
-        const list = data.blockers.map(b => `${b.lane}.${b.item}`).join(', ');
-        setError(`Blocked by: ${list}. Complete those first.`);
-      } else {
-        setError(data?.error || e.message);
-      }
-    } finally {
-      setBusyKey(null);
-    }
-  }
 
   async function setLaneStatus(lane, status, blockedReason) {
     setBusyKey(`${lane}.status`);
@@ -144,31 +129,43 @@ export default function ProjectDetailPage() {
                 </div>
               </div>
 
-              <div className="flex-1 p-3 space-y-1.5">
+              <div className="flex-1 p-2 space-y-1">
                 {items.map(it => {
-                  const checked = state.items?.[it.key] === true;
-                  const k = `${lane}.${it.key}`;
+                  const checked    = state.items?.[it.key] === true;
+                  const itemMeta   = state.item_meta?.[it.key];
+                  const itemArts   = (project.artifacts || []).filter(a => a.swim_lane === lane && a.metadata?.item_key === it.key);
+                  const hasNotes   = itemMeta?.notes && itemMeta.notes.length > 0;
                   return (
-                    <label
+                    <button
                       key={it.key}
-                      className={`flex items-start gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${checked ? 'bg-green-50' : 'hover:bg-slate-50'} ${busyKey === k ? 'opacity-50' : ''}`}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={busyKey === k}
-                        onChange={() => toggleItem(lane, it.key, checked)}
-                        className="mt-0.5"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className={`text-xs ${checked ? 'line-through text-slate-500' : 'text-slate-800'}`}>
-                          {it.label}
-                          {it.gateKeeper && <span className="ml-1 text-[10px] text-amber-700 font-bold" title="Gate-keeper">★</span>}
+                      onClick={() => setOpenItem({ lane, itemDef: it })}
+                      className={`w-full text-left px-2 py-1.5 rounded border transition-colors group ${
+                        checked
+                          ? 'bg-green-50 border-green-200 hover:bg-green-100'
+                          : 'bg-white border-slate-200 hover:border-amber-300 hover:bg-amber-50'
+                      }`}>
+                      <div className="flex items-start gap-2">
+                        <div className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                          checked ? 'bg-green-600 border-green-600' : 'border-slate-300 group-hover:border-amber-500'
+                        }`}>
+                          {checked && <span className="text-white text-[10px] leading-none">✓</span>}
                         </div>
-                        {it.artifactType && (
-                          <div className="text-[10px] text-slate-400 truncate">artifact: {it.artifactType}</div>
-                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className={`text-xs leading-tight ${checked ? 'text-slate-600' : 'text-slate-800 font-medium'}`}>
+                            {it.label}
+                            {it.gateKeeper && <span className="ml-1 text-[10px] text-amber-700 font-bold" title="Gate-keeper">★</span>}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400">
+                            {it.artifactType && (
+                              <span className={itemArts.length > 0 ? 'text-amber-700 font-medium' : ''}>
+                                📎 {itemArts.length > 0 ? `${itemArts.length} file${itemArts.length === 1 ? '' : 's'}` : 'no files'}
+                              </span>
+                            )}
+                            {hasNotes && <span className="text-slate-500">📝 notes</span>}
+                          </div>
+                        </div>
                       </div>
-                    </label>
+                    </button>
                   );
                 })}
               </div>
@@ -225,6 +222,18 @@ export default function ProjectDetailPage() {
           <h4 className="text-xs font-semibold text-yellow-900 mb-1">Notes</h4>
           <p className="text-sm text-yellow-900 whitespace-pre-wrap">{project.notes}</p>
         </div>
+      )}
+
+      {openItem && (
+        <ItemPanel
+          projectId={project.id}
+          lane={openItem.lane}
+          itemDef={openItem.itemDef}
+          laneState={laneStatus?.[openItem.lane]}
+          artifacts={project.artifacts}
+          onClose={() => setOpenItem(null)}
+          onChange={load}
+        />
       )}
 
       <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-500">

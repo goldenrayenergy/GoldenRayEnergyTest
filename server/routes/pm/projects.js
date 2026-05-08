@@ -147,7 +147,7 @@ router.get('/:id', async (req, res) => {
       .from('projects_v2')
       .select(`
         *,
-        contacts:contact_id ( id, name, email, phone, address )
+        contacts:contact_id ( id, name, email, phone, street, suburb, city, postcode )
       `)
       .eq('id', req.params.id)
       .single();
@@ -236,7 +236,7 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
     const { id, lane } = req.params;
     if (!LANES.includes(lane)) return res.status(400).json({ error: `Unknown lane: ${lane}` });
 
-    const { item, value, status, blocked_reason, owner_id } = req.body;
+    const { item, value, notes, status, blocked_reason, owner_id } = req.body;
 
     // Fetch current state
     const { data: current, error: fetchErr } = await supabaseAdmin
@@ -252,8 +252,9 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
     const checklist = getChecklist(current.project_type);
     let nextLaneState = { ...(current.lane_status?.[lane] || { status: 'not_started', items: {} }) };
     nextLaneState.items = { ...(nextLaneState.items || {}) };
+    nextLaneState.item_meta = { ...(nextLaneState.item_meta || {}) };
 
-    // Mode 1: toggle a checklist item
+    // Mode 1: toggle a checklist item (and/or save notes)
     if (item !== undefined) {
       const def = checklist[lane].find(it => it.key === item);
       if (!def) return res.status(400).json({ error: `Unknown item '${item}' in lane '${lane}'` });
@@ -269,7 +270,20 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
         }
       }
 
-      nextLaneState.items[item] = !!value;
+      const wasComplete = nextLaneState.items[item] === true;
+      if (value !== undefined) nextLaneState.items[item] = !!value;
+
+      // Maintain per-item audit metadata
+      const meta = { ...(nextLaneState.item_meta[item] || {}) };
+      if (notes !== undefined) meta.notes = notes;
+      if (value === true && !wasComplete) {
+        meta.completed_by = req.user?.id || null;
+        meta.completed_at = new Date().toISOString();
+      }
+      if (value === false && wasComplete) {
+        meta.last_uncompleted_at = new Date().toISOString();
+      }
+      nextLaneState.item_meta[item] = meta;
 
       // Auto-promote lane status from not_started → in_progress on first item tick
       if (value === true && nextLaneState.status === 'not_started') {

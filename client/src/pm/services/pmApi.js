@@ -15,3 +15,20 @@ export const pmProjectsAPI = {
   cancel:      (id, reason) => api.delete(`/pm/projects/${id}`, { data: { reason } }),
   updateLane:  (id, lane, body) => api.patch(`/pm/projects/${id}/lanes/${lane}`, body),
 };
+
+export const pmArtifactsAPI = {
+  list: (projectId, params) => api.get(`/pm/projects/${projectId}/artifacts`, { params }),
+
+  // Upload a file. `data` is a FormData with: file, swim_lane, artifact_type, item_key, notes
+  upload: (projectId, formData) =>
+    api.post(`/pm/projects/${projectId}/artifacts`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+
+  // Get a 1h signed URL for downloading an artifact file
+  signedUrl: (projectId, artifactId) =>
+    api.get(`/pm/projects/${projectId}/artifacts/${artifactId}/url`),
+
+  remove: (projectId, artifactId) =>
+    api.delete(`/pm/projects/${projectId}/artifacts/${artifactId}`),
+};

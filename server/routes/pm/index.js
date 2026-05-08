@@ -7,11 +7,16 @@
 
 import { Router } from 'express';
 import projectsRoutes from './projects.js';
+import artifactsRoutes from './artifacts.js';
 
 const router = Router();
 
 router.use('/projects', projectsRoutes);
 
-router.get('/health', (req, res) => res.json({ status: 'ok', tool: 'pm', phase: 'A' }));
+// Artifacts sit under each project: /api/pm/projects/:id/artifacts/...
+// Mounted as a separate router with mergeParams so :id is visible.
+router.use('/projects/:id/artifacts', artifactsRoutes);
+
+router.get('/health', (req, res) => res.json({ status: 'ok', tool: 'pm', phase: 'A.1' }));
 
 export default router;
