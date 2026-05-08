@@ -142,10 +142,19 @@ export function detectPatterns(bills, aggregate) {
   const patterns = [];
   if (!bills || bills.length < 3) return patterns;
 
-  // Compute month-by-month kWh for pattern detection
-  const sorted = [...bills].sort((a, b) => new Date(a.period_start) - new Date(b.period_start));
+  // Compute month-by-month kWh for pattern detection.
+  // Parse the month directly from the YYYY-MM-DD string — using new Date()
+  // is timezone-sensitive (NZ being UTC+12/13 means '2025-04-01' parses to
+  // March 31 NZ time, off-by-one).
+  const monthOf = (s) => {
+    if (!s) return 1;
+    if (s instanceof Date) return s.getUTCMonth() + 1;
+    const m = String(s).match(/^(\d{4})-(\d{2})/);
+    return m ? parseInt(m[2], 10) : 1;
+  };
+  const sorted = [...bills].sort((a, b) => String(a.period_start).localeCompare(String(b.period_start)));
   const kwhPerMonth = sorted.map(b => ({
-    month: new Date(b.period_start).getMonth() + 1,  // 1-12
+    month: monthOf(b.period_start),  // 1-12
     days: b.days_in_period || 30,
     kwh: b.kwh_total || 0,
   }));
@@ -199,31 +208,53 @@ export function detectPatterns(bills, aggregate) {
   }
 
   // Pattern 4 — sudden step-change (new appliance / EV / heat pump install)
-  // Look for >25% jump month-over-month that persists
-  for (let i = 1; i < dailyAverages.length - 1; i++) {
-    const prev = dailyAverages[i - 1];
-    const curr = dailyAverages[i];
-    const next = dailyAverages[i + 1];
-    if (curr > prev * 1.25 && next > prev * 1.20) {
+  // We're trying to flag a "level shift" (e.g. heat pump installed in March
+  // and now usage is permanently 30%+ higher) — NOT seasonal ramp-up.
+  // Approach: split the year in half, compare. A real step-change means the
+  // 2nd-half daily average is dramatically different from the 1st-half AND
+  // the within-half variability is small (sustained shift, not a peak).
+  if (dailyAverages.length >= 8) {
+    const mid = Math.floor(dailyAverages.length / 2);
+    const firstHalf = dailyAverages.slice(0, mid);
+    const secondHalf = dailyAverages.slice(mid);
+    const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+    const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+    const ratio = secondAvg / firstAvg;
+    // Require >40% sustained shift to flag. Also exclude seasonal effect:
+    // if first half is "summer" (Oct-Mar) and second is "winter" (Apr-Sep)
+    // that's just seasonality. Same in reverse. Only flag if direction
+    // contradicts the seasonal expectation OR the shift is huge.
+    const firstHalfMonths = kwhPerMonth.slice(0, mid).map(m => m.month);
+    const isWinterToSummer = firstHalfMonths.every(m => m >= 4 && m <= 9);
+    const isSummerToWinter = firstHalfMonths.every(m => m <= 3 || m >= 10);
+    if (ratio > 1.40 && !isSummerToWinter) {
       patterns.push({
         code: 'step_change',
-        label: 'Sudden usage increase',
+        label: 'Sudden sustained usage increase',
         severity: 'info',
-        details: `Around month ${kwhPerMonth[i].month} your daily usage jumped ~${Math.round((curr / prev - 1) * 100)}% and stayed elevated.`,
+        details: `Your usage in the second half of the period is ${Math.round((ratio - 1) * 100)}% higher than the first half — sustained, not seasonal.`,
         recommendation: 'New heat pump, EV, or hot tub? Your future system size needs ~1-2 kW headroom beyond current consumption.',
       });
-      break; // only flag the first major step-change
+    }
+    if (ratio < 0.60 && !isWinterToSummer) {
+      patterns.push({
+        code: 'step_change_drop',
+        label: 'Sudden sustained usage drop',
+        severity: 'info',
+        details: `Your usage dropped ${Math.round((1 - ratio) * 100)}% in the second half — sustained, not seasonal.`,
+        recommendation: 'Lifestyle change, energy efficiency upgrade, or fewer occupants? System sizing is on lower of the two consumption levels.',
+      });
     }
   }
 
-  // Pattern 5 — high effective rate (>30c/kWh) — switch advisor will catch this too
-  if (aggregate.effective_rate_nzd > 0.31) {
+  // Pattern 5 — high effective rate (>33c/kWh — meaningfully above NZ avg of ~28-30c)
+  if (aggregate.effective_rate_nzd > 0.33) {
     patterns.push({
       code: 'high_rate',
       label: 'High effective $/kWh',
       severity: 'warning',
-      details: `Your effective rate is ${(aggregate.effective_rate_nzd * 100).toFixed(1)}c/kWh — above the NZ average of 28c.`,
-      recommendation: 'Switching retailer alone could save you $400+/year before solar. See the switch advice section.',
+      details: `Your effective rate is ${(aggregate.effective_rate_nzd * 100).toFixed(1)}c/kWh — meaningfully above NZ average (28-30c).`,
+      recommendation: 'Switching retailer alone could save you $300+/year before solar. See the switch advice section.',
     });
   }
 
