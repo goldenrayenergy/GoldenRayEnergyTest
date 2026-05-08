@@ -1,0 +1,227 @@
+{
+  "_meta": {
+    "as_of": "2026-Q2",
+    "next_refresh_due": "2026-Q3",
+    "sources": [
+      "https://www.powerswitch.org.nz",
+      "https://www.mercury.co.nz/electricity",
+      "https://www.genesisenergy.co.nz",
+      "https://contactenergy.co.nz",
+      "https://www.meridianenergy.co.nz",
+      "https://www.electrickiwi.co.nz",
+      "https://www.powershop.co.nz",
+      "https://www.frankenergy.co.nz",
+      "https://www.flickelectric.co.nz"
+    ],
+    "notes": [
+      "Rates exclude GST unless marked _incl_gst.",
+      "Variable rates are flat unless type is 'tou' (time-of-use) — TOU rates have peak/off_peak/night fields.",
+      "Buyback rates apply to solar export (whether the retailer supports it) — null = does not buy back.",
+      "Rates are residential standard. Some retailers have separate prompt-payment discounts not modelled here.",
+      "Refresh quarterly — copy current Q file, update from powerswitch.org.nz comparison tool."
+    ]
+  },
+
+  "regions": {
+    "auckland":     { "label": "Auckland",      "irradiance_kwh_per_kw_per_year": 1150 },
+    "waikato":      { "label": "Waikato",        "irradiance_kwh_per_kw_per_year": 1120 },
+    "wellington":   { "label": "Wellington",    "irradiance_kwh_per_kw_per_year": 1050 },
+    "manawatu":     { "label": "Manawatū",       "irradiance_kwh_per_kw_per_year": 1080 },
+    "canterbury":   { "label": "Canterbury",    "irradiance_kwh_per_kw_per_year": 1200 },
+    "otago":        { "label": "Otago",          "irradiance_kwh_per_kw_per_year": 1130 },
+    "southland":    { "label": "Southland",      "irradiance_kwh_per_kw_per_year": 1000 },
+    "bay_of_plenty":{ "label": "Bay of Plenty",  "irradiance_kwh_per_kw_per_year": 1180 },
+    "northland":    { "label": "Northland",      "irradiance_kwh_per_kw_per_year": 1170 },
+    "hawkes_bay":   { "label": "Hawke's Bay",    "irradiance_kwh_per_kw_per_year": 1190 },
+    "tasman":       { "label": "Tasman/Marlborough/Nelson", "irradiance_kwh_per_kw_per_year": 1180 },
+    "westland":     { "label": "West Coast",     "irradiance_kwh_per_kw_per_year": 1010 }
+  },
+
+  "retailers": [
+    {
+      "id": "mercury",
+      "name": "Mercury",
+      "default_plan": "homeline_standard",
+      "plans": {
+        "homeline_standard": {
+          "label": "Homeline Standard",
+          "type": "flat",
+          "regions": {
+            "auckland":     { "fixed_per_day_nzd": 1.40, "variable_per_kwh_nzd": 0.2890 },
+            "waikato":      { "fixed_per_day_nzd": 1.85, "variable_per_kwh_nzd": 0.2950 },
+            "wellington":   { "fixed_per_day_nzd": 1.35, "variable_per_kwh_nzd": 0.2810 },
+            "canterbury":   { "fixed_per_day_nzd": 1.05, "variable_per_kwh_nzd": 0.2730 },
+            "otago":        { "fixed_per_day_nzd": 1.45, "variable_per_kwh_nzd": 0.2780 },
+            "default":      { "fixed_per_day_nzd": 1.40, "variable_per_kwh_nzd": 0.2900 }
+          },
+          "buyback_per_kwh_nzd": 0.080
+        }
+      }
+    },
+    {
+      "id": "genesis",
+      "name": "Genesis",
+      "default_plan": "go_standard",
+      "plans": {
+        "go_standard": {
+          "label": "Go Standard",
+          "type": "flat",
+          "regions": {
+            "auckland":     { "fixed_per_day_nzd": 1.45, "variable_per_kwh_nzd": 0.2980 },
+            "waikato":      { "fixed_per_day_nzd": 1.75, "variable_per_kwh_nzd": 0.2890 },
+            "wellington":   { "fixed_per_day_nzd": 1.40, "variable_per_kwh_nzd": 0.2870 },
+            "canterbury":   { "fixed_per_day_nzd": 1.10, "variable_per_kwh_nzd": 0.2750 },
+            "otago":        { "fixed_per_day_nzd": 1.50, "variable_per_kwh_nzd": 0.2840 },
+            "default":      { "fixed_per_day_nzd": 1.45, "variable_per_kwh_nzd": 0.2950 }
+          },
+          "buyback_per_kwh_nzd": 0.070
+        },
+        "energy_iq_tou": {
+          "label": "Energy IQ (TOU)",
+          "type": "tou",
+          "regions": {
+            "auckland":     { "fixed_per_day_nzd": 1.45, "peak_per_kwh_nzd": 0.4200, "off_peak_per_kwh_nzd": 0.2200, "night_per_kwh_nzd": 0.1750 },
+            "default":      { "fixed_per_day_nzd": 1.45, "peak_per_kwh_nzd": 0.4200, "off_peak_per_kwh_nzd": 0.2200, "night_per_kwh_nzd": 0.1750 }
+          },
+          "buyback_per_kwh_nzd": 0.070,
+          "peak_hours_local": [{ "start": "07:00", "end": "11:00" }, { "start": "17:00", "end": "21:00" }],
+          "night_hours_local": [{ "start": "23:00", "end": "07:00" }]
+        }
+      }
+    },
+    {
+      "id": "contact",
+      "name": "Contact Energy",
+      "default_plan": "broadband_bundle_standard",
+      "plans": {
+        "broadband_bundle_standard": {
+          "label": "Standard User",
+          "type": "flat",
+          "regions": {
+            "auckland":     { "fixed_per_day_nzd": 1.40, "variable_per_kwh_nzd": 0.2950 },
+            "wellington":   { "fixed_per_day_nzd": 1.35, "variable_per_kwh_nzd": 0.2810 },
+            "canterbury":   { "fixed_per_day_nzd": 1.05, "variable_per_kwh_nzd": 0.2730 },
+            "otago":        { "fixed_per_day_nzd": 1.45, "variable_per_kwh_nzd": 0.2790 },
+            "default":      { "fixed_per_day_nzd": 1.35, "variable_per_kwh_nzd": 0.2880 }
+          },
+          "buyback_per_kwh_nzd": 0.085
+        },
+        "free_power_saturdays": {
+          "label": "Free Power Saturdays",
+          "type": "tou_freezone",
+          "regions": {
+            "default":      { "fixed_per_day_nzd": 1.40, "variable_per_kwh_nzd": 0.3050 }
+          },
+          "free_hours_local": [{ "day": "Saturday", "start": "09:00", "end": "15:00" }],
+          "buyback_per_kwh_nzd": 0.085
+        }
+      }
+    },
+    {
+      "id": "meridian",
+      "name": "Meridian Energy",
+      "default_plan": "certainty",
+      "plans": {
+        "certainty": {
+          "label": "Certainty",
+          "type": "flat",
+          "regions": {
+            "auckland":     { "fixed_per_day_nzd": 1.50, "variable_per_kwh_nzd": 0.2920 },
+            "wellington":   { "fixed_per_day_nzd": 1.40, "variable_per_kwh_nzd": 0.2790 },
+            "canterbury":   { "fixed_per_day_nzd": 1.10, "variable_per_kwh_nzd": 0.2700 },
+            "otago":        { "fixed_per_day_nzd": 1.50, "variable_per_kwh_nzd": 0.2750 },
+            "default":      { "fixed_per_day_nzd": 1.45, "variable_per_kwh_nzd": 0.2870 }
+          },
+          "buyback_per_kwh_nzd": 0.120
+        }
+      }
+    },
+    {
+      "id": "electric_kiwi",
+      "name": "Electric Kiwi",
+      "default_plan": "movemaster",
+      "plans": {
+        "movemaster": {
+          "label": "MoveMaster (free off-peak hour daily)",
+          "type": "tou_freezone",
+          "regions": {
+            "auckland":     { "fixed_per_day_nzd": 1.10, "variable_per_kwh_nzd": 0.2680 },
+            "wellington":   { "fixed_per_day_nzd": 1.05, "variable_per_kwh_nzd": 0.2620 },
+            "canterbury":   { "fixed_per_day_nzd": 0.85, "variable_per_kwh_nzd": 0.2510 },
+            "default":      { "fixed_per_day_nzd": 1.05, "variable_per_kwh_nzd": 0.2640 }
+          },
+          "free_hours_local": [{ "daily": true, "duration_hours": 1, "user_chooses": true }],
+          "buyback_per_kwh_nzd": 0.125
+        },
+        "kiwi_saver": {
+          "label": "Kiwi (flat, no free hour)",
+          "type": "flat",
+          "regions": {
+            "default":      { "fixed_per_day_nzd": 1.10, "variable_per_kwh_nzd": 0.2580 }
+          },
+          "buyback_per_kwh_nzd": 0.125
+        }
+      }
+    },
+    {
+      "id": "powershop",
+      "name": "Powershop",
+      "default_plan": "everyday_choice",
+      "plans": {
+        "everyday_choice": {
+          "label": "Everyday Choice",
+          "type": "flat",
+          "regions": {
+            "auckland":     { "fixed_per_day_nzd": 1.30, "variable_per_kwh_nzd": 0.2840 },
+            "wellington":   { "fixed_per_day_nzd": 1.25, "variable_per_kwh_nzd": 0.2730 },
+            "canterbury":   { "fixed_per_day_nzd": 0.95, "variable_per_kwh_nzd": 0.2680 },
+            "default":      { "fixed_per_day_nzd": 1.25, "variable_per_kwh_nzd": 0.2820 }
+          },
+          "buyback_per_kwh_nzd": 0.100
+        }
+      }
+    },
+    {
+      "id": "frank",
+      "name": "Frank Energy",
+      "default_plan": "frank_flat",
+      "plans": {
+        "frank_flat": {
+          "label": "Frank Flat",
+          "type": "flat",
+          "regions": {
+            "default":      { "fixed_per_day_nzd": 1.20, "variable_per_kwh_nzd": 0.2790 }
+          },
+          "buyback_per_kwh_nzd": 0.090
+        }
+      }
+    },
+    {
+      "id": "flick",
+      "name": "Flick Electric",
+      "default_plan": "off_peak",
+      "plans": {
+        "off_peak": {
+          "label": "Off Peak (TOU)",
+          "type": "tou",
+          "regions": {
+            "default": { "fixed_per_day_nzd": 1.20, "peak_per_kwh_nzd": 0.4350, "off_peak_per_kwh_nzd": 0.2150, "night_per_kwh_nzd": 0.1850 }
+          },
+          "buyback_per_kwh_nzd": 0.110,
+          "peak_hours_local": [{ "start": "07:00", "end": "11:00" }, { "start": "17:00", "end": "21:00" }]
+        }
+      }
+    }
+  ],
+
+  "_constants": {
+    "gst_rate": 0.15,
+    "annual_retail_inflation_pct": 0.05,
+    "grid_emissions_kg_co2_per_kwh": 0.098,
+    "default_self_consumption_pct_solar_only": 0.32,
+    "default_self_consumption_pct_with_battery": 0.85,
+    "battery_round_trip_efficiency": 0.92,
+    "panel_degradation_pct_per_year": 0.005,
+    "_notes": "Refresh emissions factor annually from MfE. Inflation factor reflects 10-year NZ retail trend; revisit each year."
+  }
+}
