@@ -7,6 +7,8 @@ import FinancePage from './pages/FinancePage';
 import LoginPage from './pages/LoginPage';
 import SolarPackagesPage from './pages/SolarPackagesPage';
 import SolarPackageDetailPage from './pages/SolarPackageDetailPage';
+import ShopPage from './pages/ShopPage';
+import ShopProductDetailPage from './pages/ShopProductDetailPage';
 
 // Portal pages
 import PortalLayout from './components/layout/PortalLayout';
@@ -53,6 +55,8 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/solar-packages" element={<SolarPackagesPage />} />
       <Route path="/solar-packages/:slug" element={<SolarPackageDetailPage />} />
+      <Route path="/shop" element={<ShopPage />} />
+      <Route path="/shop/:sku" element={<ShopProductDetailPage />} />
 
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
         <Route index element={<DashboardPage />} />

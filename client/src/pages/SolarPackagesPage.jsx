@@ -57,6 +57,7 @@ export default function SolarPackagesPage() {
         </Link>
         <div className="flex items-center gap-3">
           <Link to="/" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Home</Link>
+          <Link to="/shop" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Shop</Link>
           <Link to="/finance" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Finance</Link>
           <Link to="/#calculator" className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1">
             <Phone size={12} /> Free Quote

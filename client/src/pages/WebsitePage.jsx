@@ -143,6 +143,7 @@ export default function WebsitePage() {
               <a key={l} href={`#${l.toLowerCase().replace(/\s+/g, '-')}`} className="text-sm text-gray-200 hover:text-amber-300 font-medium transition">{l}</a>
             ))}
             <Link to="/solar-packages" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Packages</Link>
+            <Link to="/shop" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Shop</Link>
           </div>
           <button
             onClick={() => setFinanceModalOpen(true)}
