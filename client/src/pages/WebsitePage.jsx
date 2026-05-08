@@ -143,6 +143,7 @@ export default function WebsitePage() {
             {['Products', 'How It Works', 'Calculator', 'Case Studies', 'Testimonials', 'FAQ', 'Contact'].map(l => (
               <a key={l} href={`#${l.toLowerCase().replace(/\s+/g, '-')}`} className="text-sm text-gray-200 hover:text-amber-300 font-medium transition">{l}</a>
             ))}
+            <Link to="/bill-analysis" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Bill Analysis</Link>
             <Link to="/shop" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Shop</Link>
           </div>
           <button

@@ -9,6 +9,7 @@ import SolarPackagesPage from './pages/SolarPackagesPage';
 import SolarPackageDetailPage from './pages/SolarPackageDetailPage';
 import ShopPage from './pages/ShopPage';
 import ShopProductDetailPage from './pages/ShopProductDetailPage';
+import BillAnalysisPage from './pages/BillAnalysisPage';
 
 // Portal pages
 import PortalLayout from './components/layout/PortalLayout';
@@ -58,6 +59,7 @@ export default function App() {
       <Route path="/solar-packages/:slug" element={<SolarPackageDetailPage />} />
       <Route path="/shop" element={<ShopPage />} />
       <Route path="/shop/:sku" element={<ShopProductDetailPage />} />
+      <Route path="/bill-analysis" element={<BillAnalysisPage />} />
 
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
         <Route index element={<DashboardPage />} />
