@@ -15,10 +15,27 @@ import {
   computeLaneCompletion,
   computeHealth,
   CROSS_LANE_GATES,
+  validateTransition,
 } from '../../services/pm/laneDefinitions.js';
 
 const router = Router();
 router.use(authenticate);
+
+// ── Audit event writer ─────────────────────────────────────────────────────
+async function writeEvent(req, { project_id, lane, item_key, event_type, payload }) {
+  if (!supabaseAdmin) return;
+  try {
+    await supabaseAdmin.from('pm_task_events').insert({
+      project_id, lane, item_key, event_type,
+      actor_user_id: req?.user?.id || null,
+      payload:       payload || {},
+      ip_address:    req?.ip || null,
+      user_agent:    req?.headers?.['user-agent']?.slice(0, 500) || null,
+    });
+  } catch (e) {
+    console.error('writeEvent failed (non-fatal):', e.message);
+  }
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -236,7 +253,7 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
     const { id, lane } = req.params;
     if (!LANES.includes(lane)) return res.status(400).json({ error: `Unknown lane: ${lane}` });
 
-    const { item, value, notes, status, blocked_reason, owner_id } = req.body;
+    const { item, value, notes, fields, target_state, status, blocked_reason, owner_id } = req.body;
 
     // Fetch current state
     const { data: current, error: fetchErr } = await supabaseAdmin
@@ -254,42 +271,103 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
     nextLaneState.items = { ...(nextLaneState.items || {}) };
     nextLaneState.item_meta = { ...(nextLaneState.item_meta || {}) };
 
-    // Mode 1: toggle a checklist item (and/or save notes)
+    // ── Mode 1: item-level update (toggle / fields / state transition / notes) ──
     if (item !== undefined) {
       const def = checklist[lane].find(it => it.key === item);
       if (!def) return res.status(400).json({ error: `Unknown item '${item}' in lane '${lane}'` });
 
-      // If marking true, enforce cross-lane gates
-      if (value === true) {
+      const meta = { ...(nextLaneState.item_meta[item] || {}) };
+      const fromState = meta.state || def.initialState || 'not_started';
+      const eventsToWrite = [];
+
+      // Patch structured fields
+      if (fields && typeof fields === 'object') {
+        meta.fields = { ...(meta.fields || {}), ...fields };
+        eventsToWrite.push({ event_type: 'field_edited', payload: { keys: Object.keys(fields) } });
+      }
+
+      // Patch notes
+      if (notes !== undefined) {
+        meta.notes = notes;
+        eventsToWrite.push({ event_type: 'field_edited', payload: { keys: ['notes'] } });
+      }
+
+      // State transition
+      if (target_state !== undefined && target_state !== fromState) {
+        const v = validateTransition(def, fromState, target_state, meta.fields || {});
+        if (!v.ok) {
+          return res.status(409).json({ error: v.error, missing_fields: v.missing_fields });
+        }
+        meta.state = target_state;
+        meta.state_history = [
+          ...(meta.state_history || []),
+          { from: fromState, to: target_state, at: new Date().toISOString(), by: req.user?.id || null },
+        ];
+        eventsToWrite.push({ event_type: 'state_changed', payload: { from: fromState, to: target_state } });
+      }
+
+      // Toggle items[item] based on resolved state — items[key] = true iff state === doneState
+      const isDoneState = meta.state === def.doneState;
+
+      // If transitioning into done, enforce cross-lane gates
+      if (isDoneState && nextLaneState.items[item] !== true) {
         const gate = checkCrossLaneGate(current.lane_status, lane, item);
         if (!gate.ok) {
+          await writeEvent(req, { project_id: id, lane, item_key: item, event_type: 'gate_check_blocked', payload: gate });
           return res.status(409).json({
             error: 'Cross-lane gate not satisfied',
             blockers: gate.blockers,
           });
         }
-      }
-
-      const wasComplete = nextLaneState.items[item] === true;
-      if (value !== undefined) nextLaneState.items[item] = !!value;
-
-      // Maintain per-item audit metadata
-      const meta = { ...(nextLaneState.item_meta[item] || {}) };
-      if (notes !== undefined) meta.notes = notes;
-      if (value === true && !wasComplete) {
         meta.completed_by = req.user?.id || null;
         meta.completed_at = new Date().toISOString();
+        eventsToWrite.push({ event_type: 'gate_check_passed', payload: {} });
       }
-      if (value === false && wasComplete) {
+      if (!isDoneState && nextLaneState.items[item] === true) {
         meta.last_uncompleted_at = new Date().toISOString();
       }
+      nextLaneState.items[item] = !!isDoneState;
+
+      // Legacy: if `value` was sent (older clients), respect it but only if no target_state given
+      if (value !== undefined && target_state === undefined) {
+        const wasComplete = nextLaneState.items[item] === true;
+        if (value === true && !wasComplete) {
+          // Marking true → set state to doneState
+          const v2 = validateTransition(def, fromState, def.doneState, meta.fields || {});
+          if (!v2.ok) {
+            return res.status(409).json({ error: v2.error, missing_fields: v2.missing_fields });
+          }
+          const gate = checkCrossLaneGate(current.lane_status, lane, item);
+          if (!gate.ok) {
+            return res.status(409).json({ error: 'Cross-lane gate not satisfied', blockers: gate.blockers });
+          }
+          meta.state = def.doneState;
+          meta.state_history = [...(meta.state_history || []), { from: fromState, to: def.doneState, at: new Date().toISOString(), by: req.user?.id || null }];
+          meta.completed_by = req.user?.id || null;
+          meta.completed_at = new Date().toISOString();
+          nextLaneState.items[item] = true;
+          eventsToWrite.push({ event_type: 'state_changed', payload: { from: fromState, to: def.doneState } });
+        } else if (value === false && wasComplete) {
+          // Reopen → set state back to one before doneState
+          const stateOrder = def.states || [];
+          const prev = stateOrder[Math.max(0, stateOrder.indexOf(def.doneState) - 1)] || def.initialState;
+          meta.state = prev;
+          meta.last_uncompleted_at = new Date().toISOString();
+          nextLaneState.items[item] = false;
+          eventsToWrite.push({ event_type: 'state_changed', payload: { from: fromState, to: prev } });
+        }
+      }
+
       nextLaneState.item_meta[item] = meta;
 
-      // Auto-promote lane status from not_started → in_progress on first item tick
-      if (value === true && nextLaneState.status === 'not_started') {
+      // Auto-promote lane status from not_started → in_progress on first activity
+      if (nextLaneState.status === 'not_started' && (eventsToWrite.length > 0)) {
         nextLaneState.status = 'in_progress';
         nextLaneState.started_at = new Date().toISOString();
       }
+
+      // Persist events after we've written to DB (below)
+      req._pmEventsToWrite = eventsToWrite.map(e => ({ ...e, project_id: id, lane, item_key: item }));
     }
 
     // Mode 2: change lane status (in_progress / blocked / done)
@@ -333,8 +411,113 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
       .single();
     if (error) throw error;
 
+    // Persist queued audit events
+    const queued = req._pmEventsToWrite || [];
+    for (const ev of queued) {
+      // Skip duplicate field_edited events that just toggle the same key
+      await writeEvent(req, ev);
+    }
+
     const completion = computeLaneCompletion(current.project_type, newLaneStatus);
     res.json({ ...data, lane_completion: completion });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/pm/projects/:id/events — audit log feed ───────────────────────
+router.get('/:id/events', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { id } = req.params;
+    let q = supabaseAdmin
+      .from('pm_task_events')
+      .select('*')
+      .eq('project_id', id)
+      .order('occurred_at', { ascending: false })
+      .limit(parseInt(req.query.limit || '200', 10));
+    if (req.query.lane)     q = q.eq('lane', req.query.lane);
+    if (req.query.item_key) q = q.eq('item_key', req.query.item_key);
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/pm/projects/:id/comments — list ───────────────────────────────
+router.get('/:id/comments', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { id } = req.params;
+    let q = supabaseAdmin
+      .from('pm_task_comments')
+      .select('*')
+      .eq('project_id', id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+      .limit(500);
+    if (req.query.lane)     q = q.eq('lane', req.query.lane);
+    if (req.query.item_key) q = q.eq('item_key', req.query.item_key);
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/pm/projects/:id/comments — add comment ───────────────────────
+router.post('/:id/comments', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { id } = req.params;
+    const { lane, item_key, body, parent_id, mentions } = req.body;
+
+    if (!lane || !LANES.includes(lane)) return res.status(400).json({ error: 'Invalid lane' });
+    if (!item_key)                       return res.status(400).json({ error: 'item_key required' });
+    if (!body || !body.trim())           return res.status(400).json({ error: 'body required' });
+
+    const { data, error } = await supabaseAdmin
+      .from('pm_task_comments')
+      .insert({
+        project_id: id,
+        lane,
+        item_key,
+        parent_id:  parent_id || null,
+        author_user_id: req.user?.id || null,
+        body:       body.trim(),
+        mentions:   Array.isArray(mentions) ? mentions : [],
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    await writeEvent(req, {
+      project_id: id, lane, item_key,
+      event_type: 'comment_added',
+      payload: { comment_id: data.id, body_preview: body.slice(0, 80), mentions: mentions || [] },
+    });
+
+    res.status(201).json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── DELETE /api/pm/projects/:id/comments/:commentId ────────────────────────
+router.delete('/:id/comments/:commentId', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { id, commentId } = req.params;
+    const { error } = await supabaseAdmin
+      .from('pm_task_comments')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', commentId)
+      .eq('project_id', id);
+    if (error) throw error;
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

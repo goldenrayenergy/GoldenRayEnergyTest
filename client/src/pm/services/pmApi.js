@@ -32,3 +32,13 @@ export const pmArtifactsAPI = {
   remove: (projectId, artifactId) =>
     api.delete(`/pm/projects/${projectId}/artifacts/${artifactId}`),
 };
+
+export const pmEventsAPI = {
+  list: (projectId, params) => api.get(`/pm/projects/${projectId}/events`, { params }),
+};
+
+export const pmCommentsAPI = {
+  list:    (projectId, params) => api.get(`/pm/projects/${projectId}/comments`, { params }),
+  create:  (projectId, body)   => api.post(`/pm/projects/${projectId}/comments`, body),
+  remove:  (projectId, commentId) => api.delete(`/pm/projects/${projectId}/comments/${commentId}`),
+};
