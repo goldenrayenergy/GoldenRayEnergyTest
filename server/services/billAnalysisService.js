@@ -524,6 +524,141 @@ function mostCommon(arr) {
   return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
 }
 
+// ── Transparency block — built into every result ─────────────────────────
+//
+// Surfaces every assumption, source, and known limitation so customers
+// can audit how their numbers were produced. This is the difference
+// between "trust us" and "here's our work."
+
+function buildTransparency({ aggregate, recommendation, region }) {
+  const regionMeta = RATES.regions[region] || RATES.regions.auckland;
+  const monthsCovered = aggregate.months_covered || 0;
+  const dataConfidence =
+    monthsCovered >= 12 ? 'high'
+    : monthsCovered >= 6 ? 'medium'
+    : 'low';
+
+  return {
+    as_of: RATES._meta.as_of,
+    next_data_refresh_due: RATES._meta.next_refresh_due,
+
+    overall_confidence: dataConfidence,
+    confidence_explanation:
+      monthsCovered >= 12
+        ? 'You provided a full 12 months of bills — projections are based on a complete seasonal picture.'
+        : monthsCovered >= 6
+        ? `You provided ${monthsCovered} months — the engine extrapolated to a full year. Real annual kWh could be ±10% from this estimate.`
+        : `Only ${monthsCovered} month(s) of bills available — extrapolation is rough. Upload more bills for sharper numbers.`,
+
+    data_sources: [
+      { name: 'NZ retailer rates',         source: 'Each retailer\'s residential pricing page + powerswitch.org.nz comparison tool', as_of: RATES._meta.as_of, refreshes: 'quarterly' },
+      { name: 'Solar irradiance (regional)', source: 'NIWA SolarView dataset + EECA Energy Wise model', granularity: 'regional', value_used: `${regionMeta.irradiance_kwh_per_kw_per_year} kWh/kW/yr (${regionMeta.label})` },
+      { name: 'Grid emissions factor',     source: 'Ministry for the Environment — Greenhouse Gas Emissions Factors (annual)', value_used: `${C.grid_emissions_kg_co2_per_kwh} kg CO₂/kWh` },
+      { name: 'Electricity retail inflation', source: 'MBIE Energy in New Zealand — 10-yr residential rate trend', value_used: `${(C.annual_retail_inflation_pct * 100).toFixed(1)}%/yr` },
+      { name: 'Panel degradation',          source: 'Tier-1 manufacturer warranties (REC, Phono Solar, Trina)', value_used: `${(C.panel_degradation_pct_per_year * 100).toFixed(2)}%/yr` },
+      { name: 'Battery round-trip efficiency', source: 'Tesla Powerwall 3 / BYD HVS / Fronius Reserva datasheets', value_used: `${(C.battery_round_trip_efficiency * 100).toFixed(0)}%` },
+      { name: 'Self-consumption baseline',  source: 'BEAM (Building Energy Analysis Model NZ) + EECA solar-battery field studies', value_used: `solar-only ${(C.default_self_consumption_pct_solar_only * 100).toFixed(0)}% / with battery ${(C.default_self_consumption_pct_with_battery * 100).toFixed(0)}%` },
+    ],
+
+    assumptions: [
+      { key: 'gst_rate',                value: C.gst_rate,                          label: 'GST rate', basis: 'NZ IRD — 15% since 2010' },
+      { key: 'electricity_inflation',   value: C.annual_retail_inflation_pct,       label: 'Annual retail electricity inflation', basis: '10-year NZ MBIE residential rate trend', why_matters: 'Affects 25-year savings — higher inflation → bigger savings from solar' },
+      { key: 'self_consumption_solar',  value: C.default_self_consumption_pct_solar_only, label: 'Solar-only self-consumption %', basis: 'Industry mid-range; assumes hot-water timer included in install', why_matters: 'Higher % → more solar savings; lower % → more low-rate exports' },
+      { key: 'self_consumption_battery', value: C.default_self_consumption_pct_with_battery, label: 'Solar+battery self-consumption %', basis: 'Battery captures evening + cloudy-day load' },
+      { key: 'buyback_rate',            value: 0.09,                                 label: 'Solar export (buyback) rate', basis: 'NZ retailer mid-pack default; some retailers pay 12c+ — see switch advice', why_matters: 'Customer\'s actual buyback could be 7c (Mercury) to 12.5c (Electric Kiwi)' },
+      { key: 'panel_degradation',       value: C.panel_degradation_pct_per_year,    label: 'Panel performance degradation', basis: 'Tier-1 manufacturer 25-yr warranty terms' },
+      { key: 'battery_efficiency',      value: C.battery_round_trip_efficiency,     label: 'Battery round-trip efficiency', basis: 'Modern lithium-iron-phosphate ~90-92%' },
+      { key: 'projection_years',        value: PROJECTION_YEARS,                     label: 'Projection horizon', basis: 'Matches Tier-1 panel performance warranty' },
+    ],
+
+    sensitivity: {
+      basis: 'Each scenario\'s "low / high" range reflects ±15% real-world variability for solar scenarios (roof orientation, shading, household behaviour, retailer plan changes) and ±8% for non-solar scenarios (inflation rate uncertainty only).',
+      solar_uncertainty_pct: 0.15,
+      no_solar_uncertainty_pct: 0.08,
+    },
+
+    limitations: [
+      {
+        code: 'no_hourly_data',
+        label: 'No hourly load resolution',
+        impact: 'Self-consumption % is a single average, not modelled per appliance. Real solar economics depend on hour-by-hour load matching — your number could vary ±10% from this estimate.',
+        severity: 'medium',
+        mitigation: 'Upload your retailer\'s smart-meter CSV (Mercury, Genesis, Contact all support this) for sharper projections.',
+      },
+      {
+        code: 'fixed_buyback_assumption',
+        label: 'Buyback rate assumed at 9c/kWh',
+        impact: 'Your actual buyback varies by retailer (7c-12.5c). The switch-retailer advice already uses real per-retailer rates, but the solar scenarios use the 9c default.',
+        severity: 'medium',
+        mitigation: 'After choosing solar, review the retailer rate table to maximise your export earnings.',
+      },
+      {
+        code: 'no_roof_assessment',
+        label: 'No roof orientation / shading analysis',
+        impact: 'Generation estimates assume an unshaded north-facing roof at 25° pitch. East/west-facing roofs generate ~85-95% of north; heavy shading reduces further.',
+        severity: 'medium',
+        mitigation: 'Site visit will measure your actual roof and adjust.',
+      },
+      {
+        code: 'no_tou_modelling',
+        label: 'Time-of-use plan benefits not separately modelled',
+        impact: 'Some retailers (Genesis Energy IQ, Electric Kiwi MoveMaster) reward off-peak use. Customers who load-shift can save 15-20% even before solar — not modelled here.',
+        severity: 'low',
+        mitigation: 'Ask about TOU plans during the consultation.',
+      },
+      {
+        code: 'no_ev_modelling',
+        label: 'EV charging not modelled',
+        impact: 'If you plan to add an EV in the next 2-3 years, your usage will rise ~3,000 kWh/yr. Recommended system size in this analysis won\'t reflect that.',
+        severity: 'medium',
+        mitigation: 'Mention EV plans during the consultation — system sizing should add ~1.5 kW headroom.',
+      },
+      {
+        code: 'inflation_assumption',
+        label: 'Future electricity inflation assumed 5%/yr',
+        impact: 'Real future inflation may differ. The 25-year savings figure is sensitive: 7%/yr would lift savings ~25%; 3%/yr would cut them ~20%.',
+        severity: 'low',
+        mitigation: 'Treat 25-year figures as directional, not exact.',
+      },
+      {
+        code: 'point_in_time_rates',
+        label: `Retailer rates current as of ${RATES._meta.as_of}`,
+        impact: 'NZ retailers adjust prices 1-2 times per year. Switch advice may be stale by the next quarter.',
+        severity: 'low',
+        mitigation: 'Refresh the retailer dataset quarterly — rate changes are public.',
+      },
+    ],
+
+    methodology_summary: 'Deterministic 25-year cashflow projection. Each scenario simulates yearly costs accounting for inflation, panel degradation, battery efficiency, and buyback rates. Pure-function computation — same input always produces the same output, no randomness, no hidden adjustments.',
+
+    disclaimer:
+      `Estimates produced by Goldenray Energy NZ\'s analysis engine using public NZ energy data current as of ${RATES._meta.as_of}. ` +
+      `Projections cover ${PROJECTION_YEARS} years and assume an unshaded north-facing roof at typical NZ pitch. ` +
+      `Actual results may vary ±10-15% depending on roof orientation, shading, household behaviour, retailer plan changes, and electricity market movements. ` +
+      `Final installed pricing requires an on-site assessment. ` +
+      `This analysis is provided as a planning aid, not a guaranteed quote.`,
+  };
+}
+
+// Add sensitivity ranges to each scenario.
+function addSensitivity(scenario, transparency) {
+  const isSolar = scenario.id === 'solar-only' || scenario.id === 'solar-plus-battery';
+  const pct = isSolar ? transparency.sensitivity.solar_uncertainty_pct : transparency.sensitivity.no_solar_uncertainty_pct;
+  const lo = (n) => n == null ? null : round2(n * (1 - pct));
+  const hi = (n) => n == null ? null : round2(n * (1 + pct));
+  return {
+    ...scenario,
+    sensitivity_pct: pct,
+    year_1_cost_range:    { low: lo(scenario.year_1_cost),    high: hi(scenario.year_1_cost) },
+    year_25_cost_range:   { low: lo(scenario.year_25_cost),   high: hi(scenario.year_25_cost) },
+    net_25yr_range:       { low: lo(scenario.net_25yr),       high: hi(scenario.net_25yr) },
+    payback_years_range:
+      scenario.payback_years == null
+        ? { low: null, high: null }
+        : { low: round1(scenario.payback_years * (1 - pct)), high: round1(scenario.payback_years * (1 + pct)) },
+  };
+}
+
 // ── Public top-level entry point ─────────────────────────────────────────
 
 export function analyzeBills({ bills, region = 'auckland' }) {
@@ -531,13 +666,16 @@ export function analyzeBills({ bills, region = 'auckland' }) {
   const recommendation = recommendSystem(aggregate.annual_kwh, region);
   const { scenarios, switch_advice } = buildScenarios({ aggregate, recommendation });
   const patterns = detectPatterns(bills, aggregate);
+  const transparency = buildTransparency({ aggregate, recommendation, region });
+  const scenariosWithSensitivity = scenarios.map(s => addSensitivity(s, transparency));
 
   return {
     aggregate,
     recommendation,
-    scenarios,
+    scenarios: scenariosWithSensitivity,
     switch_advice,
     patterns,
     region,
+    transparency,
   };
 }

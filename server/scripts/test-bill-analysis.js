@@ -220,3 +220,29 @@ if (issues.length === 0) {
   for (const i of issues) console.log('   • ' + i);
 }
 console.log('═'.repeat(135));
+
+// ── Transparency block sample (first profile) ──────────────────────────────
+
+console.log('\n' + '═'.repeat(135));
+console.log(' TRANSPARENCY BLOCK (sample, from "Big NZ family with heat pump")');
+console.log('═'.repeat(135));
+const t = results[2].result.transparency;
+const s = results[2].result.scenarios.find(s => s.id === 'solar-plus-battery');
+console.log('  Data current as of:    ' + t.as_of + ' (next refresh due ' + t.next_data_refresh_due + ')');
+console.log('  Confidence in inputs:  ' + t.overall_confidence);
+console.log('  Why:                   ' + t.confidence_explanation);
+console.log('');
+console.log('  ── Sample scenario with sensitivity range ──');
+console.log('  ' + s.label);
+console.log('    Year-1 cost:   ' + fmt$(s.year_1_cost) + '   (range: ' + fmt$(s.year_1_cost_range.low) + ' – ' + fmt$(s.year_1_cost_range.high) + ')');
+console.log('    Year-25 cost:  ' + fmt$(s.year_25_cost) + '   (range: ' + fmt$(s.year_25_cost_range.low) + ' – ' + fmt$(s.year_25_cost_range.high) + ')');
+console.log('    Net 25-yr:     ' + fmt$(s.net_25yr)    + '   (range: ' + fmt$(s.net_25yr_range.low) + ' – ' + fmt$(s.net_25yr_range.high) + ')');
+console.log('    Payback:       ' + s.payback_years + ' yrs  (range: ' + s.payback_years_range.low + ' – ' + s.payback_years_range.high + ' yrs)');
+console.log('');
+console.log('  ── Top 3 limitations surfaced ──');
+for (const l of t.limitations.slice(0, 3)) console.log('    [' + l.severity + '] ' + l.label + ' — ' + l.impact.slice(0, 90) + '...');
+console.log('');
+console.log('  ── Disclaimer (shown in customer report + PDF) ──');
+const lines = t.disclaimer.match(/.{1,130}(\s|$)/g) || [t.disclaimer];
+for (const line of lines) console.log('  ' + line.trim());
+console.log('═'.repeat(135));
