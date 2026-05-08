@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS bill_analyses (
 
   -- Detected retailer + plan (best-effort from OCR)
   retailer                VARCHAR(80),
-  plan_name               VARCHAR(120),
+  plan_name               TEXT,
 
   -- Location used for solar irradiance / scenario calculation
   region                  VARCHAR(60),                -- 'auckland' | 'wellington' | 'canterbury' | 'otago' | ...
@@ -67,13 +67,13 @@ CREATE TABLE IF NOT EXISTS bill_analyses (
   -- Recommended outputs derived from analysis
   recommended_system_kw   NUMERIC(6,2),
   recommended_battery_kwh NUMERIC(6,2),
-  recommended_orientation VARCHAR(40),
+  recommended_orientation TEXT,
   recommended_package_slug VARCHAR(120),              -- maps to packages.slug
 
   -- Retailer switch recommendation (always honest — even when it doesn't help us)
   switch_recommended      BOOLEAN DEFAULT false,
   switch_to_retailer      VARCHAR(80),
-  switch_to_plan          VARCHAR(120),
+  switch_to_plan          TEXT,
   switch_annual_saving    NUMERIC(10,2),
 
   -- Lifecycle
@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS bill_uploads (
 
   -- Normalised parse results
   retailer                VARCHAR(80),
-  plan_name               VARCHAR(120),
+  plan_name               TEXT,
   period_start            DATE,
   period_end              DATE,
   days_in_period          INTEGER,
