@@ -218,7 +218,7 @@
     "gst_rate": 0.15,
     "annual_retail_inflation_pct": 0.05,
     "grid_emissions_kg_co2_per_kwh": 0.098,
-    "default_self_consumption_pct_solar_only": 0.32,
+    "default_self_consumption_pct_solar_only": 0.45,
     "default_self_consumption_pct_with_battery": 0.85,
     "battery_round_trip_efficiency": 0.92,
     "panel_degradation_pct_per_year": 0.005,
