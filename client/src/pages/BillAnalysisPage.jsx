@@ -68,6 +68,20 @@ export default function BillAnalysisPage() {
     }
   };
 
+  // Reset everything back to the upload screen. Linking to /bill-analysis
+  // alone wouldn't re-render the page since we're already on that route —
+  // we need to actively clear state.
+  const reset = () => {
+    setFiles([]);
+    setRegion('');
+    setPostcode('');
+    setEmail('');
+    setResult(null);
+    setError('');
+    setStage('upload');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   return (
     <div className="bg-white font-body">
       <Nav />
@@ -83,9 +97,9 @@ export default function BillAnalysisPage() {
 
       {stage === 'analysing' && <AnalysingView fileCount={files.length} />}
 
-      {stage === 'results' && result && <ResultsView result={result} />}
+      {stage === 'results' && result && <ResultsView result={result} onReset={reset} />}
 
-      {stage === 'error' && <ErrorView error={error} onRetry={() => setStage('upload')} />}
+      {stage === 'error' && <ErrorView error={error} onRetry={reset} />}
 
       <WebsiteFooter />
     </div>
@@ -242,7 +256,7 @@ function ErrorView({ error, onRetry }) {
 }
 
 // ── Results state — the hero ────────────────────────────────────────────
-function ResultsView({ result }) {
+function ResultsView({ result, onReset }) {
   const [tab, setTab] = useState('comparison');
   const [showQuote, setShowQuote] = useState(false);
   const a = result.analysis;
@@ -257,9 +271,10 @@ function ResultsView({ result }) {
       {/* HERO — the loss-aversion lever */}
       <section className="px-6 md:px-10 pb-10 bg-gradient-to-br from-red-50 via-amber-50 to-emerald-50">
         <div className="max-w-5xl mx-auto">
-          <Link to="/bill-analysis" className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-semibold mb-3 hover:text-amber-700">
+          <button onClick={onReset}
+            className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-semibold mb-3 hover:text-amber-700">
             <ArrowLeft size={11} /> Run another analysis
-          </Link>
+          </button>
           <div className="text-center mb-6">
             <div className="text-[11px] font-extrabold tracking-widest text-red-700 mb-2">DOING NOTHING COSTS YOU</div>
             <h1 className="text-4xl md:text-6xl font-extrabold font-display leading-tight mb-2 text-red-700">{fmt$(doNothing.year_25_cost)}</h1>
