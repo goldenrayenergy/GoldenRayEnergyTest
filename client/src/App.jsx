@@ -5,6 +5,10 @@ import { useAuth } from './context/AuthContext';
 import WebsitePage from './pages/WebsitePage';
 import FinancePage from './pages/FinancePage';
 import LoginPage from './pages/LoginPage';
+import SolarPackagesPage from './pages/SolarPackagesPage';
+import SolarPackageDetailPage from './pages/SolarPackageDetailPage';
+import ShopPage from './pages/ShopPage';
+import ShopProductDetailPage from './pages/ShopProductDetailPage';
 
 // Portal pages
 import PortalLayout from './components/layout/PortalLayout';
@@ -26,6 +30,9 @@ import ProjectsPage from './pages/portal/ProjectsPage';
 import ProjectDetailPage from './pages/portal/ProjectDetailPage';
 import FinanceApplicationsPage from './pages/portal/FinanceApplicationsPage';
 import OverrideRequestsPage from './pages/portal/OverrideRequestsPage';
+import ProductsPage from './pages/portal/ProductsPage';
+import PackagesPage from './pages/portal/PackagesPage';
+import TradeRequestsPage from './pages/portal/TradeRequestsPage';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -47,6 +54,10 @@ export default function App() {
       <Route path="/" element={<WebsitePage />} />
       <Route path="/finance" element={<AdminRoute><FinancePage /></AdminRoute>} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/solar-packages" element={<SolarPackagesPage />} />
+      <Route path="/solar-packages/:slug" element={<SolarPackageDetailPage />} />
+      <Route path="/shop" element={<ShopPage />} />
+      <Route path="/shop/:sku" element={<ShopProductDetailPage />} />
 
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
         <Route index element={<DashboardPage />} />
@@ -67,6 +78,9 @@ export default function App() {
         <Route path="admin" element={<AdminPage />} />
         <Route path="finance" element={<AdminRoute><FinanceApplicationsPage /></AdminRoute>} />
         <Route path="overrides" element={<OverrideRequestsPage />} />
+        <Route path="products" element={<ProductsPage />} />
+        <Route path="packages" element={<PackagesPage />} />
+        <Route path="trade-requests" element={<TradeRequestsPage />} />
       </Route>
     </Routes>
   );

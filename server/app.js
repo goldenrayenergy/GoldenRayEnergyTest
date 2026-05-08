@@ -22,6 +22,11 @@ import enquiryRoutes from './routes/enquiries.js';
 import projectRoutes from './routes/projects.js';
 import overrideRoutes from './routes/overrides.js';
 import addressRoutes from './routes/address.js';
+import productRoutes from './routes/products.js';
+import lineItemRoutes from './routes/lineItems.js';
+import packageRoutes from './routes/packages.js';
+import shopRoutes from './routes/shop.js';
+import tradeRequestRoutes from './routes/tradeRequests.js';
 
 dotenv.config({ path: '../.env' });
 
@@ -63,6 +68,7 @@ app.get('/', (req, res) => {
       activities: '/api/activities',
       reports: '/api/reports',
       proposals: '/api/proposals',
+      products: '/api/products',
       config: '/api/config'
     },
     timestamp: new Date().toISOString()
@@ -87,6 +93,11 @@ app.use('/api/enquiries', enquiryRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/overrides', overrideRoutes);
 app.use('/api/address', addressRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/projects/:projectId/line-items', lineItemRoutes);
+app.use('/api/packages', packageRoutes);
+app.use('/api/shop', shopRoutes);
+app.use('/api/trade-requests', tradeRequestRoutes);
 
 // ── Health Check ──
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
-import { LayoutDashboard, Briefcase, TrendingUp, CheckCircle, GitBranch, Megaphone, Mail, Target, Users, Building2, BarChart3, Settings, LogOut, Inbox, FolderKanban, CreditCard, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, Briefcase, TrendingUp, CheckCircle, GitBranch, Megaphone, Mail, Target, Users, Building2, BarChart3, Settings, LogOut, Inbox, FolderKanban, CreditCard, ShieldAlert, Package, Boxes, ShoppingCart } from 'lucide-react';
 
 const NAV = [
   { header: 'Overview', items: [{ to: '/portal', label: 'Dashboard', icon: LayoutDashboard, end: true }] },
@@ -20,8 +20,11 @@ const NAV = [
   ]},
   { header: 'Data Hub', items: [
     { to: '/portal/enquiries', label: 'Website Enquiries', icon: Inbox },
+    { to: '/portal/trade-requests', label: 'Trade Quote Requests', icon: ShoppingCart },
     { to: '/portal/contacts', label: 'Contacts', icon: Users },
     { to: '/portal/companies', label: 'Companies', icon: Building2 },
+    { to: '/portal/products', label: 'Products', icon: Package },
+    { to: '/portal/packages', label: 'Packages', icon: Boxes },
     { to: '/portal/reports', label: 'Reports', icon: BarChart3 },
   ]},
   { header: 'Approvals', items: [{ to: '/portal/overrides', label: 'Override Requests', icon: ShieldAlert }] },

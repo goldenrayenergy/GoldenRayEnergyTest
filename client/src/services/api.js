@@ -34,6 +34,16 @@ api.interceptors.response.use(
 
 export default api;
 
+// publicApi — same baseURL resolution as `api` but no auth-token attach
+// and no 401-redirect interceptor. Use this from public-facing pages
+// (Shop, Solar Packages, etc.) so they reach the Render backend in
+// production without getting bounced to /login on a stray 401.
+export const publicApi = axios.create({
+  baseURL,
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 60000,
+});
+
 // ── Typed API helpers ──
 export const leadsAPI = {
   getAll: (params) => api.get('/leads', { params }),

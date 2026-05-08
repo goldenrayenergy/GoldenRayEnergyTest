@@ -1,9 +1,20 @@
 import { Router } from 'express';
 import { calculateSolar } from '../services/calcService.js';
 import { generateQuotePDF } from '../services/quotePdfService.js';
-import { createProjectFromEnquiry } from '../services/projectService.js';
 import { sendQuoteEmail, sendTeamNewLeadEmail, sendCustomerAckEmail } from '../services/emailService.js';
 import { supabaseAdmin } from '../config/supabase.js';
+
+// Multi-touch follow-up cadence created at enquiry time. Sales rep ticks
+// each off as they happen; remaining ones cancel naturally if the lead
+// converts (we don't auto-cancel — the rep marks them done). Adjust
+// timing here in one place if business rules change.
+const CADENCE = [
+  { offsetDays: 0,  title: 'First call within 1 hour', priority: 'high',   task_type: 'call' },
+  { offsetDays: 1,  title: 'Day 1: text + email follow-up', priority: 'medium', task_type: 'call' },
+  { offsetDays: 3,  title: 'Day 3: phone check-in',         priority: 'medium', task_type: 'call' },
+  { offsetDays: 7,  title: 'Day 7: email follow-up',         priority: 'low',    task_type: 'email' },
+  { offsetDays: 14, title: 'Day 14: final follow-up',        priority: 'low',    task_type: 'call' },
+];
 
 const router = Router();
 
@@ -137,23 +148,14 @@ router.post('/submit', async (req, res) => {
       .single();
     if (contactError) throw contactError;
 
-    // ── 3. Create a Project (Phase 1 workflow — starts in 'new' stage) ───────
-    let project = null;
-    try {
-      project = await createProjectFromEnquiry({
-        form,
-        calculation,
-        contactId: contact.id,
-        systemType: contactSystemType,
-        enquiryId: enquiry.id,
-      });
-    } catch (pe) {
-      console.error('Project creation failed (non-fatal):', pe.message);
-    }
+    // NOTE: We deliberately do NOT create a project here. Projects are
+    // operational records for confirmed customers. Sales reps qualify the
+    // lead through the cadence below, then promote the contact to a project
+    // when the customer commits (POST /api/leads/:id/promote-to-project).
+    // Until then the contact lives in /portal/pipeline only.
 
-    // ── 4. Create follow-up task so sales sees it in Tasks page ──────────────
-    const dueDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const taskDescription = [
+    // ── 3. Create the multi-touch follow-up cadence ─────────────────────────
+    const baseDescription = [
       `New website enquiry${form.monthlyBill ? ` — $${form.monthlyBill}/mo bill` : ''}.`,
       form.installationType      && `Installation: ${form.installationType}.`,
       form.batteryOption         && `Battery: ${form.batteryOption}.`,
@@ -162,28 +164,25 @@ router.post('/submit', async (req, res) => {
       calculation?.systemSize && `Est. system: ${calculation.systemSize} kW, $${Math.round(calculation.totalCost).toLocaleString()}.`,
     ].filter(Boolean).join(' ');
 
-    await supabaseAdmin.from('tasks').insert({
-      title:       `Follow up with ${name} — website enquiry`,
-      description: taskDescription,
+    const cadenceTasks = CADENCE.map(step => ({
+      title:       `${step.title} — ${name}`,
+      description: baseDescription,
       contact_id:  contact.id,
-      project_id:  project?.id || null,
-      due_date:    dueDate,
-      priority:    form.callToDiscuss === 'yes' ? 'high' : 'medium',
+      due_date:    new Date(Date.now() + step.offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      priority:    form.callToDiscuss === 'yes' && step.offsetDays === 0 ? 'high' : step.priority,
       status:      'todo',
-      task_type:   'call',
+      task_type:   step.task_type,
       assignee_id: null,
-    });
+    }));
+    await supabaseAdmin.from('tasks').insert(cadenceTasks);
 
-    // ── 5. Log activity so it appears in dashboard Recent Activity feed ──────
+    // ── 4. Log activity so it appears in dashboard Recent Activity feed ─────
     await supabaseAdmin.from('activities').insert({
       type:        'system',
       description: `New website lead: ${name}${form.monthlyBill ? ` — $${form.monthlyBill}/mo bill` : ''}${calculation?.totalCost ? ` — est. $${Math.round(calculation.totalCost).toLocaleString()}` : ''}`,
       contact_id:  contact.id,
-      project_id:  project?.id || null,
       metadata: {
-        enquiry_id:  enquiry.id,
-        project_id:  project?.id  || null,
-        project_code: project?.code || null,
+        enquiry_id:   enquiry.id,
         monthly_bill: form.monthlyBill || null,
         system_size:  calculation?.systemSize || null,
         total_cost:   calculation?.totalCost  || null,
@@ -192,7 +191,7 @@ router.post('/submit', async (req, res) => {
       },
     });
 
-    // ── 6. Notify the team + send customer acknowledgment in parallel.
+    // ── 5. Notify the team + send customer acknowledgment in parallel.
     //      Both non-fatal — we never block the API response on email problems.
     Promise.all([
       (async () => {
@@ -203,28 +202,15 @@ router.post('/submit', async (req, res) => {
             .eq('role', 'admin')
             .eq('is_active', true);
           const recipients = (admins || []).map(u => u.email).filter(Boolean);
-          await sendTeamNewLeadEmail({ form, calculation, leadScore, recipients, projectCode: project?.code });
+          await sendTeamNewLeadEmail({ form, calculation, leadScore, recipients });
         } catch (e) { console.error('Team notification email failed (non-fatal):', e.message); }
       })(),
       (async () => {
         try {
-          await sendCustomerAckEmail({ form, projectCode: project?.code });
+          await sendCustomerAckEmail({ form });
         } catch (e) { console.error('Customer ack email failed (non-fatal):', e.message); }
       })(),
     ]);
-
-    // ── 7. Set the first-call SLA timestamp so the dashboard can flag overdue
-    //      leads. 24-hour standard for residential solar in NZ.
-    if (project?.id) {
-      try {
-        await supabaseAdmin
-          .from('projects')
-          .update({ sla_first_call_due_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })
-          .eq('id', project.id);
-      } catch (e) {
-        console.error('SLA timestamp failed (non-fatal):', e.message);
-      }
-    }
 
     res.status(201).json({ success: true, id: enquiry.id, contact_id: contact.id });
   } catch (e) {

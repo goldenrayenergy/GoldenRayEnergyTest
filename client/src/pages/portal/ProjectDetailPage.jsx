@@ -10,7 +10,9 @@ import {
   ArrowLeft, Calendar, Activity as ActivityIcon, Sun, User as UserIcon,
   Mail, Phone, MapPin, Zap, DollarSign, CheckSquare, Square, Clock, ChevronDown, Lock, ShieldAlert,
   Flame, Snowflake, ThermometerSun, FileText, Home, Save, RefreshCw, Download, Send, Eye, FileCheck2, TrendingUp, Leaf, Plus, CheckCircle2, X, ArrowRight, AlertTriangle,
+  Package, Trash2,
 } from 'lucide-react';
+import ProductPicker from '../../components/portal/ProductPicker';
 
 const CALL_OUTCOMES = [
   { value: 'reached',       label: 'Reached customer' },
@@ -1361,6 +1363,170 @@ function NewStagePanel({ project, users, onSave, saving }) {
   );
 }
 
+// ── DesignTab — Bill of Materials with line-item picker ───────────────────
+function DesignTab({ project }) {
+  const [items, setItems]       = useState([]);
+  const [totals, setTotals]     = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [savingId, setSavingId] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get(`/projects/${project.id}/line-items`);
+      setItems(data.items || []);
+      setTotals(data.totals || null);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [project.id]);
+
+  const handleAdd = async (newItems) => {
+    await api.post(`/projects/${project.id}/line-items`, { items: newItems });
+    setPickerOpen(false);
+    load();
+  };
+
+  const updateField = async (item, field, value) => {
+    setSavingId(item.id);
+    try {
+      await api.patch(`/projects/${project.id}/line-items/${item.id}`, { [field]: value });
+      load();
+    } finally { setSavingId(null); }
+  };
+
+  const remove = async (item) => {
+    if (!confirm(`Remove "${item.name}" from this project?`)) return;
+    await api.delete(`/projects/${project.id}/line-items/${item.id}`);
+    load();
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="text-sm font-bold font-display flex items-center gap-2">
+            <Package size={14} className="text-amber-500" />
+            Bill of Materials
+          </h3>
+          <p className="text-[11px] text-gray-400">
+            Products and parts that make up this system. Pulls from the catalogue; per-line margin overrides allowed.
+          </p>
+        </div>
+        <button
+          onClick={() => setPickerOpen(true)}
+          className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1.5"
+        >
+          <Plus size={12} /> Add Products
+        </button>
+      </div>
+
+      {/* Items table */}
+      {loading ? (
+        <div className="py-10 flex justify-center"><RefreshCw size={16} className="animate-spin text-amber-500" /></div>
+      ) : items.length === 0 ? (
+        <div className="bg-white border border-dashed border-gray-200 rounded-xl py-12 text-center">
+          <Package size={28} className="mx-auto text-gray-300 mb-2" />
+          <div className="text-xs text-gray-400">No line items yet.</div>
+          <button
+            onClick={() => setPickerOpen(true)}
+            className="mt-3 px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold inline-flex items-center gap-1.5"
+          >
+            <Plus size={12} /> Add the first product
+          </button>
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wide">Product</th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Qty</th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Unit Cost</th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Margin %</th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Unit Sell</th>
+                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Line Total</th>
+                <th className="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {items.map(item => (
+                <tr key={item.id} className={savingId === item.id ? 'opacity-60' : ''}>
+                  <td className="px-3 py-2.5">
+                    <div className="text-xs font-semibold">{item.name}</div>
+                    {item.sku && <div className="text-[10px] font-mono text-gray-400 mt-0.5">{item.sku}</div>}
+                    {!item.product_id && <div className="text-[9px] text-gray-400 italic mt-0.5">(catalogue link broken)</div>}
+                  </td>
+                  <td className="px-3 py-2.5 text-right">
+                    <input
+                      type="number" min="1"
+                      defaultValue={item.qty}
+                      onBlur={e => {
+                        const v = Math.max(1, parseInt(e.target.value) || 1);
+                        if (v !== item.qty) updateField(item, 'qty', v);
+                      }}
+                      className="w-14 text-right text-xs border border-gray-200 rounded py-0.5 px-1.5"
+                    />
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-xs text-gray-500">{fmt$(item.unit_cost_nzd || 0)}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    <input
+                      type="number" min="0" step="1"
+                      defaultValue={item.margin_pct}
+                      onBlur={e => {
+                        const v = parseFloat(e.target.value);
+                        if (!isNaN(v) && v !== item.margin_pct) updateField(item, 'margin_pct', v);
+                      }}
+                      className="w-14 text-right text-xs border border-gray-200 rounded py-0.5 px-1.5"
+                    />
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-xs">{fmt$(item.unit_sell_incl_gst)}</td>
+                  <td className="px-3 py-2.5 text-right text-xs font-bold">{fmt$(item.line_total_incl_gst)}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    <button onClick={() => remove(item)} title="Remove"
+                      className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 transition">
+                      <Trash2 size={12} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            {totals && (
+              <tfoot className="bg-gray-50 border-t border-gray-100">
+                <tr>
+                  <td colSpan="5" className="px-3 py-2 text-right text-[11px] text-gray-500">Sub-total (excl GST)</td>
+                  <td className="px-3 py-2 text-right text-xs font-semibold">{fmt$(totals.sell_excl_gst)}</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td colSpan="5" className="px-3 py-2 text-right text-[11px] text-gray-500">GST 15%</td>
+                  <td className="px-3 py-2 text-right text-xs font-semibold">{fmt$(totals.gst)}</td>
+                  <td></td>
+                </tr>
+                <tr className="border-t border-gray-200">
+                  <td colSpan="5" className="px-3 py-2.5 text-right text-xs font-bold text-amber-700">TOTAL (incl GST)</td>
+                  <td className="px-3 py-2.5 text-right text-sm font-extrabold text-amber-700">{fmt$(totals.sell_incl_gst)}</td>
+                  <td></td>
+                </tr>
+                <tr className="border-t border-gray-100">
+                  <td colSpan="5" className="px-3 py-1.5 text-right text-[10px] text-gray-400">Margin (excl GST)</td>
+                  <td className="px-3 py-1.5 text-right text-[11px] text-emerald-600 font-semibold">{fmt$(totals.margin_dollars)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+
+      <ProductPicker open={pickerOpen} onClose={() => setPickerOpen(false)} onAdd={handleAdd} />
+    </div>
+  );
+}
+
 export default function ProjectDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -1680,11 +1846,12 @@ export default function ProjectDetailPage() {
         </div>
       </div>
 
-      {/* Tab routing — manage + enquiry + online-proposal + pdf-proposal are implemented; rest fall back to placeholder */}
+      {/* Tab routing — manage + enquiry + online-proposal + pdf-proposal + design are implemented; rest fall back to placeholder */}
       {activeTab === 'enquiry'         && <EnquiryTab enquiry={enquiry} />}
       {activeTab === 'online-proposal' && <OnlineProposalTab project={project} customer={customer} onProjectChange={loadProject} />}
       {activeTab === 'pdf-proposal'    && <PdfProposalTab    project={project} customer={customer} onProjectChange={loadProject} />}
-      {!['manage', 'enquiry', 'online-proposal', 'pdf-proposal'].includes(activeTab) && <TabPlaceholder tabId={activeTab} stageLabel={stage.label} />}
+      {activeTab === 'design'          && <DesignTab project={project} />}
+      {!['manage', 'enquiry', 'online-proposal', 'pdf-proposal', 'design'].includes(activeTab) && <TabPlaceholder tabId={activeTab} stageLabel={stage.label} />}
 
       {/* Manage tab content */}
       {activeTab === 'manage' && (

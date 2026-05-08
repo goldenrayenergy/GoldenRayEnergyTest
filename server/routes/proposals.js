@@ -9,6 +9,20 @@ import { uploadProposalPDF } from '../services/storageService.js';
 const router = Router();
 router.use(authenticate);
 
+// Fetch the project's line items so the PDF can include a Bill of Materials.
+// Returns [] for proposals without a project_id (legacy / standalone) so the
+// PDF cleanly falls back to the bag-of-numbers summary.
+async function fetchLineItems(projectId) {
+  if (!projectId) return [];
+  const { data } = await supabaseAdmin
+    .from('quote_line_items')
+    .select('id, name, sku, qty, unit_cost_nzd, margin_pct, position')
+    .eq('project_id', projectId)
+    .order('position', { ascending: true })
+    .order('created_at', { ascending: true });
+  return data || [];
+}
+
 // Public: solar calc helper (already used by the quote calculator)
 router.post('/calculate', async (req, res) => {
   try { res.json(calculateSolar(req.body)); }
@@ -161,7 +175,8 @@ router.post('/:id/pdf', async (req, res) => {
       .single();
     if (error || !proposal) return res.status(404).json({ error: 'Proposal not found' });
 
-    const flat = { ...proposal, name: proposal.contact?.name, email: proposal.contact?.email, location: proposal.contact?.location };
+    const lineItems = await fetchLineItems(proposal.project_id);
+    const flat = { ...proposal, name: proposal.contact?.name, email: proposal.contact?.email, location: proposal.contact?.location, lineItems };
     const pdfBuffer = await generateProposalPDF(flat);
 
     const fileName = `quote-${(flat.name || 'customer').replace(/\s+/g, '-')}-v${proposal.version || 1}-${Date.now()}.pdf`;
@@ -217,7 +232,8 @@ router.post('/:id/send', async (req, res) => {
     if (!customer.email) return res.status(400).json({ error: 'Customer has no email on file.' });
 
     // Generate the PDF
-    const flat = { ...proposal, name: customer.name, email: customer.email };
+    const lineItems = await fetchLineItems(proposal.project_id);
+    const flat = { ...proposal, name: customer.name, email: customer.email, lineItems };
     let pdfBuffer = null;
     try {
       pdfBuffer = await generateProposalPDF(flat);

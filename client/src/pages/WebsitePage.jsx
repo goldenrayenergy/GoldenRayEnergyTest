@@ -9,6 +9,7 @@ import SolarChatbot from '../components/website/SolarChatbot';
 import WhatsAppAssistant from '../components/website/WhatsAppAssistant';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import axios from 'axios';
+import { publicApi } from '../services/api';
 
 const SYSTEM_TYPES = [
   { value: 'on-grid', label: 'On-Grid', desc: 'Grid-connected, sell excess back', icon: '🔌' },
@@ -64,7 +65,7 @@ export default function WebsitePage() {
     if (!form.phone) return;
     setOtpState(s => ({ ...s, loading: true, error: '', demoCode: '' }));
     try {
-      const { data } = await axios.post('/api/otp/send', { phone: form.phone });
+      const { data } = await publicApi.post('/otp/send', { phone: form.phone });
       setOtpState(s => ({ ...s, loading: false, sent: true, demoCode: data.demoOtp || '' }));
     } catch (e) {
       setOtpState(s => ({ ...s, loading: false, error: e.response?.data?.error || 'Failed to send OTP.' }));
@@ -74,7 +75,7 @@ export default function WebsitePage() {
   const verifyOtp = async () => {
     setOtpState(s => ({ ...s, loading: true, error: '' }));
     try {
-      await axios.post('/api/otp/verify', { phone: form.phone, otp: otpState.value });
+      await publicApi.post('/otp/verify', { phone: form.phone, otp: otpState.value });
       setOtpState(s => ({ ...s, loading: false, verified: true, sent: false, demoCode: '' }));
     } catch (e) {
       setOtpState(s => ({ ...s, loading: false, error: e.response?.data?.error || 'Invalid OTP.' }));
@@ -84,7 +85,7 @@ export default function WebsitePage() {
   const submitEnquiry = async () => {
     setSubmitState({ loading: true, done: false, error: '', id: '' });
     try {
-      const { data } = await axios.post('/api/quote/submit', { form });
+      const { data } = await publicApi.post('/quote/submit', { form });
       setSubmitState({ loading: false, done: true, error: '', id: data.id });
       setForm(INITIAL_FORM);
       setPowerBillFile(null);
@@ -98,6 +99,29 @@ export default function WebsitePage() {
   // Address autocomplete is handled inside <AddressAutocomplete /> (Nominatim).
   // To swap to Google Places later, replace the searchAddresses + parseSelection
   // helpers in client/src/components/ui/AddressAutocomplete.jsx.
+
+  // ── Prefill from a package detail page (?package=<slug>) ────────────────
+  // When the customer clicks "Get my free quote" on /solar-packages/:slug,
+  // we land here with ?package=<slug>; fetch the package's prefill payload
+  // and seed the form so battery / installation type are already chosen.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const slug = params.get('package');
+    if (!slug) return;
+    publicApi.get(`/packages/public/${slug}`)
+      .then(r => {
+        const p = r.data?.prefill || {};
+        const hasBattery = (r.data?.battery_kwh || 0) > 0;
+        setForm(f => ({
+          ...f,
+          installationType: p.installation_type || f.installationType || 'residential',
+          batteryOption:    p.battery_option    || (hasBattery ? 'with-battery' : 'without-battery'),
+          monthlyBill:      p.estimated_monthly_bill ? String(p.estimated_monthly_bill) : f.monthlyBill,
+        }));
+        setTimeout(() => document.getElementById('calculator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+      })
+      .catch(() => { /* silently ignore — the user just sees the empty form */ });
+  }, []);
 
   return (
     <div className="bg-white dark:bg-brand-dark font-body transition-colors">
@@ -119,6 +143,7 @@ export default function WebsitePage() {
             {['Products', 'How It Works', 'Calculator', 'Case Studies', 'Testimonials', 'FAQ', 'Contact'].map(l => (
               <a key={l} href={`#${l.toLowerCase().replace(/\s+/g, '-')}`} className="text-sm text-gray-200 hover:text-amber-300 font-medium transition">{l}</a>
             ))}
+            <Link to="/shop" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Shop</Link>
           </div>
           <button
             onClick={() => setFinanceModalOpen(true)}
@@ -182,29 +207,68 @@ export default function WebsitePage() {
         <div className="text-center mb-12">
           <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-solar">PRODUCTS</div>
           <h2 className="text-2xl md:text-3xl font-extrabold font-display dark:text-gray-100">Solar Solutions for <span className="text-gradient-warm">New Zealand</span></h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 max-w-xl mx-auto">Three ways to think about your system — pick the bucket that fits your home and we'll show the matching packages.</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5 max-w-5xl mx-auto">
           {[
-            { name: 'Home Rooftop',    size: '3-10kW',    price: 'From $8,500',  priceColor: 'from-blue-500 to-blue-600',      badge: 'from-blue-500 to-blue-600',        img: 'https://images.unsplash.com/photo-1509391366360-2e959784a276?w=800&h=400&fit=crop&auto=format&q=80',  alt: 'Rooftop solar panels on residential home' },
-            { name: 'Solar + Battery', size: '5-15kW',    price: 'From $18,000', priceColor: 'from-emerald-500 to-emerald-600', badge: 'from-emerald-500 to-emerald-600',  img: 'https://images.unsplash.com/photo-1559302504-64aae6ca6b6d?w=800&h=400&fit=crop&auto=format&q=80',  alt: 'Home solar with battery storage' },
-            { name: 'Commercial',      size: '25-500kW',  price: 'Custom Quote', priceColor: 'from-amber-500 to-orange-500',   badge: 'from-amber-500 to-orange-500',     img: 'https://images.unsplash.com/photo-1497440001374-f26997328c1b?w=800&h=400&fit=crop&auto=format&q=80',  alt: 'Large commercial solar farm installation' },
+            {
+              name:     'Home Rooftop',
+              tagline:  'Solar without battery',
+              size:     '3-7kW · From $8,990',
+              desc:     'Grid-tied panels for daytime use, lower upfront cost. Hybrid-ready inverter so a battery can join later.',
+              to:       '/solar-packages?bucket=solar-only',
+              badge:    'from-blue-500 to-blue-600',
+              priceColor: 'from-blue-500 to-blue-600',
+              img:      'https://images.unsplash.com/photo-1509391366360-2e959784a276?w=800&h=400&fit=crop&auto=format&q=80',
+              alt:      'Rooftop solar panels on residential home',
+            },
+            {
+              name:     'Solar + Battery',
+              tagline:  'Solar plus overnight backup',
+              size:     '7-13kW · From $26,990',
+              desc:     'Solar with a 10 kWh battery stack. Power outages, evening usage, near-zero grid bill.',
+              to:       '/solar-packages?bucket=with-battery',
+              badge:    'from-emerald-500 to-emerald-600',
+              priceColor: 'from-emerald-500 to-emerald-600',
+              img:      'https://images.unsplash.com/photo-1559302504-64aae6ca6b6d?w=800&h=400&fit=crop&auto=format&q=80',
+              alt:      'Home solar with Tesla Powerwall battery storage',
+            },
+            {
+              name:     'Commercial',
+              tagline:  'Custom-engineered',
+              size:     '25-500kW · Custom Quote',
+              desc:     'Warehouses, factories, office blocks. Always custom-designed for the roof, load profile, and tax position.',
+              to:       '/solar-packages?bucket=commercial',
+              badge:    'from-amber-500 to-orange-500',
+              priceColor: 'from-amber-500 to-orange-500',
+              img:      'https://images.unsplash.com/photo-1497440001374-f26997328c1b?w=800&h=400&fit=crop&auto=format&q=80',
+              alt:      'Large commercial solar farm installation',
+            },
           ].map((p, i) => (
-            <div key={i} className="bg-white dark:bg-brand-dark-1 rounded-2xl border border-gray-100 dark:border-white/5 overflow-hidden hover:-translate-y-2 hover:shadow-2xl hover:shadow-amber-100 dark:hover:shadow-amber-900/30 transition-all duration-300 group">
+            <Link key={i} to={p.to}
+              className="bg-white dark:bg-brand-dark-1 rounded-2xl border border-gray-100 dark:border-white/5 overflow-hidden hover:-translate-y-2 hover:shadow-2xl hover:shadow-amber-100 dark:hover:shadow-amber-900/30 transition-all duration-300 group block">
               <div className="h-44 relative overflow-hidden">
                 <img src={p.img} alt={p.alt} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
-                <div className={`absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold text-white shadow-lg bg-gradient-to-r ${p.badge}`}>{p.size}</div>
+                <div className={`absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold text-white shadow-lg bg-gradient-to-r ${p.badge}`}>{p.tagline}</div>
               </div>
               <div className="p-5">
                 <h4 className="font-bold font-display mb-1 dark:text-gray-100">{p.name}</h4>
-                <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">{p.size} system</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-3 line-clamp-2">{p.desc}</p>
                 <div className="flex justify-between items-center pt-3 border-t border-gray-100 dark:border-white/5">
-                  <span className={`text-sm font-extrabold font-display bg-gradient-to-r ${p.priceColor} bg-clip-text text-transparent`}>{p.price}</span>
-                  <a href="#calculator"><Button size="sm" icon={ArrowRight}>Quote</Button></a>
+                  <span className={`text-sm font-extrabold font-display bg-gradient-to-r ${p.priceColor} bg-clip-text text-transparent`}>{p.size}</span>
+                  <span className="text-xs font-bold text-amber-600 group-hover:text-amber-500 flex items-center gap-1">
+                    View <ArrowRight size={11} className="transition-transform group-hover:translate-x-0.5" />
+                  </span>
                 </div>
               </div>
-            </div>
+            </Link>
           ))}
+        </div>
+        <div className="text-center mt-8">
+          <Link to="/solar-packages" className="text-sm font-bold text-amber-600 hover:text-amber-500 inline-flex items-center gap-1.5">
+            See all packages <ArrowRight size={14} />
+          </Link>
         </div>
       </section>
 

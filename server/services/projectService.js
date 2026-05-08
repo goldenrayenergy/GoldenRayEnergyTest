@@ -96,3 +96,77 @@ export async function createProjectFromEnquiry({ form, calculation, contactId, s
 
   return { ...data, owner_name: owner?.name || null };
 }
+
+// Promote a confirmed lead (contact) to an operational project. Called
+// from POST /api/leads/:id/promote-to-project after the sales rep has
+// qualified the customer through the cadence. Pulls the latest matching
+// website enquiry (if any) for richer system data.
+//
+// Returns { project, alreadyExists, projectId? } — the caller should
+// 409 when alreadyExists is true.
+export async function createProjectFromContact(contactId) {
+  const { data: contact, error: contactErr } = await supabaseAdmin
+    .from('contacts')
+    .select('*')
+    .eq('id', contactId)
+    .single();
+  if (contactErr || !contact) throw new Error('Contact not found');
+
+  // Don't double-promote — one project per contact for now
+  const { data: existing } = await supabaseAdmin
+    .from('projects')
+    .select('id, code')
+    .eq('customer_id', contactId)
+    .maybeSingle();
+  if (existing) return { project: null, alreadyExists: true, projectId: existing.id, projectCode: existing.code };
+
+  // Optionally enrich from the most recent website enquiry for this email
+  let enquiry = null;
+  if (contact.email) {
+    const { data } = await supabaseAdmin
+      .from('website_enquiries')
+      .select('*')
+      .eq('email', contact.email)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    enquiry = data || null;
+  }
+
+  const code  = await generateProjectCode();
+  const owner = await pickRoundRobinOwner();
+
+  const { data: project, error: projErr } = await supabaseAdmin
+    .from('projects')
+    .insert({
+      code,
+      customer_id:        contactId,
+      website_enquiry_id: enquiry?.id || null,
+      owner_id:           owner?.id || null,
+      stage:              'new',
+      address:            enquiry?.address || contact.location || null,
+      system_size_kw:     enquiry?.system_size_kw || null,
+      panels:             enquiry?.panels || null,
+      battery_kwh:        enquiry?.battery_kwh || null,
+      system_type:        contact.system_type || null,
+      estimated_value:    enquiry?.total_cost || contact.estimated_value || null,
+      notes:              enquiry?.installation_type
+                            ? `Installation: ${enquiry.installation_type}${enquiry.battery_option ? ` · Battery: ${enquiry.battery_option}` : ''}`
+                            : (contact.notes || null),
+    })
+    .select('id, code, owner_id')
+    .single();
+  if (projErr) throw projErr;
+
+  if (owner?.id) {
+    await supabaseAdmin.from('activities').insert({
+      type:        'system',
+      description: `Promoted to project — auto-assigned to ${owner.name}`,
+      project_id:  project.id,
+      contact_id:  contactId,
+      metadata:    { trigger: 'promote_to_project', owner_id: owner.id, owner_name: owner.name },
+    });
+  }
+
+  return { project: { ...project, owner_name: owner?.name || null }, alreadyExists: false };
+}
