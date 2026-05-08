@@ -1,15 +1,23 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState, useMemo } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
   Sun, Battery, Zap, ArrowRight, Phone, Shield, Award, Clock, CheckCircle, Loader2,
-  Sparkles, Package as PackageIcon, MapPin, ChevronDown,
+  Sparkles, Package as PackageIcon, MapPin, ChevronDown, X, Building2,
 } from 'lucide-react';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import SolarChatbot from '../components/website/SolarChatbot';
 import WhatsAppAssistant from '../components/website/WhatsAppAssistant';
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
+
+// Bucket → filter predicate. Used by the homepage Products section (3 cards
+// link in here with ?bucket=...) and shown as a clearable chip on this page.
+const BUCKETS = {
+  'solar-only':    { label: 'Home Rooftop',     desc: 'Grid-tied solar without battery storage',                  test: p => !(p.battery_kwh > 0) && p.tier !== 'commercial' },
+  'with-battery':  { label: 'Solar + Battery',  desc: 'Solar with battery storage for backup and self-consumption', test: p => (p.battery_kwh > 0) },
+  'commercial':    { label: 'Commercial',       desc: 'Large-scale systems for offices, warehouses, factories',   test: p => p.tier === 'commercial' },
+};
 
 const BENEFITS = [
   { icon: Shield,     title: 'Tier-1 brands',       desc: 'Fronius, REC, Tesla Powerwall — only what passes our durability tests.' },
@@ -32,6 +40,21 @@ export default function SolarPackagesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
   const [openFaq, setOpenFaq] = useState(null);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const bucketKey = searchParams.get('bucket');
+  const bucket = bucketKey && BUCKETS[bucketKey] ? BUCKETS[bucketKey] : null;
+
+  const filteredPackages = useMemo(() => {
+    if (!bucket) return packages;
+    return packages.filter(bucket.test);
+  }, [packages, bucket]);
+
+  const clearBucket = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('bucket');
+    setSearchParams(next);
+  };
 
   useEffect(() => {
     axios.get('/api/packages/public')
@@ -99,20 +122,45 @@ export default function SolarPackagesPage() {
       {/* Package grid */}
       <section className="py-12 px-6 md:px-10 bg-gray-50">
         <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-8">
-            <h2 className="text-2xl md:text-3xl font-extrabold font-display mb-2">Choose your system</h2>
-            <p className="text-xs text-gray-500">Prices are "from" — final cost depends on roof type, switchboard, and any extras.</p>
+          <div className="text-center mb-6">
+            <h2 className="text-2xl md:text-3xl font-extrabold font-display mb-2">
+              {bucket ? bucket.label : 'Choose your system'}
+            </h2>
+            <p className="text-xs text-gray-500">
+              {bucket ? bucket.desc : 'Prices are "from" — final cost depends on roof type, switchboard, and any extras.'}
+            </p>
           </div>
+
+          {/* Active filter chip */}
+          {bucket && (
+            <div className="flex justify-center mb-6">
+              <button onClick={clearBucket}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-semibold hover:bg-amber-200 transition">
+                Filter: {bucket.label} <X size={11} /> Clear
+              </button>
+            </div>
+          )}
 
           {loading ? (
             <div className="flex justify-center py-12"><Loader2 className="animate-spin text-amber-500" size={28} /></div>
           ) : error ? (
             <div className="text-center py-12 text-red-500 text-sm">{error}</div>
-          ) : packages.length === 0 ? (
-            <div className="text-center py-12 text-gray-400 text-sm">No packages available right now. Check back soon — or <Link to="/#calculator" className="text-amber-600 underline">request a custom quote</Link>.</div>
+          ) : filteredPackages.length === 0 ? (
+            bucketKey === 'commercial' ? (
+              <CommercialEmptyState onClear={clearBucket} />
+            ) : (
+              <div className="text-center py-12 text-gray-400 text-sm">
+                No packages match this filter.{' '}
+                {bucket ? (
+                  <button onClick={clearBucket} className="text-amber-600 underline">View all packages</button>
+                ) : (
+                  <Link to="/#calculator" className="text-amber-600 underline">Request a custom quote</Link>
+                )}
+              </div>
+            )
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {packages.map(p => <PackageCard key={p.id} pkg={p} />)}
+              {filteredPackages.map(p => <PackageCard key={p.id} pkg={p} />)}
             </div>
           )}
         </div>
@@ -255,5 +303,32 @@ function PackageCard({ pkg }) {
         </div>
       </div>
     </Link>
+  );
+}
+
+// Empty state when ?bucket=commercial — we don't have packaged commercial
+// systems (they're always custom-quoted) so we show a clear "talk to us" CTA.
+function CommercialEmptyState({ onClear }) {
+  return (
+    <div className="bg-white rounded-2xl border border-amber-200 p-8 md:p-10 text-center max-w-2xl mx-auto">
+      <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 mb-4">
+        <Building2 size={26} />
+      </div>
+      <h3 className="text-xl font-extrabold font-display mb-2">Commercial systems are always custom</h3>
+      <p className="text-sm text-gray-500 mb-5 max-w-md mx-auto">
+        Every commercial install has different roof structure, three-phase load profile, and tax/depreciation considerations.
+        We design and price each one from scratch — no off-the-shelf packages.
+      </p>
+      <div className="flex flex-wrap justify-center gap-3">
+        <Link to="/#calculator"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-sm font-bold">
+          Request a commercial quote <ArrowRight size={14} />
+        </Link>
+        <button onClick={onClear}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50">
+          View residential packages
+        </button>
+      </div>
+    </div>
   );
 }
