@@ -4,7 +4,6 @@ import { BrowserRouter } from 'react-router-dom';
 import axios from 'axios';
 import App from './App';
 import { AuthProvider } from './context/AuthContext';
-import { ThemeProvider } from './context/ThemeContext';
 import './index.css';
 
 // Production: API lives on a separate Render host. In dev, leave unset so
@@ -14,14 +13,20 @@ import './index.css';
 const apiBase = import.meta.env.VITE_API_BASE_URL;
 if (apiBase) axios.defaults.baseURL = apiBase.replace(/\/+$/, '');
 
+// Theme toggle was removed. Strip any leftover dark-mode state from
+// browsers that previously had it set so existing sessions flip back
+// to light cleanly without a hard reload.
+if (typeof document !== 'undefined') {
+  document.documentElement.classList.remove('dark');
+  try { localStorage.removeItem('gr_theme'); } catch {}
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
-      <ThemeProvider>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
-      </ThemeProvider>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

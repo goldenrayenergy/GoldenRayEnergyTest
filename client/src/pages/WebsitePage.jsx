@@ -1,8 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Sun, Zap, Phone, Lock, Star, Mail, MapPin, Clock, CheckCircle, Send, Leaf, ArrowRight, DollarSign, User, Calculator, Battery, TrendingUp, Download, MessageCircle, Loader2, ChevronDown, Shield, Award, Wrench, Eye, Home, Building, Truck, Power, Upload, X, Sprout, Percent, CreditCard, Banknote } from 'lucide-react';
+import { Sun, Zap, Phone, Lock, Star, Mail, MapPin, Clock, CheckCircle, Send, Leaf, ArrowRight, DollarSign, User, Calculator, Battery, TrendingUp, Download, MessageCircle, Loader2, ChevronDown, Shield, Award, Wrench, Eye, Home, Building, Truck, Power, Upload, X, Sprout, Percent, CreditCard, Banknote, Info, Megaphone } from 'lucide-react';
 import Button from '../components/ui/Button';
-import ThemeToggle from '../components/ui/ThemeToggle';
+import AddressAutocomplete from '../components/ui/AddressAutocomplete';
+import BatteryComparisonModal from '../components/ui/BatteryComparisonModal';
+import LeadSourceField from '../components/ui/LeadSourceField';
 import SolarChatbot from '../components/website/SolarChatbot';
 import WhatsAppAssistant from '../components/website/WhatsAppAssistant';
 import WebsiteFooter from '../components/website/WebsiteFooter';
@@ -24,10 +26,12 @@ const CASE_STUDY_IMAGES = [
 
 const INITIAL_FORM = {
   firstName: '', lastName: '', email: '', phone: '',
-  address: '', ownsHome: '', floors: '', roofType: '',
+  address: '', addressStreet: '', addressSuburb: '', addressCity: '', addressPostcode: '',
+  ownsHome: '', floors: '', roofType: '',
   installationType: '', batteryOption: '',
   callToDiscuss: '', installationTimeframe: '',
   monthlyBill: '', electricityRate: '0.32',
+  leadSource: '', leadSourceOther: '', referrerName: '', referrerPhone: '',
 };
 const INITIAL_OTP = { sent: false, value: '', verified: false, loading: false, error: '', demoCode: '' };
 
@@ -38,9 +42,23 @@ export default function WebsitePage() {
   const [otpState, setOtpState] = useState(INITIAL_OTP);
   const [submitState, setSubmitState] = useState({ loading: false, done: false, error: '', id: '' });
   const [financeModalOpen, setFinanceModalOpen] = useState(false);
-  const addressRef = useRef(null);
+  const [batteryModalOpen, setBatteryModalOpen] = useState(false);
+  const [addressExpanded, setAddressExpanded] = useState(false);
 
   const handleChange = (e) => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
+
+  // Called by AddressAutocomplete when the user picks a suggestion
+  const handleAddressSelect = (parsed) => {
+    setForm(f => ({
+      ...f,
+      address: parsed.formatted,
+      addressStreet: parsed.street,
+      addressSuburb: parsed.suburb,
+      addressCity: parsed.city,
+      addressPostcode: parsed.postcode,
+    }));
+    setAddressExpanded(false);
+  };
 
   const sendOtp = async () => {
     if (!form.phone) return;
@@ -77,27 +95,9 @@ export default function WebsitePage() {
     }
   };
 
-  // Google Places Autocomplete — requires VITE_GOOGLE_MAPS_API_KEY in .env
-  useEffect(() => {
-    const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-    if (!key || !addressRef.current) return;
-    const init = () => {
-      if (!addressRef.current || !window.google?.maps?.places) return;
-      const ac = new window.google.maps.places.Autocomplete(addressRef.current, {
-        componentRestrictions: { country: 'nz' },
-        types: ['address'],
-      });
-      ac.addListener('place_changed', () => {
-        const p = ac.getPlace();
-        if (p.formatted_address) setForm(f => ({ ...f, address: p.formatted_address }));
-      });
-    };
-    if (window.google?.maps?.places) { init(); return; }
-    const s = document.createElement('script');
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places`;
-    s.async = true; s.onload = init;
-    document.head.appendChild(s);
-  }, []);
+  // Address autocomplete is handled inside <AddressAutocomplete /> (Nominatim).
+  // To swap to Google Places later, replace the searchAddresses + parseSelection
+  // helpers in client/src/components/ui/AddressAutocomplete.jsx.
 
   return (
     <div className="bg-white dark:bg-brand-dark font-body transition-colors">
@@ -126,7 +126,6 @@ export default function WebsitePage() {
           >
             💰 Finance
           </button>
-          <ThemeToggle className="hidden md:flex bg-white/10 border-white/10 text-amber-300 hover:bg-white/20 hover:text-amber-200" />
           <Link to="/login">
             <Button size="sm" icon={Lock}><span className="hidden sm:inline">Employee </span>Login</Button>
           </Link>
@@ -329,13 +328,93 @@ export default function WebsitePage() {
               <div className="space-y-3">
                 <div>
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Complete Address</label>
-                  <div className="relative mt-1">
-                    <MapPin size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                    <input ref={addressRef} name="address" type="text" placeholder="Start typing NZ address…" value={form.address}
-                      onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
-                      className="w-full pl-8 pr-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 transition" />
+                  <div className="mt-1">
+                    <AddressAutocomplete
+                      value={form.address}
+                      onChange={(e) => setForm(f => ({ ...f, address: e.target.value }))}
+                      onSelect={handleAddressSelect}
+                    />
                   </div>
-                  <p className="text-[9px] text-gray-400 mt-1">Verified via Google — NZ addresses only</p>
+
+                  {(() => {
+                    const hasParts = form.addressStreet || form.addressSuburb || form.addressCity || form.addressPostcode;
+                    if (!hasParts && !addressExpanded) {
+                      return <p className="text-[9px] text-gray-400 mt-1">NZ addresses only — start typing for suggestions</p>;
+                    }
+                    return (
+                      <>
+                        {!addressExpanded && hasParts && (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            {form.addressStreet   && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{form.addressStreet}</span>}
+                            {form.addressSuburb   && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{form.addressSuburb}</span>}
+                            {form.addressCity     && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{form.addressCity}</span>}
+                            {form.addressPostcode && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{form.addressPostcode}</span>}
+                          </div>
+                        )}
+                        <div className="mt-1.5 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setAddressExpanded(v => !v)}
+                            className="text-[10px] font-semibold text-amber-600 hover:text-amber-500 flex items-center gap-1 transition"
+                          >
+                            {addressExpanded
+                              ? <>Hide details <ChevronDown size={10} className="rotate-180 transition-transform" /></>
+                              : <>✏️ Edit details <ChevronDown size={10} className="transition-transform" /></>}
+                          </button>
+                        </div>
+                        {addressExpanded && (
+                          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 animate-fade-in">
+                            <div className="sm:col-span-2">
+                              <label className="text-[9px] font-semibold text-gray-400 uppercase tracking-wide">Street Address</label>
+                              <input
+                                name="addressStreet"
+                                type="text"
+                                value={form.addressStreet || ''}
+                                onChange={handleChange}
+                                placeholder="12 Queen Street"
+                                className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 transition"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-semibold text-gray-400 uppercase tracking-wide">Suburb</label>
+                              <input
+                                name="addressSuburb"
+                                type="text"
+                                value={form.addressSuburb || ''}
+                                onChange={handleChange}
+                                placeholder="Auckland Central"
+                                className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 transition"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-semibold text-gray-400 uppercase tracking-wide">City</label>
+                              <input
+                                name="addressCity"
+                                type="text"
+                                value={form.addressCity || ''}
+                                onChange={handleChange}
+                                placeholder="Auckland"
+                                className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 transition"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-semibold text-gray-400 uppercase tracking-wide">Postcode</label>
+                              <input
+                                name="addressPostcode"
+                                type="text"
+                                inputMode="numeric"
+                                maxLength={4}
+                                value={form.addressPostcode || ''}
+                                onChange={handleChange}
+                                placeholder="1010"
+                                className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 transition"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 <div>
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2 block">Do You Own Your Home?</label>
@@ -411,9 +490,18 @@ export default function WebsitePage() {
                 </div>
                 {(form.installationType === 'residential' || form.installationType === 'off-grid') && (
                   <div>
-                    <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2 block">
-                      {form.installationType === 'off-grid' ? 'Off-Grid Battery' : 'Battery Storage?'}
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+                        {form.installationType === 'off-grid' ? 'Off-Grid Battery' : 'Battery Storage?'}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setBatteryModalOpen(true)}
+                        className="text-[10px] font-semibold text-amber-600 hover:text-amber-500 flex items-center gap-1 transition"
+                      >
+                        <Info size={11} /> Learn the difference
+                      </button>
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       {[{ v: 'with-battery', icon: '🔋', label: 'With Battery' }, { v: 'without-battery', icon: '🔌', label: 'Without Battery' }].map(t => (
                         <label key={t.v} className={`flex items-center justify-center gap-2 p-3 rounded-xl border cursor-pointer transition-all font-semibold text-sm
@@ -469,6 +557,14 @@ export default function WebsitePage() {
               </div>
             </div>
 
+            {/* How did you hear about us? */}
+            <div className="bg-white dark:bg-brand-dark-1 rounded-2xl border border-gray-100 dark:border-white/5 p-6 transition-colors">
+              <h3 className="text-sm font-bold font-display mb-4 flex items-center gap-2">
+                <Megaphone size={14} className="text-amber-500" /> How Did You Find Us?
+              </h3>
+              <LeadSourceField form={form} onChange={handleChange} />
+            </div>
+
             {/* Submit Enquiry */}
             <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border border-amber-200 p-6">
               <h3 className="text-sm font-bold font-display mb-1 flex items-center gap-2"><Send size={14} className="text-amber-500" /> Submit Your Enquiry</h3>
@@ -476,10 +572,27 @@ export default function WebsitePage() {
               {submitState.error && (
                 <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-600 font-medium">{submitState.error}</div>
               )}
-              <button onClick={submitEnquiry} disabled={submitState.loading || (!form.firstName && !form.email && !form.phone)}
-                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm flex items-center justify-center gap-2 hover:from-amber-400 hover:to-orange-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-200">
-                {submitState.loading ? <><Loader2 size={16} className="animate-spin" /> Submitting...</> : <><Send size={16} /> Submit Enquiry</>}
-              </button>
+              {(() => {
+                const referralIncomplete = form.leadSource === 'friend_referral' && (!form.referrerName || !form.referrerPhone);
+                const disabled = submitState.loading
+                  || (!form.firstName && !form.email && !form.phone)
+                  || !form.leadSource
+                  || referralIncomplete;
+                return (
+                  <>
+                    {!form.leadSource && (
+                      <p className="mb-2 text-[10px] text-amber-700 font-medium">Please tell us how you heard about us before submitting.</p>
+                    )}
+                    {referralIncomplete && (
+                      <p className="mb-2 text-[10px] text-amber-700 font-medium">Please add who referred you so we can credit them.</p>
+                    )}
+                    <button onClick={submitEnquiry} disabled={disabled}
+                      className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm flex items-center justify-center gap-2 hover:from-amber-400 hover:to-orange-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-200">
+                      {submitState.loading ? <><Loader2 size={16} className="animate-spin" /> Submitting...</> : <><Send size={16} /> Submit Enquiry</>}
+                    </button>
+                  </>
+                );
+              })()}
               <p className="text-[9px] text-gray-400 text-center mt-2">No spam. We respect your privacy.</p>
             </div>
           </div>
@@ -847,6 +960,13 @@ export default function WebsitePage() {
       {/* Floating widgets — SolarBot (right) + WhatsApp (left) */}
       <SolarChatbot />
       <WhatsAppAssistant />
+
+      {/* Battery vs No-Battery comparison modal — invoked from the form */}
+      <BatteryComparisonModal
+        open={batteryModalOpen}
+        onClose={() => setBatteryModalOpen(false)}
+        onChoose={(choice) => setForm(f => ({ ...f, batteryOption: choice }))}
+      />
 
       {/* Footer */}
       <WebsiteFooter homepage />

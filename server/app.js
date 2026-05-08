@@ -21,6 +21,7 @@ import financeRoutes from './routes/finance.js';
 import enquiryRoutes from './routes/enquiries.js';
 import projectRoutes from './routes/projects.js';
 import overrideRoutes from './routes/overrides.js';
+import addressRoutes from './routes/address.js';
 
 dotenv.config({ path: '../.env' });
 
@@ -85,6 +86,7 @@ app.use('/api/finance', financeRoutes);
 app.use('/api/enquiries', enquiryRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/overrides', overrideRoutes);
+app.use('/api/address', addressRoutes);
 
 // ── Health Check ──
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));

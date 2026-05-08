@@ -25,6 +25,10 @@ router.post('/submit', async (req, res) => {
     if (!form.firstName && !form.lastName && !form.email && !form.phone)
       return res.status(400).json({ error: 'Please provide at least a name, email, or phone number.' });
 
+    // Friend referrals must include who referred them — required for the rewards program
+    if (form.leadSource === 'friend_referral' && (!form.referrerName || !form.referrerPhone))
+      return res.status(400).json({ error: 'Please tell us who referred you (name + phone).' });
+
     // Calculate server-side so landing page doesn't need a pre-calc step
     const calculation = form.monthlyBill
       ? calculateSolar({
@@ -62,6 +66,14 @@ router.post('/submit', async (req, res) => {
         roof_type:              form.roofType              || null,
         installation_type:      form.installationType      || null,
         battery_option:         form.batteryOption         || null,
+        lead_source:            form.leadSource            || null,
+        lead_source_other:      form.leadSourceOther       || null,
+        referrer_name:          form.referrerName          || null,
+        referrer_phone:         form.referrerPhone         || null,
+        street:                 form.addressStreet         || null,
+        suburb:                 form.addressSuburb         || null,
+        city:                   form.addressCity           || null,
+        postcode:               form.addressPostcode       || null,
         call_to_discuss:        form.callToDiscuss         || null,
         installation_timeframe: form.installationTimeframe || null,
         monthly_bill:           form.monthlyBill ? parseFloat(form.monthlyBill) : null,
@@ -106,7 +118,15 @@ router.post('/submit', async (req, res) => {
         system_type:     contactSystemType,
         monthly_bill:    form.monthlyBill ? parseFloat(form.monthlyBill)       : null,
         stage:           'new',
-        source:          'website',
+        source:          form.leadSource || 'website',
+        lead_source:        form.leadSource       || null,
+        lead_source_other:  form.leadSourceOther  || null,
+        referrer_name:      form.referrerName     || null,
+        referrer_phone:     form.referrerPhone    || null,
+        street:             form.addressStreet    || null,
+        suburb:             form.addressSuburb    || null,
+        city:               form.addressCity      || null,
+        postcode:           form.addressPostcode  || null,
         lifecycle:       'subscriber',
         estimated_value: calculation?.totalCost                                || null,
         lead_score:      leadScore,

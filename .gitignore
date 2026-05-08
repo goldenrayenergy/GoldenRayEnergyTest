@@ -3,3 +3,7 @@ dist/
 .env
 *.log
 .DS_Store
+
+# Local-only onboarding PDF tooling — keep on disk, never commit
+docs/
+scripts/generate-onboarding-pdf.js
