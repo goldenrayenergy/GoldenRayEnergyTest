@@ -99,6 +99,29 @@ export default function WebsitePage() {
     document.head.appendChild(s);
   }, []);
 
+  // ── Prefill from a package detail page (?package=<slug>) ────────────────
+  // When the customer clicks "Get my free quote" on /solar-packages/:slug,
+  // we land here with ?package=<slug>; fetch the package's prefill payload
+  // and seed the form so battery / installation type are already chosen.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const slug = params.get('package');
+    if (!slug) return;
+    axios.get(`/api/packages/public/${slug}`)
+      .then(r => {
+        const p = r.data?.prefill || {};
+        const hasBattery = (r.data?.battery_kwh || 0) > 0;
+        setForm(f => ({
+          ...f,
+          installationType: p.installation_type || f.installationType || 'residential',
+          batteryOption:    p.battery_option    || (hasBattery ? 'with-battery' : 'without-battery'),
+          monthlyBill:      p.estimated_monthly_bill ? String(p.estimated_monthly_bill) : f.monthlyBill,
+        }));
+        setTimeout(() => document.getElementById('calculator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+      })
+      .catch(() => { /* silently ignore — the user just sees the empty form */ });
+  }, []);
+
   return (
     <div className="bg-white dark:bg-brand-dark font-body transition-colors">
       {/* Nav */}

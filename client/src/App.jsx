@@ -5,6 +5,8 @@ import { useAuth } from './context/AuthContext';
 import WebsitePage from './pages/WebsitePage';
 import FinancePage from './pages/FinancePage';
 import LoginPage from './pages/LoginPage';
+import SolarPackagesPage from './pages/SolarPackagesPage';
+import SolarPackageDetailPage from './pages/SolarPackageDetailPage';
 
 // Portal pages
 import PortalLayout from './components/layout/PortalLayout';
@@ -49,6 +51,8 @@ export default function App() {
       <Route path="/" element={<WebsitePage />} />
       <Route path="/finance" element={<AdminRoute><FinancePage /></AdminRoute>} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/solar-packages" element={<SolarPackagesPage />} />
+      <Route path="/solar-packages/:slug" element={<SolarPackageDetailPage />} />
 
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
         <Route index element={<DashboardPage />} />
