@@ -9,6 +9,7 @@ import Button from '../components/ui/Button';
 import SolarChatbot from '../components/website/SolarChatbot';
 import WhatsAppAssistant from '../components/website/WhatsAppAssistant';
 import WebsiteFooter from '../components/website/WebsiteFooter';
+import WebsiteNav from '../components/website/WebsiteNav';
 
 // ═══════════════════════════════════════════════════════════════════════
 // At-a-glance headline numbers
@@ -102,36 +103,12 @@ export default function FinancePage() {
 
   return (
     <div className="bg-white font-body min-h-screen flex flex-col">
-      {/* ── Nav ── */}
-      <nav className="fixed top-0 left-0 right-0 z-50 px-6 md:px-10 h-16 flex items-center justify-between backdrop-blur-md shadow-lg shadow-black/20"
-        style={{ background: 'linear-gradient(90deg, rgba(15,23,42,0.96) 0%, rgba(30,27,75,0.96) 45%, rgba(80,7,36,0.96) 100%)' }}>
-        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-400 via-pink-500 via-fuchsia-500 via-violet-500 to-teal-400" />
-        <Link to="/" className="flex items-center gap-3 relative">
-          <div className="bg-white rounded-xl p-1.5 shadow-lg shadow-amber-500/30 ring-2 ring-amber-300/40">
-            <img src="/logo.jpg" alt="Goldenray Energy NZ" className="h-11 w-auto object-contain" />
-          </div>
-          <div className="leading-tight">
-            <div className="text-[14px] font-extrabold font-display tracking-tight text-white">
-              GOLDENRAY <span className="bg-gradient-to-r from-amber-300 via-pink-300 to-violet-300 bg-clip-text text-transparent">ENERGY NZ</span>
-            </div>
-            <div className="text-[9px] text-amber-200/80 italic">Powering a Sustainable Future</div>
-          </div>
-        </Link>
-        <div className="flex items-center gap-5 relative">
-          <Link to="/" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition flex items-center gap-1.5">
-            <ArrowLeft size={13} /> Home
-          </Link>
-          <Link to="/bill-analysis" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition hidden md:inline">Bill Analysis</Link>
-          <a href="/#case-studies" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition hidden md:inline">Case Studies</a>
-          <a href="/#contact" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition hidden md:inline">Contact</a>
-          <Link to="/login"><Button size="sm" icon={Lock}>Employee Login</Button></Link>
-        </div>
-      </nav>
+      <WebsiteNav />
 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* Hero */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="pt-24 md:pt-32 pb-12 md:pb-14 px-4 md:px-16 text-white relative overflow-hidden"
+      <section className="pb-12 md:pb-14 px-4 md:px-16 text-white relative overflow-hidden"
         style={{ background: 'linear-gradient(135deg, #064e3b 0%, #0f766e 40%, #0e7490 100%)' }}>
         <div className="absolute -top-24 -right-24 w-[500px] h-[500px] rounded-full bg-gradient-to-br from-amber-400 to-pink-400 opacity-25 blur-3xl animate-blob" />
         <div className="absolute -bottom-32 -left-32 w-[500px] h-[500px] rounded-full bg-gradient-to-br from-violet-400 to-fuchsia-400 opacity-25 blur-3xl animate-blob-delay-2" />

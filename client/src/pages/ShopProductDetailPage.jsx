@@ -1,11 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { publicApi } from '../services/api';
-import { Package, ArrowLeft, Plus, Minus, Loader2, AlertTriangle, FileText, Truck, Clock } from 'lucide-react';
+import { Package, ArrowLeft, Plus, Minus, Loader2, AlertTriangle, FileText, Truck, Clock, ShoppingCart } from 'lucide-react';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import TradeCartDrawer from '../components/website/TradeCartDrawer';
-import { Nav } from './ShopPage';
+import WebsiteNav from '../components/website/WebsiteNav';
 import useCart from '../hooks/useCart';
+
+const cartButton = (cart, onClick) => (
+  <button onClick={onClick}
+    className="relative px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1.5 transition">
+    <ShoppingCart size={14} /> Cart
+    {cart.count > 0 && (
+      <span className="absolute -top-1.5 -right-1.5 bg-emerald-500 text-white text-[9px] font-extrabold rounded-full w-4 h-4 flex items-center justify-center">
+        {cart.count > 99 ? '99+' : cart.count}
+      </span>
+    )}
+  </button>
+);
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
 
@@ -37,7 +49,7 @@ export default function ShopProductDetailPage() {
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-amber-500" size={28} /></div>;
   if (error)   return (
     <div className="bg-white min-h-screen">
-      <Nav cart={cart} onOpenCart={() => setCartOpen(true)} />
+      <WebsiteNav extras={cartButton(cart, () => setCartOpen(true))} />
       <div className="pt-32 px-6 text-center">
         <div className="text-sm text-gray-500 mb-3">{error}</div>
         <Link to="/shop" className="text-amber-600 underline text-xs">← Back to all products</Link>
@@ -51,7 +63,7 @@ export default function ShopProductDetailPage() {
 
   return (
     <div className="bg-white font-body">
-      <Nav cart={cart} onOpenCart={() => setCartOpen(true)} />
+      <WebsiteNav extras={cartButton(cart, () => setCartOpen(true))} />
 
       <section className="pt-24 md:pt-28 pb-12 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
         <div className="max-w-6xl mx-auto">

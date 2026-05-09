@@ -8,6 +8,7 @@ import {
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import SolarChatbot from '../components/website/SolarChatbot';
 import WhatsAppAssistant from '../components/website/WhatsAppAssistant';
+import WebsiteNav from '../components/website/WebsiteNav';
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
 
@@ -65,31 +66,10 @@ export default function SolarPackagesPage() {
 
   return (
     <div className="bg-white font-body">
-      {/* Nav */}
-      <nav className="fixed top-0 left-0 right-0 z-50 px-4 md:px-10 h-16 flex items-center justify-between backdrop-blur-md shadow-lg shadow-black/20"
-        style={{ background: 'linear-gradient(90deg, rgba(11,15,26,0.96) 0%, rgba(17,23,42,0.96) 50%, rgba(11,15,26,0.96) 100%)' }}>
-        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-500" />
-        <Link to="/" className="flex items-center gap-3">
-          <div className="bg-white rounded-xl p-1.5 shadow-lg ring-2 ring-amber-300/40">
-            <img src="/logo.jpg" alt="Goldenray Energy NZ" className="h-9 md:h-11 w-auto object-contain" />
-          </div>
-          <div className="leading-tight">
-            <div className="text-sm font-extrabold font-display tracking-tight text-white">GOLDENRAY <span className="text-amber-400">NZ</span></div>
-            <div className="text-[9px] text-amber-200 italic">Sustainable Future</div>
-          </div>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link to="/" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Home</Link>
-          <Link to="/shop" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Shop</Link>
-          <Link to="/finance" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Finance</Link>
-          <Link to="/bill-analysis" className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1">
-            <TrendingUp size={12} /> See My Savings
-          </Link>
-        </div>
-      </nav>
+      <WebsiteNav />
 
       {/* Hero */}
-      <section className="pt-24 md:pt-32 pb-12 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
+      <section className="pb-12 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
         <div className="max-w-6xl mx-auto text-center">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-[11px] font-bold mb-4">
             <PackageIcon size={11} /> Solar Packages for New Zealand Homes

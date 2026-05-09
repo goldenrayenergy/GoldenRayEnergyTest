@@ -6,6 +6,7 @@ import {
   TrendingUp, Battery, Zap, Sun, Shield, Info, ArrowLeft, Phone, X,
 } from 'lucide-react';
 import WebsiteFooter from '../components/website/WebsiteFooter';
+import WebsiteNav from '../components/website/WebsiteNav';
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
 const fmtSign = n => (n >= 0 ? '+' : '') + fmt$(n);
@@ -84,7 +85,7 @@ export default function BillAnalysisPage() {
 
   return (
     <div className="bg-white font-body">
-      <Nav />
+      <WebsiteNav />
 
       {stage === 'upload' && <UploadView
         files={files} setFiles={setFiles} onDrop={onDrop} removeFile={removeFile}
@@ -106,31 +107,7 @@ export default function BillAnalysisPage() {
   );
 }
 
-// ── Nav (matches solar-packages and shop pages) ───────────────────────────
-function Nav() {
-  return (
-    <nav className="fixed top-0 left-0 right-0 z-50 px-4 md:px-10 h-16 flex items-center justify-between backdrop-blur-md shadow-lg shadow-black/20"
-      style={{ background: 'linear-gradient(90deg, rgba(11,15,26,0.96) 0%, rgba(17,23,42,0.96) 50%, rgba(11,15,26,0.96) 100%)' }}>
-      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-500" />
-      <Link to="/" className="flex items-center gap-3">
-        <div className="bg-white rounded-xl p-1.5 shadow-lg ring-2 ring-amber-300/40">
-          <img src="/logo.jpg" alt="Goldenray Energy NZ" className="h-9 md:h-11 w-auto object-contain" />
-        </div>
-        <div className="leading-tight">
-          <div className="text-sm font-extrabold font-display tracking-tight text-white">GOLDENRAY <span className="text-amber-400">NZ</span></div>
-          <div className="text-[9px] text-amber-200 italic">Sustainable Future</div>
-        </div>
-      </Link>
-      <div className="flex items-center gap-3">
-        <Link to="/" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Home</Link>
-        <Link to="/solar-packages" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Packages</Link>
-        <Link to="/#calculator" className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1">
-          <Phone size={12} /> Free Quote
-        </Link>
-      </div>
-    </nav>
-  );
-}
+// Nav extracted into shared WebsiteNav component (client/src/components/website/WebsiteNav.jsx)
 
 // ── Upload state ─────────────────────────────────────────────────────────
 function UploadView({ files, onDrop, removeFile, region, setRegion, postcode, setPostcode, email, setEmail, inputRef, onSubmit }) {

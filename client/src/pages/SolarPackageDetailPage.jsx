@@ -8,6 +8,7 @@ import {
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import SolarChatbot from '../components/website/SolarChatbot';
 import WhatsAppAssistant from '../components/website/WhatsAppAssistant';
+import WebsiteNav from '../components/website/WebsiteNav';
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
 
@@ -47,31 +48,10 @@ export default function SolarPackageDetailPage() {
 
   return (
     <div className="bg-white font-body">
-      {/* Nav */}
-      <nav className="fixed top-0 left-0 right-0 z-50 px-4 md:px-10 h-16 flex items-center justify-between backdrop-blur-md shadow-lg shadow-black/20"
-        style={{ background: 'linear-gradient(90deg, rgba(11,15,26,0.96) 0%, rgba(17,23,42,0.96) 50%, rgba(11,15,26,0.96) 100%)' }}>
-        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-500" />
-        <Link to="/" className="flex items-center gap-3">
-          <div className="bg-white rounded-xl p-1.5 shadow-lg ring-2 ring-amber-300/40">
-            <img src="/logo.jpg" alt="Goldenray Energy NZ" className="h-9 md:h-11 w-auto object-contain" />
-          </div>
-          <div className="leading-tight">
-            <div className="text-sm font-extrabold font-display tracking-tight text-white">GOLDENRAY <span className="text-amber-400">NZ</span></div>
-            <div className="text-[9px] text-amber-200 italic">Sustainable Future</div>
-          </div>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link to="/solar-packages" className="hidden md:flex items-center gap-1 text-xs font-semibold text-white/80 hover:text-amber-300">
-            <ArrowLeft size={12} /> All packages
-          </Link>
-          <Link to={quoteUrl} className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1">
-            <Phone size={12} /> Free Quote
-          </Link>
-        </div>
-      </nav>
+      <WebsiteNav />
 
       {/* Hero */}
-      <section className="pt-24 md:pt-28 pb-10 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
+      <section className="pb-10 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
         <div className="max-w-6xl mx-auto">
           <Link to="/solar-packages" className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-semibold mb-4 hover:text-amber-700">
             <ArrowLeft size={11} /> Back to all packages

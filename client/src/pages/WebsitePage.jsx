@@ -8,6 +8,8 @@ import LeadSourceField from '../components/ui/LeadSourceField';
 import SolarChatbot from '../components/website/SolarChatbot';
 import WhatsAppAssistant from '../components/website/WhatsAppAssistant';
 import WebsiteFooter from '../components/website/WebsiteFooter';
+import WebsiteNav from '../components/website/WebsiteNav';
+import FinanceModal from '../components/website/FinanceModal';
 import axios from 'axios';
 import { publicApi } from '../services/api';
 
@@ -125,48 +127,7 @@ export default function WebsitePage() {
 
   return (
     <div className="bg-white dark:bg-brand-dark font-body transition-colors">
-      {/* Nav */}
-      <nav className="fixed top-0 left-0 right-0 z-50 px-4 md:px-10 h-16 flex items-center justify-between backdrop-blur-md shadow-lg shadow-black/20 relative" style={{ background: 'linear-gradient(90deg, rgba(11,15,26,0.96) 0%, rgba(17,23,42,0.96) 50%, rgba(11,15,26,0.96) 100%)' }}>
-        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-500" />
-        <div className="flex items-center gap-3 relative min-w-0">
-          <div className="bg-white rounded-xl p-1.5 shadow-lg shadow-amber-500/30 ring-2 ring-amber-300/40 flex-shrink-0">
-            <img src="/logo.jpg" alt="Goldenray Energy NZ" className="h-9 md:h-11 w-auto object-contain" />
-          </div>
-          <div className="leading-tight min-w-0">
-            <div className="text-[12px] md:text-[14px] font-extrabold font-display tracking-tight text-white truncate">GOLDENRAY <span className="bg-gradient-to-r from-amber-300 via-orange-300 to-emerald-300 bg-clip-text text-transparent">ENERGY NZ</span></div>
-            <div className="hidden sm:block text-[9px] text-amber-200/80 italic">Powering a Sustainable Future</div>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 md:gap-6 relative">
-          {/* Section anchors hidden on mobile — users scroll instead */}
-          <div className="hidden lg:flex items-center gap-6">
-            {/* Bill Analysis is the primary CTA — placed first and styled bold/amber */}
-            <Link to="/bill-analysis" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Bill Analysis</Link>
-            {[
-              { label: 'Products',     anchor: 'products' },
-              { label: 'How It Works', anchor: 'how-it-works' },
-              { label: 'Case Studies', anchor: 'case-studies' },
-              { label: 'VPP',          anchor: 'vpp' },
-              { label: 'Testimonials', anchor: 'testimonials' },
-              { label: 'FAQ',          anchor: 'faq' },
-              { label: 'Callback',     anchor: 'callback' },
-              { label: 'Contact',      anchor: 'contact' },
-            ].map(l => (
-              <a key={l.anchor} href={`#${l.anchor}`} className="text-sm text-gray-200 hover:text-amber-300 font-medium transition">{l.label}</a>
-            ))}
-            <Link to="/shop" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Shop</Link>
-          </div>
-          <button
-            onClick={() => setFinanceModalOpen(true)}
-            className="text-xs md:text-sm font-semibold bg-gradient-to-r from-amber-300 via-orange-300 to-emerald-300 bg-clip-text text-transparent hover:from-amber-200 hover:to-white transition whitespace-nowrap"
-          >
-            💰 Finance
-          </button>
-          <Link to="/login">
-            <Button size="sm" icon={Lock}><span className="hidden sm:inline">Employee </span>Login</Button>
-          </Link>
-        </div>
-      </nav>
+      <WebsiteNav />
 
       {/* Hero */}
       <section className="min-h-[80vh] md:min-h-screen flex items-center px-4 md:px-16 pt-20 md:pt-0 bg-mesh-vibrant relative overflow-hidden">
@@ -1093,80 +1054,9 @@ export default function WebsitePage() {
         </div>
       </section>
 
-      {/* Finance overview modal — public-facing entry point. The full /finance
-          page is admin-only, so visitors see a short overview here and are
-          routed to Contact to talk to an advisor. */}
-      {financeModalOpen && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
-          onClick={() => setFinanceModalOpen(false)}
-        >
-          <div
-            className="relative w-full max-w-md bg-white dark:bg-brand-dark-1 rounded-2xl shadow-2xl border border-gray-100 dark:border-white/10 overflow-hidden"
-            onClick={e => e.stopPropagation()}
-          >
-            <button
-              onClick={() => setFinanceModalOpen(false)}
-              className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white/80 hover:bg-gray-100 dark:bg-brand-dark-2 dark:hover:bg-brand-dark-3 flex items-center justify-center text-gray-500 dark:text-gray-300 transition z-10"
-              aria-label="Close"
-            >
-              <X size={14} />
-            </button>
-
-            <div className="p-6 pb-5 text-white" style={{ background: 'linear-gradient(135deg, #064e3b 0%, #0f766e 50%, #0e7490 100%)' }}>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/15 border border-white/20 mb-3 text-[10px] font-bold tracking-widest">
-                <Sprout size={11} /> SOLAR FINANCE
-              </div>
-              <h3 className="text-2xl font-extrabold font-display leading-tight">
-                Solar from <span className="bg-gradient-to-r from-amber-300 via-pink-300 to-white bg-clip-text text-transparent">$0 upfront</span>
-              </h3>
-              <p className="text-xs text-white/85 mt-2 leading-relaxed">
-                Spread the cost over time. For most homes, the monthly bill savings cover the repayment from day one.
-              </p>
-            </div>
-
-            <div className="p-6 space-y-3">
-              {[
-                { icon: Percent,    title: 'Interest-free for 36 months', desc: 'Q Card finance on solar systems over $1,000' },
-                { icon: Sprout,     title: 'Bank green loans at 1% p.a.',  desc: 'BNZ, ANZ, ASB & Kiwibank top-ups up to $80,000' },
-                { icon: CreditCard, title: 'Payment plans from $45/week',  desc: 'No deposit, fixed terms 3–10 years' },
-                { icon: Banknote,   title: 'Pre-approval in 24 hours',     desc: 'Soft credit check only — no impact on your score' },
-              ].map((it, i) => (
-                <div key={i} className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
-                    <it.icon size={15} className="text-emerald-600 dark:text-emerald-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-gray-800 dark:text-gray-100">{it.title}</div>
-                    <div className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">{it.desc}</div>
-                  </div>
-                </div>
-              ))}
-
-              <div className="border-t border-gray-100 dark:border-white/10 pt-4 mt-4">
-                <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-3 leading-relaxed">
-                  Our team handles the application end to end — soft credit check, lender match, and pre-approval. The fastest way to start is a quick chat.
-                </p>
-                <div className="flex gap-2">
-                  <a
-                    href="#contact"
-                    onClick={() => setFinanceModalOpen(false)}
-                    className="flex-1 px-4 py-2.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-bold text-center hover:from-amber-400 hover:to-orange-400 transition flex items-center justify-center gap-1.5"
-                  >
-                    Talk to an advisor <ArrowRight size={13} />
-                  </a>
-                  <a
-                    href="tel:+6421839356"
-                    className="px-4 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-gray-700 dark:text-gray-200 text-sm font-bold hover:bg-gray-50 dark:hover:bg-white/5 transition flex items-center gap-1.5"
-                  >
-                    <Phone size={13} /> Call
-                  </a>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Finance modal — extracted into shared component (also used by WebsiteNav drawer).
+          The hero "$0 Upfront Finance" button below opens this modal too. */}
+      <FinanceModal open={financeModalOpen} onClose={() => setFinanceModalOpen(false)} />
 
       {/* Floating widgets — SolarBot (right) + WhatsApp (left) */}
       <SolarChatbot />

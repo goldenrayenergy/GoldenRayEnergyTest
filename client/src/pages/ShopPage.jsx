@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import TradeCartDrawer from '../components/website/TradeCartDrawer';
+import WebsiteNav from '../components/website/WebsiteNav';
 import useCart from '../hooks/useCart';
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
@@ -43,10 +44,20 @@ export default function ShopPage() {
 
   return (
     <div className="bg-white font-body">
-      <Nav cart={cart} onOpenCart={() => setCartOpen(true)} />
+      <WebsiteNav extras={
+        <button onClick={() => setCartOpen(true)}
+          className="relative px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1.5 transition">
+          <ShoppingCart size={14} /> Cart
+          {cart.count > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 bg-emerald-500 text-white text-[9px] font-extrabold rounded-full w-4 h-4 flex items-center justify-center">
+              {cart.count > 99 ? '99+' : cart.count}
+            </span>
+          )}
+        </button>
+      } />
 
       {/* Hero */}
-      <section className="pt-24 md:pt-32 pb-10 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
+      <section className="pb-10 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
         <div className="max-w-6xl mx-auto text-center">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-[11px] font-bold mb-4">
             <Package size={11} /> Trade Shop · For NZ Electricians
