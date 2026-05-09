@@ -82,58 +82,40 @@ const SECTION_BG = {
   indigo: 'bg-indigo-50 border-indigo-200',
 };
 
-export default function CommissioningForm({ projectId, lane, itemKey, schema, values, currentState, onSave, onProjectChanged }) {
-  const [local, setLocal]   = useState(values || {});
-  const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState('');
-  const [vppOk, setVppOk]   = useState(null);
+export default function CommissioningForm({ projectId, lane, itemKey, schema, values, currentState, onChange, onProjectChanged }) {
+  const local = values || {};
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState('');
+  const [vppOk, setVppOk]     = useState(null);
   const [catalog, setCatalog] = useState(null);
 
-  useEffect(() => { setLocal(values || {}); }, [values]);
+  useEffect(() => { pmCommissionAPI.vppCatalog().then(r => setCatalog(r.data)).catch(() => {}); }, []);
 
-  // Pull the VPP catalog once for client-side compatibility hint
-  useEffect(() => {
-    pmCommissionAPI.vppCatalog().then(r => setCatalog(r.data)).catch(() => {});
-  }, []);
-
-  // Compute VPP-capable indicator client-side as user types
+  // Compute VPP-capable indicator as user types
   useEffect(() => {
     if (!catalog) { setVppOk(null); return; }
+    if (!local.inverter_make || !local.inverter_model) { setVppOk(null); return; }
     const inv = catalog.inverters.find(e => e.make === local.inverter_make &&
       String(local.inverter_model || '').toLowerCase().startsWith(e.model_prefix.toLowerCase()));
-    if (!local.inverter_make || !local.inverter_model) { setVppOk(null); return; }
-    if (!inv) { setVppOk(false); return; }
-    if (!inv.vpp_capable) { setVppOk(false); return; }
+    if (!inv || !inv.vpp_capable) { setVppOk(false); return; }
     if (local.battery_make || local.battery_model) {
       const bat = catalog.batteries.find(e => e.make === local.battery_make &&
         String(local.battery_model || '').toLowerCase().startsWith(e.model_prefix.toLowerCase()));
       setVppOk(bat?.vpp_capable === true);
-    } else {
-      setVppOk(true);
-    }
+    } else { setVppOk(true); }
   }, [local.inverter_make, local.inverter_model, local.battery_make, local.battery_model, catalog]);
 
-  function set(k, v) {
-    setLocal(prev => ({ ...prev, [k]: v }));
+  function set(k, val) {
+    onChange?.({ ...local, [k]: val });
   }
 
-  // ── Save fields only (without committing the asset) ──
-  async function saveDraft() {
-    setSaving(true); setError('');
-    try {
-      await onSave(local);
-    } catch (e) {
-      setError(e.response?.data?.error || e.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // ── Commit: writes serial numbers + warranty + VPP + commissioned_at to projects_v2 ──
+  // ── Commission: writes serials/warranty/VPP/commissioned_at to projects_v2 ──
   async function commission() {
     setSaving(true); setError('');
     try {
-      await onSave(local);  // persist fields first
+      // Save fields first (via the unified flow — also persists the lane)
+      await pmProjectsAPI.updateLane(projectId, lane, { item: itemKey, fields: local });
+      // Then run the commissioning side-effect endpoint
       const r = await pmCommissionAPI.commission(projectId, local);
       // Advance state to asset_populated
       await pmProjectsAPI.updateLane(projectId, lane, { item: itemKey, target_state: 'asset_populated' });
@@ -211,12 +193,6 @@ export default function CommissioningForm({ projectId, lane, itemKey, schema, va
 
       <div className="mt-5 flex flex-wrap gap-2">
         <button
-          onClick={saveDraft}
-          disabled={saving}
-          className="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-sm rounded font-medium">
-          {saving ? 'Saving…' : 'Save draft'}
-        </button>
-        <button
           onClick={commission}
           disabled={saving}
           className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm rounded font-medium">
@@ -224,7 +200,8 @@ export default function CommissioningForm({ projectId, lane, itemKey, schema, va
         </button>
       </div>
       <p className="text-[11px] text-slate-500 mt-2">
-        Commissioning writes serial numbers, warranty windows, monitoring credentials and the VPP-capable flag onto the project, then sets <strong>commissioned_at</strong>. Only do this when the system is live and tested.
+        Routine field edits save when you click <strong>Save &amp; advance</strong> at the top.
+        The <strong>Commission</strong> button does the special action: writes serial numbers, warranty windows, monitoring credentials and the VPP-capable flag onto the project, then sets <strong>commissioned_at</strong>. Only do this when the system is live and tested.
       </p>
     </div>
   );

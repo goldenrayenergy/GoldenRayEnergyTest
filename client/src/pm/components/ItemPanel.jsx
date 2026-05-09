@@ -6,8 +6,8 @@ import TaskFormGeneric from './TaskFormGeneric';
 import StateMachineControl from './StateMachineControl';
 import ActivityTimeline from './ActivityTimeline';
 import CommentsThread from './CommentsThread';
+import BlockersBanner from './BlockersBanner';
 
-// Specialized work-surface components
 import SiteSurveyForm     from './specialized/SiteSurveyForm';
 import SystemDesignForm   from './specialized/SystemDesignForm';
 import CommissioningForm  from './specialized/CommissioningForm';
@@ -15,39 +15,19 @@ import CocForm            from './specialized/CocForm';
 import ProposalForm       from './specialized/ProposalForm';
 
 // ────────────────────────────────────────────────────────────────────────────
-// ItemPanel — Phase A.2 split-panel work surface for a single task.
+// ItemPanel — Phase A.2.3 with single-button Save & advance.
 //
-// Left  (~60%) — work surface: state machine, structured form, file uploads
-// Right (~40%) — activity rail: append-only event timeline + comments thread
+// ItemPanel now owns the pendingFields state. All form components are
+// controlled — they emit onChange with the next full fields object. One
+// "Save & advance" button (in StateMachineControl) saves fields and
+// auto-advances the state machine to the highest reachable state.
 //
-// Schema-driven: reads itemDef.schema.fields and itemDef.states/transitions
-// to drive the UI. For tasks with ux !== 'generic' (site_survey,
-// system_design, commissioning_form, coc, initial_proposal, final_proposal)
-// a specialized component takes over the work surface — the activity rail
-// stays the same.
+// BlockersBanner shows what's preventing the next state advance — either
+// upstream lane tasks not done, or fields required for the next state.
+// Clicking an upstream blocker jumps to that task.
 // ────────────────────────────────────────────────────────────────────────────
 
-// ── Resolves specialized component by ux marker, or falls back to generic. ──
-function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, onSave, onProjectChanged }) {
-  switch (ux) {
-    case 'site_survey':
-      return <SiteSurveyForm projectId={projectId} lane={lane} itemKey={itemKey} schema={schema} values={values} currentState={currentState} artifacts={artifacts} onSave={onSave} onProjectChanged={onProjectChanged} />;
-    case 'system_design':
-      return <SystemDesignForm schema={schema} values={values} currentState={currentState} onSave={onSave} />;
-    case 'commissioning_form':
-      return <CommissioningForm projectId={projectId} lane={lane} itemKey={itemKey} schema={schema} values={values} currentState={currentState} onSave={onSave} onProjectChanged={onProjectChanged} />;
-    case 'coc':
-      return <CocForm schema={schema} values={values} currentState={currentState} onSave={onSave} />;
-    case 'initial_proposal':
-      return <ProposalForm stage="initial" schema={schema} values={values} currentState={currentState} onSave={onSave} />;
-    case 'final_proposal':
-      return <ProposalForm stage="final" schema={schema} values={values} currentState={currentState} onSave={onSave} />;
-    default:
-      return <TaskFormGeneric schema={schema} values={values} currentState={currentState} onSave={onSave} />;
-  }
-}
-
-export default function ItemPanel({ projectId, lane, itemDef, laneState, artifacts, onClose, onChange }) {
+export default function ItemPanel({ projectId, lane, itemDef, laneState, artifacts, blockers, onClose, onChange, onJumpToTask }) {
   const { user } = useAuth();
   const itemKey  = itemDef.key;
   const meta     = laneState?.item_meta?.[itemKey] || {};
@@ -55,6 +35,9 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
   const itemArts = (artifacts || []).filter(a => a.swim_lane === lane && a.metadata?.item_key === itemKey);
   const currentState = meta.state || itemDef.initialState || 'not_started';
 
+  // ── Field state lives here, not in form components ──
+  const [pendingFields, setPendingFields] = useState(meta.fields || {});
+  const [dirty, setDirty]       = useState(false);
   const [busy, setBusy]         = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError]       = useState('');
@@ -62,7 +45,13 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
   const [comments, setComments] = useState([]);
   const fileRef = useRef(null);
 
-  // ── Load activity (events + comments) for this task ──
+  // Reset pending fields whenever the panel opens or the underlying server data changes
+  useEffect(() => {
+    setPendingFields(meta.fields || {});
+    setDirty(false);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [itemKey, projectId, JSON.stringify(meta.fields)]);
+
   function loadActivity() {
     Promise.all([
       pmEventsAPI.list(projectId,   { lane, item_key: itemKey, limit: 100 }),
@@ -75,19 +64,24 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
 
   useEffect(() => { loadActivity(); /* eslint-disable-next-line */ }, [projectId, lane, itemKey]);
 
-  async function transition(toState) {
-    setBusy(true);
-    setError('');
+  // ── Save & advance (the unified action) ──
+  async function saveAndAdvance() {
+    setBusy(true); setError('');
     try {
-      await pmProjectsAPI.updateLane(projectId, lane, { item: itemKey, target_state: toState });
+      await pmProjectsAPI.updateLane(projectId, lane, {
+        item: itemKey,
+        fields: pendingFields,
+        auto_advance: true,
+      });
+      setDirty(false);
       await onChange?.();
       loadActivity();
     } catch (e) {
       const data = e.response?.data;
       if (data?.missing_fields?.length) {
-        setError(`Required fields missing: ${data.missing_fields.map(m => m.label).join(', ')}`);
+        setError(`Required fields for next state: ${data.missing_fields.map(m => m.label).join(', ')}`);
       } else if (data?.blockers?.length) {
-        setError(`Blocked by: ${data.blockers.map(b => `${b.lane}.${b.item}`).join(', ')}`);
+        setError(`Upstream not done: ${data.blockers.map(b => `${b.lane}.${b.item}`).join(', ')}`);
       } else {
         setError(data?.error || e.message);
       }
@@ -96,22 +90,35 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
     }
   }
 
-  async function saveFields(fields) {
-    setError('');
+  // ── Force a specific state (advanced menu — bypasses auto-advance) ──
+  async function forceState(targetState) {
+    setBusy(true); setError('');
     try {
-      await pmProjectsAPI.updateLane(projectId, lane, { item: itemKey, fields });
+      // Save any pending field changes first, then transition
+      await pmProjectsAPI.updateLane(projectId, lane, {
+        item: itemKey,
+        fields: pendingFields,
+        target_state: targetState,
+      });
+      setDirty(false);
       await onChange?.();
       loadActivity();
     } catch (e) {
-      setError(e.response?.data?.error || e.message);
-      throw e;
+      const data = e.response?.data;
+      setError(data?.error || e.message);
+    } finally {
+      setBusy(false);
     }
+  }
+
+  function setFields(next) {
+    setPendingFields(next);
+    setDirty(true);
   }
 
   async function handleFileUpload(file) {
     if (!file || !itemDef.artifactType) return;
-    setUploading(true);
-    setError('');
+    setUploading(true); setError('');
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -149,7 +156,6 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
     }
   }
 
-  // ── Close on Esc ──
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
     window.addEventListener('keydown', onKey);
@@ -161,56 +167,56 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
 
       <div className="relative ml-auto w-full max-w-5xl h-full bg-white shadow-2xl flex flex-col overflow-hidden">
-        {/* ── Header ── */}
+        {/* Header */}
         <div className="px-5 py-3 border-b border-slate-200 bg-slate-50 flex items-start justify-between gap-3">
           <div>
             <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
               {lane} {itemDef.gateKeeper && <span className="ml-1 text-amber-700">★ gate-keeper</span>}
               {itemDef.artifactType && <span className="ml-2 font-mono normal-case text-slate-400">artifact: {itemDef.artifactType}</span>}
             </div>
-            <h2 className="text-base font-bold text-slate-900 mt-0.5 leading-tight">
-              {itemDef.label}
-            </h2>
+            <h2 className="text-base font-bold text-slate-900 mt-0.5 leading-tight">{itemDef.label}</h2>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-2xl leading-none">×</button>
         </div>
 
         {error && (
-          <div className="px-5 py-2 bg-red-50 border-b border-red-200 text-red-800 text-sm">
-            {error}
-          </div>
+          <div className="px-5 py-2 bg-red-50 border-b border-red-200 text-red-800 text-sm">{error}</div>
         )}
 
-        {/* ── Body: split-panel ── */}
         <div className="flex-1 flex overflow-hidden">
-          {/* LEFT — work surface (60%) */}
+          {/* LEFT — work surface */}
           <div className="flex-1 overflow-y-auto p-5 space-y-5 border-r border-slate-200">
-            {/* State machine + transition controls */}
             <StateMachineControl
               itemDef={itemDef}
               currentState={currentState}
-              onTransition={transition}
+              blockers={blockers}
               busy={busy}
+              dirty={dirty}
+              onSaveAndAdvance={saveAndAdvance}
+              onForceState={forceState}
             />
 
-            {/* Work surface — generic or specialized component based on ux marker */}
+            {/* What's blocking the next state */}
+            <BlockersBanner blockers={blockers} onJumpToTask={onJumpToTask} />
+
+            {/* Work surface — generic or specialized */}
             <section>
-              <div className="text-xs font-semibold text-slate-500 uppercase mb-2">Work surface</div>
+              <div className="text-xs font-semibold text-slate-500 uppercase mb-2">Fields</div>
               <SpecializedOrGeneric
                 ux={itemDef.ux}
                 projectId={projectId}
                 lane={lane}
                 itemKey={itemKey}
                 schema={itemDef.schema}
-                values={meta.fields}
+                values={pendingFields}
                 currentState={currentState}
                 artifacts={artifacts}
-                onSave={saveFields}
+                onChange={setFields}
                 onProjectChanged={onChange}
               />
             </section>
 
-            {/* Artifacts */}
+            {/* Artifact uploads */}
             {itemDef.artifactType && (
               <section>
                 <div className="flex items-center justify-between mb-1.5">
@@ -222,9 +228,7 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
                     {itemArts.map(a => (
                       <li key={a.id} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded px-2.5 py-1.5">
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm text-slate-800 truncate">
-                            {a.metadata?.original_name || a.file_url?.split('/').pop()}
-                          </div>
+                          <div className="text-sm text-slate-800 truncate">{a.metadata?.original_name || a.file_url?.split('/').pop()}</div>
                           <div className="text-[10px] text-slate-500">
                             {fmtDateTime(a.uploaded_at)}
                             {a.file_size_bytes && ` · ${(a.file_size_bytes / 1024).toFixed(0)} KB`}
@@ -255,23 +259,19 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
               </section>
             )}
 
-            {/* Status footer */}
             <div className="text-[11px] text-slate-500 border-t border-slate-200 pt-3">
               Current state: <strong>{currentState.replace(/_/g, ' ')}</strong>
-              {checked && meta.completed_at && (
-                <> · marked done {fmtDateTime(meta.completed_at)}</>
-              )}
+              {checked && meta.completed_at && <> · completed {fmtDateTime(meta.completed_at)}</>}
             </div>
           </div>
 
-          {/* RIGHT — activity rail (40%) */}
+          {/* RIGHT — activity rail */}
           <div className="w-[40%] min-w-[300px] flex flex-col bg-slate-50">
             <div className="flex-1 overflow-y-auto p-4 space-y-5">
               <section>
                 <div className="text-xs font-semibold text-slate-500 uppercase mb-2">Activity</div>
                 <ActivityTimeline events={events} />
               </section>
-
               <div className="border-t border-slate-200 pt-4">
                 <CommentsThread
                   projectId={projectId}
@@ -286,13 +286,30 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
           </div>
         </div>
 
-        {/* Footer */}
         <div className="px-5 py-2.5 border-t border-slate-200 bg-slate-50 flex justify-end">
-          <button onClick={onClose} className="text-sm px-4 py-1.5 border border-slate-300 hover:bg-slate-100 rounded">
-            Close
-          </button>
+          <button onClick={onClose} className="text-sm px-4 py-1.5 border border-slate-300 hover:bg-slate-100 rounded">Close</button>
         </div>
       </div>
     </div>
   );
+}
+
+// ── Resolves specialized component by ux marker; all are controlled (values + onChange). ──
+function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, onChange, onProjectChanged }) {
+  switch (ux) {
+    case 'site_survey':
+      return <SiteSurveyForm projectId={projectId} lane={lane} itemKey={itemKey} schema={schema} values={values} currentState={currentState} artifacts={artifacts} onChange={onChange} onProjectChanged={onProjectChanged} />;
+    case 'system_design':
+      return <SystemDesignForm schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+    case 'commissioning_form':
+      return <CommissioningForm projectId={projectId} lane={lane} itemKey={itemKey} schema={schema} values={values} currentState={currentState} onChange={onChange} onProjectChanged={onProjectChanged} />;
+    case 'coc':
+      return <CocForm schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+    case 'initial_proposal':
+      return <ProposalForm stage="initial" schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+    case 'final_proposal':
+      return <ProposalForm stage="final" schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+    default:
+      return <TaskFormGeneric schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+  }
 }

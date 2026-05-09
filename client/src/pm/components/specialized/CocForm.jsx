@@ -1,22 +1,9 @@
-import { useEffect, useState } from 'react';
 import TaskFormGeneric from '../TaskFormGeneric';
-
-// ── COC form ──
-// Adds NZ-specific validation hints over the generic schema:
-//   - EWRB license format E + 4-7 digits (Electrical Workers Registration Board)
-//   - ESC number format check
-//   - Issue date cannot be in the future
-//
-// All pattern enforcement is also declared in laneDefinitions.js so server
-// validation matches client.
 
 const EWRB_RE = /^E[0-9]{4,7}$/i;
 
-export default function CocForm({ schema, values, currentState, onSave }) {
-  const [v, setV] = useState(values || {});
-
-  useEffect(() => { setV(values || {}); }, [values]);
-
+export default function CocForm({ schema, values, currentState, onChange }) {
+  const v = values || {};
   const ewrb = v.certifier_license || '';
   const ewrbValid = !ewrb || EWRB_RE.test(ewrb);
   const issueDate = v.issue_date;
@@ -50,7 +37,7 @@ export default function CocForm({ schema, values, currentState, onSave }) {
         schema={schema}
         values={values}
         currentState={currentState}
-        onSave={onSave}
+        onChange={onChange}
       />
     </div>
   );

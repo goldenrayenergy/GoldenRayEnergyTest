@@ -661,25 +661,68 @@ export function getChecklist(projectType = 'residential_rooftop') {
   return result;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Cross-lane gates — keyed by `lane.item.targetState`.
+//
+// A gate fires when transitioning INTO that target state. Each entry lists
+// the upstream tasks that must be `done` before the transition is allowed.
+//
+// When targetState === doneState the gate behaves like the original Phase A
+// behaviour. With this richer keying we can also enforce intermediate-state
+// gates (e.g., Stage-2 proposal can't be drafted until site survey is done).
+//
+// Blockers reference an upstream task by lane + item key. By default the
+// upstream must be in its doneState; pass `state: '<state>'` to require a
+// specific intermediate state.
+// ────────────────────────────────────────────────────────────────────────────
 export const CROSS_LANE_GATES = {
-  'operations.materials_ordered': [
+  // ── Hard sequential gates (Phase A) ──
+  'operations.materials_ordered.drafted': [
     { lane: 'sales',   item: 'contract_signed' },
     { lane: 'finance', item: 'deposit_paid' },
   ],
-  'operations.install_scheduled': [
+  'operations.install_scheduled.date_proposed': [
     { lane: 'compliance', item: 'distributor_approved' },
     { lane: 'operations', item: 'materials_received' },
   ],
-  'operations.commissioning_form': [
+  'operations.commissioning_form.in_progress': [
     { lane: 'operations', item: 'install_complete' },
   ],
-  'compliance.coc_issued': [
+  'compliance.coc_issued.pending': [
     { lane: 'operations', item: 'install_complete' },
   ],
-  'finance.final_paid': [
+  'finance.final_paid.invoiced': [
     { lane: 'operations', item: 'install_complete' },
+  ],
+
+  // ── Soft gates promoted to enforced (Phase A.2.3) ──
+  // Stage-2 proposal cannot begin drafting until the site survey is complete.
+  'sales.proposal_final.drafted': [
+    { lane: 'engineering', item: 'site_survey' },
+  ],
+  // Distributor application needs declared system size from the design.
+  'compliance.distributor_app.drafting': [
+    { lane: 'engineering', item: 'system_design' },
+  ],
+  // BOM cannot be locked until system design is approved.
+  'engineering.bom_locked.locked': [
+    { lane: 'engineering', item: 'system_design' },
   ],
 };
+
+// ── Gate-check helper ──
+// Returns { ok, blockers } where blockers is an array of { lane, item, state }
+// describing what's missing.
+export function checkCrossLaneGate(laneStatus, lane, item, targetState) {
+  const key  = `${lane}.${item}.${targetState}`;
+  const deps = CROSS_LANE_GATES[key];
+  if (!deps) return { ok: true, blockers: [] };
+  const blockers = deps.filter(d => {
+    const upstream = laneStatus?.[d.lane]?.items?.[d.item];
+    return upstream !== true;
+  });
+  return blockers.length === 0 ? { ok: true, blockers: [] } : { ok: false, blockers };
+}
 
 export function computeLaneCompletion(projectType, laneStatus) {
   const checklist = getChecklist(projectType);
@@ -705,6 +748,84 @@ export function computeHealth(laneStatus) {
     if (laneStatus[lane]?.status === 'blocked') return 'blocked';
   }
   return 'green';
+}
+
+// ── Auto-advance helpers ───────────────────────────────────────────────────
+
+/**
+ * Given the task definition, current state, and supplied fields + lane status,
+ * compute the highest state reachable by walking the transition graph forward
+ * while:
+ *   - all required fields up to that state are filled
+ *   - all cross-lane gates at each step are satisfied
+ * Returns the target state (may equal currentState if nothing advances).
+ */
+export function computeReachableState(itemDef, currentState, fields, laneStatus, lane, item) {
+  let state = currentState;
+  const stateOrder = itemDef.states || [];
+  // Safety: bail at 20 hops to prevent any infinite loop on a malformed graph
+  for (let hop = 0; hop < 20; hop++) {
+    const allowed = (itemDef.transitions?.[state] || []).filter(s =>
+      stateOrder.indexOf(s) > stateOrder.indexOf(state)  // forward-only auto-advance
+    );
+    if (allowed.length === 0) break;
+    // Pick the next state in declared order — for branching state machines we
+    // advance along the "approved" branch (states declared earlier), never
+    // along reject/error branches.
+    const next = allowed.sort((a, b) => stateOrder.indexOf(a) - stateOrder.indexOf(b))[0];
+
+    const v = validateTransition(itemDef, state, next, fields);
+    if (!v.ok) break;
+    const gate = checkCrossLaneGate(laneStatus, lane, item, next);
+    if (!gate.ok) break;
+
+    state = next;
+  }
+  return state;
+}
+
+/**
+ * Identify why a task can't advance to its next forward state.
+ * Returns { current_state, next_state, missing_fields[], cross_lane_blockers[] }
+ * Used by the UI to render "Waiting on:" hints.
+ */
+export function getNextStateBlockers(itemDef, currentState, fields, laneStatus, lane, item) {
+  const stateOrder = itemDef.states || [];
+  const allowed = (itemDef.transitions?.[currentState] || []).filter(s =>
+    stateOrder.indexOf(s) > stateOrder.indexOf(currentState)
+  );
+  if (allowed.length === 0) return { current_state: currentState, next_state: null, missing_fields: [], cross_lane_blockers: [] };
+
+  const next = allowed.sort((a, b) => stateOrder.indexOf(a) - stateOrder.indexOf(b))[0];
+  const v    = validateTransition(itemDef, currentState, next, fields || {});
+  const gate = checkCrossLaneGate(laneStatus, lane, item, next);
+
+  return {
+    current_state:       currentState,
+    next_state:          next,
+    missing_fields:      v.ok ? [] : (v.missing_fields || []),
+    cross_lane_blockers: gate.ok ? [] : gate.blockers,
+  };
+}
+
+/**
+ * Build a per-(lane, item) blockers map for the entire project. Used by the
+ * detail GET response so the UI can show lock icons in the swim-lane card view
+ * without a round-trip per task.
+ */
+export function computeAllTaskBlockers(projectType, laneStatus) {
+  const checklist = getChecklist(projectType);
+  const out = {};
+  for (const lane of LANES) {
+    out[lane] = {};
+    const stored = laneStatus?.[lane]?.item_meta || {};
+    for (const def of checklist[lane]) {
+      const meta = stored[def.key] || {};
+      const state = meta.state || def.initialState || 'not_started';
+      out[lane][def.key] = getNextStateBlockers(def, state, meta.fields || {}, laneStatus, lane, def.key);
+    }
+  }
+  return out;
 }
 
 /**

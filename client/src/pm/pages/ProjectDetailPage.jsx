@@ -135,6 +135,10 @@ export default function ProjectDetailPage() {
                   const itemMeta   = state.item_meta?.[it.key];
                   const itemArts   = (project.artifacts || []).filter(a => a.swim_lane === lane && a.metadata?.item_key === it.key);
                   const hasNotes   = itemMeta?.notes && itemMeta.notes.length > 0;
+                  const itemBlock  = project.task_blockers?.[lane]?.[it.key];
+                  const lockedByUpstream = !checked && (itemBlock?.cross_lane_blockers?.length || 0) > 0;
+                  const itemState  = itemMeta?.state || it.initialState || 'not_started';
+                  const inFlight   = !checked && itemState !== (it.initialState || 'not_started');
                   return (
                     <button
                       key={it.key}
@@ -142,19 +146,29 @@ export default function ProjectDetailPage() {
                       className={`w-full text-left px-2 py-1.5 rounded border transition-colors group ${
                         checked
                           ? 'bg-green-50 border-green-200 hover:bg-green-100'
-                          : 'bg-white border-slate-200 hover:border-amber-300 hover:bg-amber-50'
+                          : lockedByUpstream
+                            ? 'bg-slate-50 border-slate-200 hover:border-slate-300 opacity-75'
+                            : inFlight
+                              ? 'bg-blue-50 border-blue-200 hover:bg-blue-100'
+                              : 'bg-white border-slate-200 hover:border-amber-300 hover:bg-amber-50'
                       }`}>
                       <div className="flex items-start gap-2">
                         <div className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
-                          checked ? 'bg-green-600 border-green-600' : 'border-slate-300 group-hover:border-amber-500'
+                          checked ? 'bg-green-600 border-green-600' : lockedByUpstream ? 'bg-slate-200 border-slate-300' : 'border-slate-300 group-hover:border-amber-500'
                         }`}>
                           {checked && <span className="text-white text-[10px] leading-none">✓</span>}
+                          {!checked && lockedByUpstream && <span className="text-slate-500 text-[10px] leading-none">🔒</span>}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className={`text-xs leading-tight ${checked ? 'text-slate-600' : 'text-slate-800 font-medium'}`}>
                             {it.label}
                             {it.gateKeeper && <span className="ml-1 text-[10px] text-amber-700 font-bold" title="Gate-keeper">★</span>}
                           </div>
+                          {!checked && (itemState !== (it.initialState || 'not_started')) && (
+                            <div className="text-[10px] text-blue-700 mt-0.5">
+                              state: {itemState.replace(/_/g, ' ')}
+                            </div>
+                          )}
                           <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400">
                             {it.artifactType && (
                               <span className={itemArts.length > 0 ? 'text-amber-700 font-medium' : ''}>
@@ -162,6 +176,11 @@ export default function ProjectDetailPage() {
                               </span>
                             )}
                             {hasNotes && <span className="text-slate-500">📝 notes</span>}
+                            {lockedByUpstream && (
+                              <span className="text-slate-500" title={`Waiting on: ${itemBlock.cross_lane_blockers.map(b => `${b.lane}.${b.item}`).join(', ')}`}>
+                                🔒 waiting on upstream
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -231,8 +250,13 @@ export default function ProjectDetailPage() {
           itemDef={openItem.itemDef}
           laneState={laneStatus?.[openItem.lane]}
           artifacts={project.artifacts}
+          blockers={project.task_blockers?.[openItem.lane]?.[openItem.itemDef.key]}
           onClose={() => setOpenItem(null)}
           onChange={load}
+          onJumpToTask={(toLane, toItemKey) => {
+            const toDef = (checklist?.[toLane] || []).find(i => i.key === toItemKey);
+            if (toDef) setOpenItem({ lane: toLane, itemDef: toDef });
+          }}
         />
       )}
 

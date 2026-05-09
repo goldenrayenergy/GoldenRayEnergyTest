@@ -16,6 +16,9 @@ import {
   computeHealth,
   CROSS_LANE_GATES,
   validateTransition,
+  checkCrossLaneGate,
+  computeReachableState,
+  computeAllTaskBlockers,
 } from '../../services/pm/laneDefinitions.js';
 import { systemIsVppCapable, vppHardwareCatalog } from '../../services/pm/vppLookup.js';
 
@@ -50,15 +53,9 @@ function laneStatusFromUpdate(existing, lane, patch) {
   return next;
 }
 
-function checkCrossLaneGate(laneStatus, lane, itemKey) {
-  const gateKey = `${lane}.${itemKey}`;
-  const deps = CROSS_LANE_GATES[gateKey];
-  if (!deps) return { ok: true };
-  const blockers = deps.filter(d => !(laneStatus?.[d.lane]?.items?.[d.item] === true));
-  return blockers.length === 0
-    ? { ok: true }
-    : { ok: false, blockers };
-}
+// checkCrossLaneGate is now imported from laneDefinitions.js — supports
+// per-(task, state) gate keys. Old call sites that pass only (laneStatus,
+// lane, item) default to checking the gate at the task's doneState.
 
 // ── GET /api/pm/projects — list ────────────────────────────────────────────
 router.get('/', async (req, res) => {
@@ -183,8 +180,9 @@ router.get('/:id', async (req, res) => {
       supabaseAdmin.from('project_hardware').select('*').eq('project_id', project.id),
     ]);
 
-    const checklist = getChecklist(project.project_type);
+    const checklist  = getChecklist(project.project_type);
     const completion = computeLaneCompletion(project.project_type, project.lane_status);
+    const blockers   = computeAllTaskBlockers(project.project_type, project.lane_status);
 
     res.json({
       ...project,
@@ -194,6 +192,7 @@ router.get('/:id', async (req, res) => {
       hardware:     hardware || [],
       checklist,
       lane_completion: completion,
+      task_blockers:   blockers,   // { lane: { item_key: {current_state, next_state, missing_fields, cross_lane_blockers} } }
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -293,71 +292,60 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
         eventsToWrite.push({ event_type: 'field_edited', payload: { keys: ['notes'] } });
       }
 
-      // State transition
+      // ── Determine target state ──
+      // Three modes (in priority order):
+      //   target_state: 'X'      → explicit transition
+      //   auto_advance: true     → walk forward as far as fields + gates allow
+      //   value: true|false      → legacy: jump to doneState or one-before
+      let resolvedTarget = undefined;
       if (target_state !== undefined && target_state !== fromState) {
-        const v = validateTransition(def, fromState, target_state, meta.fields || {});
+        resolvedTarget = target_state;
+      } else if (req.body.auto_advance === true) {
+        resolvedTarget = computeReachableState(def, fromState, meta.fields || {}, current.lane_status, lane, item);
+      } else if (value === true) {
+        resolvedTarget = def.doneState;
+      } else if (value === false && nextLaneState.items[item] === true) {
+        const stateOrder = def.states || [];
+        resolvedTarget = stateOrder[Math.max(0, stateOrder.indexOf(def.doneState) - 1)] || def.initialState;
+      }
+
+      if (resolvedTarget !== undefined && resolvedTarget !== fromState) {
+        // Validate fields required at target state
+        const v = validateTransition(def, fromState, resolvedTarget, meta.fields || {});
         if (!v.ok) {
           return res.status(409).json({ error: v.error, missing_fields: v.missing_fields });
         }
-        meta.state = target_state;
-        meta.state_history = [
-          ...(meta.state_history || []),
-          { from: fromState, to: target_state, at: new Date().toISOString(), by: req.user?.id || null },
-        ];
-        eventsToWrite.push({ event_type: 'state_changed', payload: { from: fromState, to: target_state } });
-      }
-
-      // Toggle items[item] based on resolved state — items[key] = true iff state === doneState
-      const isDoneState = meta.state === def.doneState;
-
-      // If transitioning into done, enforce cross-lane gates
-      if (isDoneState && nextLaneState.items[item] !== true) {
-        const gate = checkCrossLaneGate(current.lane_status, lane, item);
+        // Validate cross-lane gates for target state
+        const gate = checkCrossLaneGate(current.lane_status, lane, item, resolvedTarget);
         if (!gate.ok) {
           await writeEvent(req, { project_id: id, lane, item_key: item, event_type: 'gate_check_blocked', payload: gate });
           return res.status(409).json({
             error: 'Cross-lane gate not satisfied',
             blockers: gate.blockers,
+            target_state: resolvedTarget,
           });
         }
-        meta.completed_by = req.user?.id || null;
-        meta.completed_at = new Date().toISOString();
-        eventsToWrite.push({ event_type: 'gate_check_passed', payload: {} });
+
+        meta.state = resolvedTarget;
+        meta.state_history = [
+          ...(meta.state_history || []),
+          { from: fromState, to: resolvedTarget, at: new Date().toISOString(), by: req.user?.id || null },
+        ];
+        eventsToWrite.push({ event_type: 'state_changed', payload: { from: fromState, to: resolvedTarget } });
+
+        if (resolvedTarget === def.doneState) {
+          meta.completed_by = req.user?.id || null;
+          meta.completed_at = new Date().toISOString();
+          eventsToWrite.push({ event_type: 'gate_check_passed', payload: {} });
+        }
       }
+
+      // Items[item] mirrors whether we're in doneState
+      const isDoneState = meta.state === def.doneState;
       if (!isDoneState && nextLaneState.items[item] === true) {
         meta.last_uncompleted_at = new Date().toISOString();
       }
       nextLaneState.items[item] = !!isDoneState;
-
-      // Legacy: if `value` was sent (older clients), respect it but only if no target_state given
-      if (value !== undefined && target_state === undefined) {
-        const wasComplete = nextLaneState.items[item] === true;
-        if (value === true && !wasComplete) {
-          // Marking true → set state to doneState
-          const v2 = validateTransition(def, fromState, def.doneState, meta.fields || {});
-          if (!v2.ok) {
-            return res.status(409).json({ error: v2.error, missing_fields: v2.missing_fields });
-          }
-          const gate = checkCrossLaneGate(current.lane_status, lane, item);
-          if (!gate.ok) {
-            return res.status(409).json({ error: 'Cross-lane gate not satisfied', blockers: gate.blockers });
-          }
-          meta.state = def.doneState;
-          meta.state_history = [...(meta.state_history || []), { from: fromState, to: def.doneState, at: new Date().toISOString(), by: req.user?.id || null }];
-          meta.completed_by = req.user?.id || null;
-          meta.completed_at = new Date().toISOString();
-          nextLaneState.items[item] = true;
-          eventsToWrite.push({ event_type: 'state_changed', payload: { from: fromState, to: def.doneState } });
-        } else if (value === false && wasComplete) {
-          // Reopen → set state back to one before doneState
-          const stateOrder = def.states || [];
-          const prev = stateOrder[Math.max(0, stateOrder.indexOf(def.doneState) - 1)] || def.initialState;
-          meta.state = prev;
-          meta.last_uncompleted_at = new Date().toISOString();
-          nextLaneState.items[item] = false;
-          eventsToWrite.push({ event_type: 'state_changed', payload: { from: fromState, to: prev } });
-        }
-      }
 
       nextLaneState.item_meta[item] = meta;
 
