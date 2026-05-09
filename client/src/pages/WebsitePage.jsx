@@ -140,10 +140,20 @@ export default function WebsitePage() {
         <div className="flex items-center gap-3 md:gap-6 relative">
           {/* Section anchors hidden on mobile — users scroll instead */}
           <div className="hidden lg:flex items-center gap-6">
-            {['Products', 'How It Works', 'Calculator', 'Case Studies', 'Testimonials', 'FAQ', 'Contact'].map(l => (
-              <a key={l} href={`#${l.toLowerCase().replace(/\s+/g, '-')}`} className="text-sm text-gray-200 hover:text-amber-300 font-medium transition">{l}</a>
-            ))}
+            {/* Bill Analysis is the primary CTA — placed first and styled bold/amber */}
             <Link to="/bill-analysis" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Bill Analysis</Link>
+            {[
+              { label: 'Products',     anchor: 'products' },
+              { label: 'How It Works', anchor: 'how-it-works' },
+              { label: 'Case Studies', anchor: 'case-studies' },
+              { label: 'VPP',          anchor: 'vpp' },
+              { label: 'Testimonials', anchor: 'testimonials' },
+              { label: 'FAQ',          anchor: 'faq' },
+              { label: 'Callback',     anchor: 'callback' },
+              { label: 'Contact',      anchor: 'contact' },
+            ].map(l => (
+              <a key={l.anchor} href={`#${l.anchor}`} className="text-sm text-gray-200 hover:text-amber-300 font-medium transition">{l.label}</a>
+            ))}
             <Link to="/shop" className="text-sm text-amber-300 hover:text-amber-200 font-bold transition">Shop</Link>
           </div>
           <button
