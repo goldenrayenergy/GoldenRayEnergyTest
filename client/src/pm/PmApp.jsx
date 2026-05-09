@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 import PmLayout from './PmLayout';
+import OwnerDashboardPage from './pages/OwnerDashboardPage';
 import ProjectListPage from './pages/ProjectListPage';
 import ProjectNewPage from './pages/ProjectNewPage';
 import ProjectDetailPage from './pages/ProjectDetailPage';
@@ -19,7 +20,8 @@ export default function PmApp() {
   return (
     <Routes>
       <Route element={<PmProtected><PmLayout /></PmProtected>}>
-        <Route index element={<ProjectListPage />} />
+        <Route index element={<OwnerDashboardPage />} />
+        <Route path="owner" element={<OwnerDashboardPage />} />
         <Route path="projects" element={<ProjectListPage />} />
         <Route path="projects/new" element={<ProjectNewPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />

@@ -341,6 +341,52 @@ async function cleanup() {
   console.log(rowCount > 0 ? `🗑  Removed ${rowCount} prior seed project(s)` : '   (no prior seeds to clean)');
 }
 
+// ── Project payments seed (mirrors lane_status.finance.* into the
+// project_payments table so the Owner Dashboard's cashflow zone can query
+// them cleanly) ───────────────────────────────────────────────────────────
+async function seedPayments(projectId, slug) {
+  const PAYMENTS_BY_SLUG = {
+    'residential-15kw-battery-15.2kw-12.6kwh': [],
+
+    // Project 3 — Whangarei battery: deposit paid, progress invoiced
+    'whangarei-battery': [
+      { event: 'deposit',  expected_at: daysAgo(15).slice(0,10), expected_amount_nzd: 5550, received_at: daysAgo(13), received_amount_nzd: 5550, method: 'bank_transfer', invoice_ref: 'INV-2026-0091D' },
+      { event: 'progress', expected_at: daysAgo(-2).slice(0,10), expected_amount_nzd: 7400, received_at: null, received_amount_nzd: null, method: null, invoice_ref: 'INV-2026-0091P' },
+    ],
+
+    // Project 4 — Auckland 12kW: deposit + progress paid; final overdue
+    'auckland-12kw': [
+      { event: 'deposit',  expected_at: daysAgo(43).slice(0,10), expected_amount_nzd:  9750, received_at: daysAgo(43), received_amount_nzd:  9750, method: 'bank_transfer', invoice_ref: 'INV-2026-0058D' },
+      { event: 'progress', expected_at: daysAgo(15).slice(0,10), expected_amount_nzd: 13000, received_at: daysAgo(14), received_amount_nzd: 13000, method: 'bank_transfer', invoice_ref: 'INV-2026-0058P' },
+      { event: 'final',    expected_at: daysAgo(15).slice(0,10), expected_amount_nzd:  9750, received_at: null,        received_amount_nzd: null,  method: null,            invoice_ref: 'INV-2026-0058F' },  // overdue 15 days
+    ],
+
+    // Project 5 — Wellington 6.6kW: all paid + reconciled
+    'wellington-66kw': [
+      { event: 'deposit',  expected_at: daysAgo(75).slice(0,10), expected_amount_nzd: 5940, received_at: daysAgo(73), received_amount_nzd: 5940, method: 'bank_transfer', invoice_ref: 'INV-2026-0042D' },
+      { event: 'progress', expected_at: daysAgo(48).slice(0,10), expected_amount_nzd: 7920, received_at: daysAgo(46), received_amount_nzd: 7920, method: 'bank_transfer', invoice_ref: 'INV-2026-0042P' },
+      { event: 'final',    expected_at: daysAgo(35).slice(0,10), expected_amount_nzd: 5940, received_at: daysAgo(34), received_amount_nzd: 5940, method: 'bank_transfer', invoice_ref: 'INV-2026-0042F' },
+    ],
+  };
+
+  // Match by slug fragment in the address
+  let key = null;
+  if      (slug.includes('Whangarei'))        key = 'whangarei-battery';
+  else if (slug.includes('Auckland 12 kW'))   key = 'auckland-12kw';
+  else if (slug.includes('Wellington'))       key = 'wellington-66kw';
+  if (!key) return 0;
+
+  const rows = PAYMENTS_BY_SLUG[key] || [];
+  for (const r of rows) {
+    await client.query(
+      `INSERT INTO project_payments (project_id, event, expected_at, expected_amount_nzd, received_at, received_amount_nzd, method, invoice_ref)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [projectId, r.event, r.expected_at, r.expected_amount_nzd, r.received_at, r.received_amount_nzd, r.method, r.invoice_ref]
+    );
+  }
+  return rows.length;
+}
+
 async function insertOne(fix) {
   const cols = [
     'project_type','address','suburb','city','region','postcode',
@@ -379,11 +425,14 @@ async function insertOne(fix) {
 
 try {
   await cleanup();
+  let totalPayments = 0;
   for (const fix of fixtures) {
     const r = await insertOne(fix);
-    console.log(`✅ ${r.code}  ${fix.label}`);
+    const paymentCount = await seedPayments(r.id, fix.label);
+    totalPayments += paymentCount;
+    console.log(`✅ ${r.code}  ${fix.label}${paymentCount ? `  (+${paymentCount} payments)` : ''}`);
   }
-  console.log(`\n${fixtures.length} test projects seeded.`);
+  console.log(`\n${fixtures.length} test projects seeded · ${totalPayments} project_payments rows.`);
   console.log('Open http://localhost:5173/pm');
 } catch (e) {
   console.error('❌ Seed failed:', e.message);

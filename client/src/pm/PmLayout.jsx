@@ -15,8 +15,13 @@ export default function PmLayout() {
           </Link>
           <nav className="flex gap-4 text-sm">
             <Link
-              to="/pm"
-              className={`px-2 py-1 rounded ${pathname === '/pm' || pathname.startsWith('/pm/projects') ? 'bg-slate-700 text-white' : 'text-slate-300 hover:text-white'}`}>
+              to="/pm/owner"
+              className={`px-2 py-1 rounded ${pathname === '/pm' || pathname === '/pm/owner' ? 'bg-slate-700 text-white' : 'text-slate-300 hover:text-white'}`}>
+              Owner Dashboard
+            </Link>
+            <Link
+              to="/pm/projects"
+              className={`px-2 py-1 rounded ${pathname.startsWith('/pm/projects') ? 'bg-slate-700 text-white' : 'text-slate-300 hover:text-white'}`}>
               Projects
             </Link>
           </nav>
