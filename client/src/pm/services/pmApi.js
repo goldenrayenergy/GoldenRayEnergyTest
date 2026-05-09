@@ -51,3 +51,20 @@ export const pmCommissionAPI = {
 export const pmOwnerAPI = {
   dashboard: () => api.get('/pm/owner/dashboard'),
 };
+
+export const pmAdminAPI = {
+  // company settings (single row)
+  getSettings:    () => api.get('/pm/admin/settings'),
+  updateSettings: (patch) => api.patch('/pm/admin/settings', patch),
+
+  // financing options
+  listFinancing:    () => api.get('/pm/admin/financing'),
+  createFinancing:  (data) => api.post('/pm/admin/financing', data),
+  updateFinancing:  (id, patch) => api.patch(`/pm/admin/financing/${id}`, patch),
+  deleteFinancing:  (id) => api.delete(`/pm/admin/financing/${id}`),
+
+  // proposal_terms (versioned)
+  listTerms:    () => api.get('/pm/admin/terms'),
+  currentTerms: () => api.get('/pm/admin/terms/current'),
+  createTerms:  (data) => api.post('/pm/admin/terms', data),
+};

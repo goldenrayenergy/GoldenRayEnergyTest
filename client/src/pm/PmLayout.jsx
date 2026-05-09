@@ -24,6 +24,11 @@ export default function PmLayout() {
               className={`px-2 py-1 rounded ${pathname.startsWith('/pm/projects') ? 'bg-slate-700 text-white' : 'text-slate-300 hover:text-white'}`}>
               Projects
             </Link>
+            <Link
+              to="/pm/admin"
+              className={`px-2 py-1 rounded ${pathname.startsWith('/pm/admin') ? 'bg-slate-700 text-white' : 'text-slate-300 hover:text-white'}`}>
+              Admin
+            </Link>
           </nav>
           <div className="flex-1" />
           <Link to="/portal" className="text-xs text-slate-400 hover:text-white">

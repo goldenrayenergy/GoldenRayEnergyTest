@@ -1,0 +1,394 @@
+import { useEffect, useState } from 'react';
+import { pmAdminAPI } from '../services/pmApi';
+import { fmt$, fmtDateLong } from '../../utils/format';
+
+// ────────────────────────────────────────────────────────────────────────────
+// /pm/admin — single page with three tabs:
+//   1. Company Settings   — bank, phone, signer, logo, validity windows,
+//                            FAQ + Why-us copy, closing statement
+//   2. Financing Options  — table of bank loan products shown on proposals
+//   3. T&Cs Versions      — versioned terms; only one is "current"
+// ────────────────────────────────────────────────────────────────────────────
+
+export default function AdminPage() {
+  const [tab, setTab] = useState('settings');
+  return (
+    <div>
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold text-slate-900">Admin Settings</h1>
+        <p className="text-xs text-slate-500 mt-1">Company config that drives proposal generation. Edit once, every future proposal reflects it.</p>
+      </div>
+
+      <nav className="flex border-b border-slate-200 mb-5">
+        {[
+          { id: 'settings',  label: 'Company Settings' },
+          { id: 'financing', label: 'Financing Options' },
+          { id: 'terms',     label: 'T&Cs Versions' },
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-2 -mb-px text-sm font-medium border-b-2 ${
+              tab === t.id
+                ? 'border-amber-500 text-amber-700'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
+      {tab === 'settings'  && <SettingsTab />}
+      {tab === 'financing' && <FinancingTab />}
+      {tab === 'terms'     && <TermsTab />}
+    </div>
+  );
+}
+
+// ── Settings tab ─────────────────────────────────────────────────────────
+function SettingsTab() {
+  const [s, setS]       = useState(null);
+  const [saving, setSv] = useState(false);
+  const [msg, setMsg]   = useState('');
+  const [err, setErr]   = useState('');
+
+  useEffect(() => {
+    pmAdminAPI.getSettings().then(r => setS(r.data)).catch(e => setErr(e.response?.data?.error || e.message));
+  }, []);
+
+  function set(k, v) { setS(p => ({ ...p, [k]: v })); }
+
+  async function save() {
+    setSv(true); setMsg(''); setErr('');
+    try {
+      const patch = { ...s };
+      delete patch.id; delete patch.updated_at;
+      // Convert numeric inputs (strings → numbers)
+      ['crew_capacity_per_week','proposal_validity_days_stage1','proposal_validity_days_stage2',
+       'default_deposit_pct','default_progress_pct'].forEach(k => {
+        if (patch[k] !== '' && patch[k] != null) patch[k] = Number(patch[k]);
+      });
+      const r = await pmAdminAPI.updateSettings(patch);
+      setS(r.data);
+      setMsg('Saved ✓');
+      setTimeout(() => setMsg(''), 2000);
+    } catch (e) {
+      setErr(e.response?.data?.error || e.message);
+    } finally {
+      setSv(false);
+    }
+  }
+
+  if (!s) return <div className="text-slate-400 text-sm">Loading…</div>;
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      {err && <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">{err}</div>}
+      {msg && <div className="bg-green-50 border border-green-200 text-green-800 px-3 py-2 rounded text-sm">{msg}</div>}
+
+      <Card title="Legal & Contact">
+        <Grid>
+          <Field label="Legal name"   v={s.legal_name}    set={v => set('legal_name', v)} />
+          <Field label="Trading name" v={s.trading_name}  set={v => set('trading_name', v)} />
+          <Field label="Contact phone (proposals)" v={s.contact_phone} set={v => set('contact_phone', v)} />
+          <Field label="Contact email" v={s.contact_email} set={v => set('contact_email', v)} />
+          <Field label="Support phone" v={s.support_phone} set={v => set('support_phone', v)} />
+          <Field label="Email From-address" v={s.email_from_address} set={v => set('email_from_address', v)} placeholder='Goldenray <hello@goldenray.energy>' />
+        </Grid>
+      </Card>
+
+      <Card title="Bank — for deposit instructions">
+        <Grid>
+          <Field label="Account name" v={s.bank_account_name} set={v => set('bank_account_name', v)} />
+          <Field label="Account number" v={s.bank_account_number} set={v => set('bank_account_number', v)} placeholder="12-3456-7890123-00" />
+          <Field label="Bank" v={s.bank_name} set={v => set('bank_name', v)} placeholder="ASB Bank" />
+          <Field label="Reference template" v={s.bank_reference_template} set={v => set('bank_reference_template', v)} placeholder='${proposal_number}' />
+        </Grid>
+      </Card>
+
+      <Card title="Default proposal signer">
+        <Grid>
+          <Field label="Name"  v={s.signer_name} set={v => set('signer_name', v)} />
+          <Field label="Title" v={s.signer_title} set={v => set('signer_title', v)} />
+          <Field label="Email" v={s.signer_email} set={v => set('signer_email', v)} />
+        </Grid>
+      </Card>
+
+      <Card title="Branding">
+        <Grid>
+          <Field label="Logo URL" v={s.logo_url} set={v => set('logo_url', v)} placeholder="/logo.jpg" />
+        </Grid>
+      </Card>
+
+      <Card title="Operational defaults">
+        <Grid>
+          <Field label="Crew capacity (installs/week)" type="number" v={s.crew_capacity_per_week} set={v => set('crew_capacity_per_week', v)} />
+          <Field label="Stage 1 validity (days)" type="number" v={s.proposal_validity_days_stage1} set={v => set('proposal_validity_days_stage1', v)} />
+          <Field label="Stage 2 validity (days)" type="number" v={s.proposal_validity_days_stage2} set={v => set('proposal_validity_days_stage2', v)} />
+          <Field label="Deposit % default" type="number" v={s.default_deposit_pct} set={v => set('default_deposit_pct', v)} />
+          <Field label="Progress payment % default" type="number" v={s.default_progress_pct} set={v => set('default_progress_pct', v)} />
+        </Grid>
+      </Card>
+
+      <Card title="Customer-facing copy">
+        <Grid>
+          <Field label="Closing statement (proposal footer)" type="textarea" rows={3} v={s.closing_statement} set={v => set('closing_statement', v)} />
+        </Grid>
+        <p className="text-xs text-slate-500 mt-3">
+          FAQ and Why-us bullets are stored as JSON. Edit them directly via API for now (UI coming).
+          Current FAQ count: <strong>{(s.faq_json || []).length}</strong> · Why-us bullets: <strong>{(s.why_us_json || []).length}</strong>.
+        </p>
+      </Card>
+
+      <div className="flex gap-3 pt-2">
+        <button
+          onClick={save}
+          disabled={saving}
+          className="px-5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-md font-medium text-sm">
+          {saving ? 'Saving…' : 'Save settings'}
+        </button>
+        <span className="text-xs text-slate-400 self-center">Last updated {fmtDateLong(s.updated_at)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Financing tab ────────────────────────────────────────────────────────
+function FinancingTab() {
+  const [opts, setOpts] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [err, setErr] = useState('');
+
+  function load() {
+    pmAdminAPI.listFinancing().then(r => setOpts(r.data)).catch(e => setErr(e.response?.data?.error || e.message));
+  }
+  useEffect(load, []);
+
+  async function save(opt) {
+    setErr('');
+    try {
+      if (opt.id) await pmAdminAPI.updateFinancing(opt.id, opt);
+      else        await pmAdminAPI.createFinancing(opt);
+      setEditing(null);
+      load();
+    } catch (e) { setErr(e.response?.data?.error || e.message); }
+  }
+
+  async function remove(id) {
+    if (!confirm('Deactivate this financing option? It will be hidden from new proposals.')) return;
+    await pmAdminAPI.deleteFinancing(id);
+    load();
+  }
+
+  return (
+    <div className="max-w-4xl">
+      {err && <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm mb-3">{err}</div>}
+
+      <div className="flex justify-between items-center mb-3">
+        <p className="text-sm text-slate-600">Bank loan options shown on every proposal. Update rates when ASB/BNZ change theirs (typically quarterly).</p>
+        <button
+          onClick={() => setEditing({ name: '', bank: '', base_rate_pct: 5.5, promo_rate_pct: 1, promo_years: 3, term_years: 7, max_amount_nzd: 50000, notes: '', is_active: true, display_order: 50 })}
+          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded text-sm font-medium">
+          + Add option
+        </button>
+      </div>
+
+      <table className="w-full text-sm bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <thead className="bg-slate-50 text-xs text-slate-600 uppercase">
+          <tr>
+            <th className="px-3 py-2 text-left">Name</th>
+            <th className="px-3 py-2 text-left">Bank</th>
+            <th className="px-3 py-2 text-right">Base rate</th>
+            <th className="px-3 py-2 text-right">Promo</th>
+            <th className="px-3 py-2 text-right">Term</th>
+            <th className="px-3 py-2 text-right">Max</th>
+            <th className="px-3 py-2 text-center">Active</th>
+            <th className="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {opts.map(o => (
+            <tr key={o.id} className={o.is_active ? '' : 'bg-slate-50 text-slate-400'}>
+              <td className="px-3 py-2 font-medium">{o.name}</td>
+              <td className="px-3 py-2">{o.bank || '—'}</td>
+              <td className="px-3 py-2 text-right">{o.base_rate_pct}%</td>
+              <td className="px-3 py-2 text-right">{o.promo_rate_pct}% × {o.promo_years}y</td>
+              <td className="px-3 py-2 text-right">{o.term_years}y</td>
+              <td className="px-3 py-2 text-right">{o.max_amount_nzd ? fmt$(o.max_amount_nzd) : '—'}</td>
+              <td className="px-3 py-2 text-center">{o.is_active ? '✓' : '—'}</td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">
+                <button onClick={() => setEditing(o)} className="text-amber-700 hover:underline text-xs mr-3">Edit</button>
+                {o.is_active && <button onClick={() => remove(o.id)} className="text-red-600 hover:underline text-xs">Deactivate</button>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {editing && <FinancingEditor opt={editing} onSave={save} onCancel={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+function FinancingEditor({ opt, onSave, onCancel }) {
+  const [v, setV] = useState(opt);
+  const set = (k, val) => setV(p => ({ ...p, [k]: val }));
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-lg p-6 max-w-lg w-full">
+        <h3 className="font-bold text-lg mb-4">{opt.id ? 'Edit option' : 'Add financing option'}</h3>
+        <Grid>
+          <Field label="Name" v={v.name} set={x => set('name', x)} />
+          <Field label="Bank" v={v.bank} set={x => set('bank', x)} />
+          <Field label="Base rate %"  type="number" v={v.base_rate_pct}  set={x => set('base_rate_pct', Number(x) || 0)} />
+          <Field label="Promo rate %" type="number" v={v.promo_rate_pct} set={x => set('promo_rate_pct', Number(x) || 0)} />
+          <Field label="Promo years"  type="number" v={v.promo_years}    set={x => set('promo_years', Number(x) || 0)} />
+          <Field label="Term years"   type="number" v={v.term_years}     set={x => set('term_years', Number(x) || 0)} />
+          <Field label="Max amount ($)" type="number" v={v.max_amount_nzd} set={x => set('max_amount_nzd', Number(x) || 0)} />
+          <Field label="Display order"  type="number" v={v.display_order}  set={x => set('display_order', Number(x) || 0)} />
+        </Grid>
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-slate-700 mb-1">Notes (shown under option on proposals)</label>
+          <textarea rows={3} value={v.notes || ''} onChange={e => set('notes', e.target.value)} className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" />
+        </div>
+        <label className="flex items-center gap-2 mt-3">
+          <input type="checkbox" checked={!!v.is_active} onChange={e => set('is_active', e.target.checked)} />
+          <span className="text-sm">Active (shown on proposals)</span>
+        </label>
+        <div className="flex gap-2 mt-5">
+          <button onClick={() => onSave(v)} className="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded text-sm font-medium">Save</button>
+          <button onClick={onCancel} className="px-4 py-1.5 border border-slate-300 hover:bg-slate-50 rounded text-sm">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Terms tab ────────────────────────────────────────────────────────────
+function TermsTab() {
+  const [versions, setVersions] = useState([]);
+  const [err, setErr] = useState('');
+  const [showNew, setShowNew] = useState(false);
+
+  function load() {
+    pmAdminAPI.listTerms().then(r => setVersions(r.data)).catch(e => setErr(e.response?.data?.error || e.message));
+  }
+  useEffect(load, []);
+
+  return (
+    <div className="max-w-3xl">
+      {err && <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm mb-3">{err}</div>}
+
+      <div className="flex justify-between items-center mb-3">
+        <p className="text-sm text-slate-600">Versioned T&Cs. Customers accept a specific version (audit trail). Adding a new version automatically marks it current.</p>
+        <button
+          onClick={() => setShowNew(true)}
+          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded text-sm font-medium">
+          + New version
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {versions.map(v => (
+          <div key={v.id} className={`border rounded-lg p-4 ${v.is_current ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-bold text-slate-900">v{v.version}</span>
+                {v.is_current && <span className="ml-2 px-2 py-0.5 bg-emerald-200 text-emerald-900 text-xs rounded font-bold">CURRENT</span>}
+                <span className="ml-3 text-xs text-slate-500">effective {fmtDateLong(v.effective_from)}</span>
+              </div>
+              <span className="text-xs text-slate-400">{(v.terms_json || []).length} sections</span>
+            </div>
+            {v.notes && <p className="text-xs text-slate-600 mt-1 italic">{v.notes}</p>}
+            <details className="mt-2">
+              <summary className="text-xs text-amber-700 cursor-pointer hover:underline">View sections</summary>
+              <ol className="mt-2 list-decimal list-inside space-y-1 text-xs text-slate-700">
+                {(v.terms_json || []).map((t, i) => <li key={i}><strong>{t.title}</strong></li>)}
+              </ol>
+            </details>
+          </div>
+        ))}
+      </div>
+
+      {showNew && <NewTermsModal onSave={() => { setShowNew(false); load(); }} onCancel={() => setShowNew(false)} />}
+    </div>
+  );
+}
+
+function NewTermsModal({ onSave, onCancel }) {
+  const [version, setVersion] = useState('');
+  const [effective, setEffective] = useState(new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setBusy(true); setError('');
+    try {
+      // Clone current terms (admin can edit existing JSON for new version via API later;
+      // UI only supports version + effective_from + notes for now)
+      const current = await pmAdminAPI.currentTerms();
+      const terms_json = current.data?.terms_json || [];
+      await pmAdminAPI.createTerms({ version, effective_from: effective, terms_json, notes });
+      onSave();
+    } catch (e) { setError(e.response?.data?.error || e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-lg p-6 max-w-md w-full">
+        <h3 className="font-bold text-lg mb-4">New T&Cs version</h3>
+        {error && <div className="bg-red-50 border border-red-200 text-red-800 px-2 py-1 rounded text-xs mb-3">{error}</div>}
+        <Grid>
+          <Field label="Version (e.g., 2026.2)" v={version} set={setVersion} />
+          <Field label="Effective from" type="date" v={effective} set={setEffective} />
+        </Grid>
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-slate-700 mb-1">Notes (internal)</label>
+          <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" placeholder="What changed in this version?" />
+        </div>
+        <p className="text-xs text-slate-500 mt-3">
+          New version starts as a copy of the current one. Edit specific sections via API for now (full T&Cs editor coming).
+        </p>
+        <div className="flex gap-2 mt-5">
+          <button onClick={submit} disabled={busy || !version} className="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded text-sm font-medium">
+            {busy ? '…' : 'Create'}
+          </button>
+          <button onClick={onCancel} className="px-4 py-1.5 border border-slate-300 hover:bg-slate-50 rounded text-sm">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Reusable form helpers ────────────────────────────────────────────────
+function Card({ title, children }) {
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg p-4">
+      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-3">{title}</h3>
+      {children}
+    </div>
+  );
+}
+function Grid({ children }) {
+  return <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{children}</div>;
+}
+function Field({ label, v, set, type = 'text', rows, placeholder }) {
+  if (type === 'textarea') {
+    return (
+      <div className="md:col-span-2">
+        <label className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
+        <textarea rows={rows || 3} value={v ?? ''} onChange={e => set(e.target.value)} placeholder={placeholder}
+          className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" />
+      </div>
+    );
+  }
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
+      <input type={type} value={v ?? ''} onChange={e => set(e.target.value)} placeholder={placeholder}
+        className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" />
+    </div>
+  );
+}

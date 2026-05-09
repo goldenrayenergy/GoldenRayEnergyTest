@@ -6,6 +6,7 @@ import OwnerDashboardPage from './pages/OwnerDashboardPage';
 import ProjectListPage from './pages/ProjectListPage';
 import ProjectNewPage from './pages/ProjectNewPage';
 import ProjectDetailPage from './pages/ProjectDetailPage';
+import AdminPage from './pages/AdminPage';
 
 function PmProtected({ children }) {
   const { user, loading } = useAuth();
@@ -25,6 +26,7 @@ export default function PmApp() {
         <Route path="projects" element={<ProjectListPage />} />
         <Route path="projects/new" element={<ProjectNewPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
+        <Route path="admin" element={<AdminPage />} />
       </Route>
     </Routes>
   );

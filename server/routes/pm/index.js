@@ -9,6 +9,7 @@ import { Router } from 'express';
 import projectsRoutes from './projects.js';
 import artifactsRoutes from './artifacts.js';
 import ownerRoutes from './owner.js';
+import adminRoutes from './admin.js';
 
 const router = Router();
 
@@ -21,6 +22,9 @@ router.use('/projects/:id/artifacts', artifactsRoutes);
 // Owner Dashboard — single endpoint returning all 7 zones
 router.use('/owner', ownerRoutes);
 
-router.get('/health', (req, res) => res.json({ status: 'ok', tool: 'pm', phase: 'A.3' }));
+// Admin config — company_settings, financing_options, proposal_terms
+router.use('/admin', adminRoutes);
+
+router.get('/health', (req, res) => res.json({ status: 'ok', tool: 'pm', phase: 'A.4' }));
 
 export default router;
