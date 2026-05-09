@@ -89,6 +89,12 @@ export default function SolarPackageDetailPage() {
                 {hasBattery   && <SpecChip icon={Battery} label={`${pkg.battery_kwh} kWh battery`} accent="emerald" />}
                 {pkg.estimated_annual_savings && <SpecChip icon={TrendingUp} label={`~${fmt$(pkg.estimated_annual_savings)}/yr savings`} accent="emerald" />}
                 {pkg.estimated_payback_years && <SpecChip icon={Clock} label={`${pkg.estimated_payback_years} yr payback`} />}
+                {hasBattery && (
+                  <a href="/#vpp" className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 text-white text-[11px] font-extrabold uppercase tracking-wide shadow-sm hover:shadow-md transition" title="See how this system can earn extra revenue from 2027">
+                    <Zap size={11} />
+                    VPP-ready · earn $200–$400/yr from 2027
+                  </a>
+                )}
               </div>
 
               <div className="bg-white rounded-2xl border border-amber-200 p-5 shadow-lg">

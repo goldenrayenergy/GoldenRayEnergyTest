@@ -274,6 +274,11 @@ function PackageCard({ pkg }) {
                 <Battery size={9} /> {pkg.battery_kwh} kWh
               </span>
             )}
+            {hasBattery && (
+              <span className="text-[9px] px-2 py-1 rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-extrabold flex items-center gap-1 uppercase tracking-wide" title="Eligible for the Goldenray VPP launching 2027">
+                <Zap size={9} /> VPP-ready
+              </span>
+            )}
             <span className="text-[9px] px-2 py-1 rounded-full bg-gray-100 text-gray-600 font-bold">
               {pkg.items?.length || 0} components
             </span>

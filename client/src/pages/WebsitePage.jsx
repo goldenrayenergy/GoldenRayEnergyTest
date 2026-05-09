@@ -812,6 +812,134 @@ export default function WebsitePage() {
         </div>
       </section>
 
+      {/* VPP-readiness preview */}
+      <section id="vpp" className="py-16 md:py-24 px-4 md:px-16 bg-gradient-to-br from-emerald-50 via-white to-amber-50 relative overflow-hidden dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark transition-colors">
+        <div className="absolute -top-20 right-1/3 w-96 h-96 rounded-full bg-gradient-to-br from-emerald-300 to-amber-300 opacity-20 blur-3xl animate-blob pointer-events-none" />
+        <div className="absolute bottom-0 -left-20 w-80 h-80 rounded-full bg-gradient-to-br from-amber-300 to-orange-300 opacity-20 blur-3xl animate-blob-delay-2 pointer-events-none" />
+
+        <div className="relative z-10 max-w-6xl mx-auto">
+          <div className="text-center mb-10">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-emerald-100 to-amber-100 dark:from-emerald-500/10 dark:to-amber-500/10 border border-emerald-300/50 dark:border-emerald-500/30 mb-3">
+              <Zap size={14} className="text-emerald-600 dark:text-emerald-400" />
+              <span className="text-xs font-extrabold tracking-widest text-gradient-warm">FUTURE-READY · LAUNCHING 2027</span>
+            </div>
+            <h2 className="text-2xl md:text-4xl font-extrabold font-display dark:text-gray-100 mb-4">
+              Your battery, <span className="text-gradient-warm">earning you money</span> — from 2027
+            </h2>
+            <p className="text-base text-gray-600 dark:text-gray-300 max-w-3xl mx-auto leading-relaxed">
+              Goldenray is building New Zealand's next-generation Virtual Power Plant.
+              When we launch in 2027, every Goldenray solar + battery customer with compatible
+              hardware can opt in and earn an estimated{' '}
+              <strong className="text-emerald-700 dark:text-emerald-400">$200–$400 per year</strong>{' '}
+              in additional revenue — from the same battery that already powers their home.
+            </p>
+          </div>
+
+          {/* What it is / What you earn / Your control */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-10">
+            <div className="bg-white dark:bg-brand-dark-1 rounded-2xl p-6 border border-emerald-100 dark:border-emerald-500/20 shadow-sm hover:shadow-lg transition-shadow">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center mb-4 shadow-md">
+                <Battery size={20} className="text-white" />
+              </div>
+              <h3 className="text-base font-extrabold mb-2 dark:text-gray-100">What is a VPP?</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
+                A Virtual Power Plant is a network of home batteries acting as one big grid asset.
+                When the grid needs power for peak hours or frequency events, thousands of small
+                batteries discharge tiny amounts collectively — and grid operators pay for that
+                service. You'd never notice it happening.
+              </p>
+            </div>
+
+            <div className="bg-white dark:bg-brand-dark-1 rounded-2xl p-6 border border-amber-100 dark:border-amber-500/20 shadow-sm hover:shadow-lg transition-shadow">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mb-4 shadow-md">
+                <DollarSign size={20} className="text-white" />
+              </div>
+              <h3 className="text-base font-extrabold mb-2 dark:text-gray-100">What you earn</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed mb-3">
+                Estimated <strong className="text-amber-700 dark:text-amber-400">$200–$400 per year</strong> in
+                revenue share — paid monthly. Your bill savings stay the same; this is on top.
+              </p>
+              <div className="text-xs text-gray-500 dark:text-gray-400 italic">
+                Conservative estimate based on Australian VPP pilots. Adjusts as the NZ market matures.
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-brand-dark-1 rounded-2xl p-6 border border-blue-100 dark:border-blue-500/20 shadow-sm hover:shadow-lg transition-shadow">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center mb-4 shadow-md">
+                <Shield size={20} className="text-white" />
+              </div>
+              <h3 className="text-base font-extrabold mb-2 dark:text-gray-100">You're in control</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
+                Set your minimum reserve so you always have backup. Pause for any reason
+                (camping, visitors, big day ahead). Opt out at any time, no penalty.
+                Your battery, your rules.
+              </p>
+            </div>
+          </div>
+
+          {/* Eligibility & lock-in CTA */}
+          <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 dark:from-brand-dark-1 dark:to-brand-dark text-white rounded-2xl p-8 md:p-10 relative overflow-hidden border border-slate-700/50">
+            <div className="absolute -top-10 right-10 w-40 h-40 rounded-full bg-emerald-500/30 blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-10 left-10 w-32 h-32 rounded-full bg-amber-500/30 blur-3xl pointer-events-none" />
+            <div className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+              <div>
+                <div className="text-xs font-extrabold tracking-widest text-emerald-300 mb-2">⚡ HOW TO BE READY</div>
+                <h3 className="text-xl md:text-2xl font-extrabold mb-4">
+                  Lock in VPP-ready hardware <span className="text-amber-300">today</span>
+                </h3>
+                <p className="text-sm text-gray-300 leading-relaxed mb-5">
+                  Not every solar system can join a VPP. Compatible inverters and batteries are
+                  required. Goldenray installs only VPP-ready hardware as standard — so you're
+                  future-proof without paying extra.
+                </p>
+                <div className="space-y-2 text-sm">
+                  {[
+                    'Fronius, Sungrow, Tesla, SolarEdge inverters',
+                    'Reserva, Powerwall, BYD, Tesla, Sungrow batteries',
+                    'No additional hardware cost when VPP launches',
+                    'Priority enrollment for existing Goldenray customers',
+                  ].map((item, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <CheckCircle size={16} className="text-emerald-400 flex-shrink-0 mt-0.5" />
+                      <span className="text-gray-200">{item}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="bg-white/10 backdrop-blur rounded-xl p-6 border border-white/20">
+                  <div className="text-[10px] font-extrabold tracking-widest text-emerald-300 mb-1">25-YEAR EARNINGS POTENTIAL</div>
+                  <div className="text-4xl md:text-5xl font-extrabold mb-1 bg-gradient-to-r from-amber-300 to-emerald-300 bg-clip-text text-transparent">
+                    $5k – $10k
+                  </div>
+                  <div className="text-xs text-gray-400 mb-4">
+                    in additional revenue from your battery — on top of bill savings
+                  </div>
+                  <p className="text-xs text-gray-300 italic mb-5 border-l-2 border-emerald-400/50 pl-3">
+                    "We're playing the long game. The NZ grid in 2030 will pay you to help balance it.
+                    Hardware bought today should be ready for that."
+                  </p>
+                  <a
+                    href="#calculator"
+                    className="inline-flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold px-5 py-2.5 rounded-lg text-sm transition shadow-lg shadow-emerald-500/30">
+                    Get a VPP-ready quote
+                    <ArrowRight size={14} />
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-500 dark:text-gray-400 text-center mt-6 max-w-2xl mx-auto">
+            VPP launch planned for 2027, subject to regulatory approval. Earnings figures are
+            illustrative based on Australian VPP outcomes; actual NZ revenue will depend on grid
+            demand, your battery size, and your usage profile. No commitment required at the time
+            of solar install — opt in later when launched.
+          </p>
+        </div>
+      </section>
+
       {/* Our Mission */}
       <section className="py-16 md:py-24 px-4 md:px-16 text-white relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #0B0F1A 0%, #11172A 40%, #1C2340 100%)' }}>
         <div className="absolute -top-20 -left-20 w-96 h-96 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 opacity-25 blur-3xl animate-blob" />
