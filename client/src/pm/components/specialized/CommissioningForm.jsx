@@ -82,7 +82,7 @@ const SECTION_BG = {
   indigo: 'bg-indigo-50 border-indigo-200',
 };
 
-export default function CommissioningForm({ projectId, lane, itemKey, schema, values, currentState, missingFields, upstreamSuggestions = {}, onChange, onProjectChanged }) {
+export default function CommissioningForm({ projectId, lane, itemKey, schema, values, currentState, missingFields, upstreamSuggestions = {}, onChange, onProjectChanged, readOnly }) {
   const local = values || {};
   const missingKeys = new Set((missingFields || []).map(m => m.key));
   const [saving, setSaving]   = useState(false);
@@ -107,6 +107,7 @@ export default function CommissioningForm({ projectId, lane, itemKey, schema, va
   }, [local.inverter_make, local.inverter_model, local.battery_make, local.battery_model, catalog]);
 
   function set(k, val) {
+    if (readOnly) return;
     onChange?.({ ...local, [k]: val });
   }
 
@@ -154,18 +155,21 @@ export default function CommissioningForm({ projectId, lane, itemKey, schema, va
                 const v = local[f.key];
                 const isMissing = missingKeys.has(f.key);
                 const upstream  = upstreamSuggestions[f.key];
-                const baseInput = `w-full px-2 py-1.5 border rounded text-sm bg-white ${isMissing ? 'border-amber-400 ring-1 ring-amber-200' : 'border-slate-300'}`;
+                const baseInput = `w-full px-2 py-1.5 border rounded text-sm ${
+                  readOnly ? 'bg-slate-50 text-slate-700 border-slate-200 cursor-not-allowed' :
+                  `bg-white ${isMissing ? 'border-amber-400 ring-1 ring-amber-200' : 'border-slate-300'}`
+                }`;
                 let control;
                 if (f.type === 'boolean') {
                   control = (
                     <label className="flex items-center gap-2 px-2 py-1.5 bg-white border border-slate-300 rounded">
-                      <input type="checkbox" checked={!!v} onChange={e => set(f.key, e.target.checked)} />
+                      <input type="checkbox" checked={!!v} disabled={readOnly} onChange={e => set(f.key, e.target.checked)} />
                       <span className="text-sm">{v ? 'Yes' : 'No'}</span>
                     </label>
                   );
                 } else if (f.type === 'select') {
                   control = (
-                    <select className={baseInput} value={v ?? ''} onChange={e => set(f.key, e.target.value || null)}>
+                    <select className={baseInput} value={v ?? ''} disabled={readOnly} onChange={e => set(f.key, e.target.value || null)}>
                       {f.options.map(o => <option key={o} value={o}>{o || '— select —'}</option>)}
                     </select>
                   );
@@ -175,6 +179,8 @@ export default function CommissioningForm({ projectId, lane, itemKey, schema, va
                       type={f.type === 'datetime-local' ? 'datetime-local' : f.type === 'date' ? 'date' : 'text'}
                       className={baseInput}
                       value={v ?? ''}
+                      disabled={readOnly}
+                      readOnly={readOnly}
                       onChange={e => set(f.key, e.target.value || null)}
                       placeholder={f.placeholder}
                     />
@@ -203,14 +209,16 @@ export default function CommissioningForm({ projectId, lane, itemKey, schema, va
         ))}
       </div>
 
-      <div className="mt-5 flex flex-wrap gap-2">
-        <button
-          onClick={commission}
-          disabled={saving}
-          className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm rounded font-medium">
-          {saving ? '…' : '⚡ Commission system + populate asset fields'}
-        </button>
-      </div>
+      {!readOnly && (
+        <div className="mt-5 flex flex-wrap gap-2">
+          <button
+            onClick={commission}
+            disabled={saving}
+            className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm rounded font-medium">
+            {saving ? '…' : '⚡ Commission system + populate asset fields'}
+          </button>
+        </div>
+      )}
       <p className="text-[11px] text-slate-500 mt-2">
         Routine field edits save when you click <strong>Save &amp; advance</strong> at the top.
         The <strong>Commission</strong> button does the special action: writes serial numbers, warranty windows, monitoring credentials and the VPP-capable flag onto the project, then sets <strong>commissioned_at</strong>. Only do this when the system is live and tested.

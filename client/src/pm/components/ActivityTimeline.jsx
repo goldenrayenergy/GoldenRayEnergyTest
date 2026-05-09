@@ -11,6 +11,9 @@ const EVENT_LABELS = {
   gate_check_passed:  ()  => 'Cross-lane gate passed ✓',
   gate_check_blocked: (p) => `Blocked by: ${(p?.blockers || []).map(b => `${b.lane}.${b.item}`).join(', ')}`,
   comment_added:      (p) => `Commented: "${(p?.body_preview || '').slice(0, 80)}${p?.body_preview?.length > 80 ? '…' : ''}"`,
+  task_reopened:      (p) => `🔓 Task reopened from done → ${p?.to?.replace(/_/g,' ')}`,
+  lane_completed:     (p) => `🎉 Lane "${p?.lane}" auto-completed (all gate-keepers ✓)`,
+  lane_reopened:      (p) => `Lane "${p?.lane}" reopened (a gate-keeper was unchecked)`,
 };
 
 const EVENT_DOTS = {
@@ -21,6 +24,9 @@ const EVENT_DOTS = {
   gate_check_passed:  'bg-green-500',
   gate_check_blocked: 'bg-red-500',
   comment_added:      'bg-purple-500',
+  task_reopened:      'bg-orange-500',
+  lane_completed:     'bg-green-600',
+  lane_reopened:      'bg-orange-400',
 };
 
 export default function ActivityTimeline({ events }) {

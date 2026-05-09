@@ -6,7 +6,7 @@ import TaskFormGeneric from '../TaskFormGeneric';
 // the difference between Stage 1 (initial) and Stage 2 (final) explicit
 // in the UI and renders the structured fields the schema declares.
 
-export default function ProposalForm({ stage, schema, values, currentState, missingFields, upstreamSuggestions, onChange }) {
+export default function ProposalForm({ stage, schema, values, currentState, missingFields, upstreamSuggestions, onChange, readOnly }) {
   const isFinal = stage === 'final';
 
   return (
@@ -35,6 +35,7 @@ export default function ProposalForm({ stage, schema, values, currentState, miss
         missingFields={missingFields}
         upstreamSuggestions={upstreamSuggestions}
         onChange={onChange}
+        readOnly={readOnly}
       />
     </div>
   );

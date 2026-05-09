@@ -18,7 +18,7 @@ import { fmt$ } from '../../../utils/format';
 // fields object so they're picked up by upstream-suggestion targets like
 // sales.contract_signed.contract_value.
 
-export default function BomLockedForm({ schema, values, currentState, missingFields, upstreamSuggestions, onChange }) {
+export default function BomLockedForm({ schema, values, currentState, missingFields, upstreamSuggestions, onChange, readOnly }) {
   const [products, setProducts]    = useState([]);
   const [productSearch, setSearch] = useState('');
   const v   = values || {};
@@ -37,6 +37,7 @@ export default function BomLockedForm({ schema, values, currentState, missingFie
   }).slice(0, 30);
 
   function setBom(nextBom) {
+    if (readOnly) return;
     const total = nextBom.reduce((s, l) => s + (l.line_total || 0), 0);
     onChange?.({ ...v, bom: nextBom, bom_total_nzd: total, line_count: nextBom.length });
   }
@@ -71,13 +72,15 @@ export default function BomLockedForm({ schema, values, currentState, missingFie
           Add every component needed to install this system: panels, inverter, battery, mounting kits, isolators, cables. The total cached here flows into Sales.contract_signed.contract_value as a default.
         </p>
 
-        <input
-          type="text"
-          value={productSearch}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search products by name, SKU, category…"
-          className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white mb-2"
-        />
+        {!readOnly && (
+          <input
+            type="text"
+            value={productSearch}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search products by name, SKU, category…"
+            className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white mb-2"
+          />
+        )}
 
         {productSearch && (
           <div className="max-h-40 overflow-y-auto border border-slate-200 rounded bg-white mb-2">
@@ -116,13 +119,13 @@ export default function BomLockedForm({ schema, values, currentState, missingFie
                   <td className="px-2 py-1 font-mono text-slate-500">{l.sku || '—'}</td>
                   <td className="px-2 py-1 truncate max-w-[200px]">{l.name}</td>
                   <td className="px-2 py-1">
-                    <input type="number" value={l.qty} onChange={e => setQty(i, e.target.value)}
-                      className="w-14 px-1 py-0.5 border border-slate-300 rounded text-xs" />
+                    <input type="number" value={l.qty} disabled={readOnly} onChange={e => setQty(i, e.target.value)}
+                      className="w-14 px-1 py-0.5 border border-slate-300 rounded text-xs disabled:bg-slate-50" />
                   </td>
                   <td className="px-2 py-1 text-right">{fmt$(l.unit_cost_nzd)}</td>
                   <td className="px-2 py-1 text-right font-medium">{fmt$(l.line_total)}</td>
                   <td className="px-2 py-1">
-                    <button onClick={() => removeLine(i)} className="text-red-600 hover:underline text-[10px]">×</button>
+                    {!readOnly && <button onClick={() => removeLine(i)} className="text-red-600 hover:underline text-[10px]">×</button>}
                   </td>
                 </tr>
               ))}
@@ -149,6 +152,7 @@ export default function BomLockedForm({ schema, values, currentState, missingFie
           missingFields={missingFields}
           upstreamSuggestions={upstreamSuggestions}
           onChange={onChange}
+          readOnly={readOnly}
         />
       </div>
     </div>

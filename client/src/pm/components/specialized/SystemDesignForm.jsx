@@ -10,7 +10,7 @@ import TaskFormGeneric from '../TaskFormGeneric';
 // that renders panels onto satellite imagery of the address. For now this
 // is a thin wrapper around the schema-driven form.
 
-export default function SystemDesignForm({ schema, values, currentState, missingFields, upstreamSuggestions, onChange }) {
+export default function SystemDesignForm({ schema, values, currentState, missingFields, upstreamSuggestions, onChange, readOnly }) {
   return (
     <div>
       <div className="bg-sky-50 border border-sky-200 rounded p-3 mb-3 text-xs text-sky-900">
@@ -26,6 +26,7 @@ export default function SystemDesignForm({ schema, values, currentState, missing
         missingFields={missingFields}
         upstreamSuggestions={upstreamSuggestions}
         onChange={onChange}
+        readOnly={readOnly}
       />
     </div>
   );

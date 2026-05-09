@@ -20,7 +20,7 @@ const TYPE_INPUTS = {
   currency: 'number', percent:  'number',  phone:    'tel',   email:    'email',  url: 'url',
 };
 
-export default function SmartFieldList({ schema, values = {}, currentState, missingFields = [], upstreamSuggestions = {}, onChange }) {
+export default function SmartFieldList({ schema, values = {}, currentState, missingFields = [], upstreamSuggestions = {}, onChange, readOnly = false }) {
   const fields = schema?.fields || [];
   const stateOrder = schema?.states || [];
 
@@ -65,6 +65,7 @@ export default function SmartFieldList({ schema, values = {}, currentState, miss
                 upstream={upstreamSuggestions[f.key]}
                 inputRef={i === 0 ? firstNeededRef : undefined}
                 emphasis="strong"
+                readOnly={readOnly}
               />
             ))}
           </div>
@@ -72,10 +73,10 @@ export default function SmartFieldList({ schema, values = {}, currentState, miss
       )}
 
       {buckets.filled.length > 0 && (
-        <Section title={`✓ Already filled`} subtitle={`${filledCount} of ${totalFields}`} tone="green" defaultOpen={false}>
+        <Section title={`✓ Already filled`} subtitle={`${filledCount} of ${totalFields}`} tone="green" defaultOpen={readOnly}>
           <div className="space-y-3">
             {buckets.filled.map(f => (
-              <Field key={f.key} f={f} value={values[f.key]} onChange={onChange} values={values} upstream={upstreamSuggestions[f.key]} emphasis="muted" />
+              <Field key={f.key} f={f} value={values[f.key]} onChange={onChange} values={values} upstream={upstreamSuggestions[f.key]} emphasis="muted" readOnly={readOnly} />
             ))}
           </div>
         </Section>
@@ -85,7 +86,7 @@ export default function SmartFieldList({ schema, values = {}, currentState, miss
         <Section title="▸ Coming up" subtitle={`${buckets.later.length} for later states`} tone="slate" defaultOpen={false}>
           <div className="space-y-3">
             {buckets.later.map(f => (
-              <Field key={f.key} f={f} value={values[f.key]} onChange={onChange} values={values} upstream={upstreamSuggestions[f.key]} emphasis="muted" />
+              <Field key={f.key} f={f} value={values[f.key]} onChange={onChange} values={values} upstream={upstreamSuggestions[f.key]} emphasis="muted" readOnly={readOnly} />
             ))}
           </div>
         </Section>
@@ -95,7 +96,7 @@ export default function SmartFieldList({ schema, values = {}, currentState, miss
         <Section title="… Optional" subtitle={`${buckets.optional.length}`} tone="slate" defaultOpen={false}>
           <div className="space-y-3">
             {buckets.optional.map(f => (
-              <Field key={f.key} f={f} value={values[f.key]} onChange={onChange} values={values} upstream={upstreamSuggestions[f.key]} emphasis="muted" />
+              <Field key={f.key} f={f} value={values[f.key]} onChange={onChange} values={values} upstream={upstreamSuggestions[f.key]} emphasis="muted" readOnly={readOnly} />
             ))}
           </div>
         </Section>
@@ -127,28 +128,32 @@ function Section({ title, subtitle, tone = 'slate', defaultOpen, children }) {
   );
 }
 
-function Field({ f, value, onChange, values, upstream, inputRef, emphasis = 'normal' }) {
-  const baseInput = `w-full px-2.5 py-1.5 border rounded text-sm ${emphasis === 'strong' ? 'border-amber-400 bg-white' : 'border-slate-300 bg-white'}`;
+function Field({ f, value, onChange, values, upstream, inputRef, emphasis = 'normal', readOnly = false }) {
+  const baseInput = `w-full px-2.5 py-1.5 border rounded text-sm ${
+    readOnly ? 'bg-slate-50 text-slate-700 border-slate-200 cursor-not-allowed' :
+    emphasis === 'strong' ? 'border-amber-400 bg-white' : 'border-slate-300 bg-white'
+  }`;
   let control;
-  function set(v) { onChange?.({ ...values, [f.key]: v }); }
+  function set(v) { if (!readOnly) onChange?.({ ...values, [f.key]: v }); }
 
   if (f.type === 'boolean') {
     control = (
       <label className="flex items-center gap-2">
-        <input ref={inputRef} type="checkbox" checked={!!value} onChange={e => set(e.target.checked)} />
+        <input ref={inputRef} type="checkbox" checked={!!value} disabled={readOnly} onChange={e => set(e.target.checked)} />
         <span className="text-sm text-slate-700">{value ? 'Yes' : 'No'}</span>
       </label>
     );
   } else if (f.type === 'select') {
     control = (
-      <select ref={inputRef} className={baseInput} value={value ?? ''} onChange={e => set(e.target.value || null)}>
+      <select ref={inputRef} className={baseInput} value={value ?? ''} disabled={readOnly} onChange={e => set(e.target.value || null)}>
         <option value="">— select —</option>
         {(f.options || []).map(o => <option key={o} value={o}>{String(o).replace(/_/g, ' ')}</option>)}
       </select>
     );
   } else if (f.type === 'textarea') {
     control = (
-      <textarea ref={inputRef} className={baseInput} rows={3} value={value ?? ''}
+      <textarea ref={inputRef} className={baseInput} rows={3} value={value ?? ''} disabled={readOnly}
+        readOnly={readOnly}
         onChange={e => set(e.target.value === '' ? null : e.target.value)}
         placeholder={f.placeholder} />
     );
@@ -160,6 +165,8 @@ function Field({ f, value, onChange, values, upstream, inputRef, emphasis = 'nor
         type={t}
         className={baseInput}
         value={value ?? ''}
+        disabled={readOnly}
+        readOnly={readOnly}
         onChange={e => set(e.target.value === '' ? null : e.target.value)}
         placeholder={f.placeholder}
         min={f.min} max={f.max}
@@ -178,7 +185,7 @@ function Field({ f, value, onChange, values, upstream, inputRef, emphasis = 'nor
         )}
       </label>
       {control}
-      {upstream && (
+      {!readOnly && upstream && (
         <button
           type="button"
           onClick={() => set(upstream.value)}

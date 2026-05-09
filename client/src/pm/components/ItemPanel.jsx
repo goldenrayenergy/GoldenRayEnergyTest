@@ -42,6 +42,9 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
   const [pendingFields, setPendingFields] = useState(meta.fields || {});
   const [dirty, setDirty]       = useState(false);
 
+  // Done tasks render read-only with a "Reopen to edit" button.
+  const isDone = currentState === itemDef.doneState;
+
   // Live blockers — recomputed on every keystroke from pendingFields. Cross-lane
   // blockers come from the server (those don't change as you type). Field
   // requirements are computed locally so feedback is instant.
@@ -126,6 +129,15 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
     }
   }
 
+  // ── Reopen: regress state from doneState back to one before, re-enabling edits ──
+  async function reopen() {
+    if (!isDone) return;
+    const stateOrder = itemDef.states || [];
+    const prev = stateOrder[Math.max(0, stateOrder.indexOf(itemDef.doneState) - 1)] || itemDef.initialState;
+    if (!confirm(`Reopen this completed task for editing? An audit event will be recorded.`)) return;
+    await forceState(prev);
+  }
+
   function setFields(next) {
     setPendingFields(next);
     setDirty(true);
@@ -207,12 +219,38 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
               blockers={liveBlockers}
               busy={busy}
               dirty={dirty}
+              isDone={isDone}
               onSaveAndAdvance={saveAndAdvance}
               onForceState={forceState}
+              onReopen={reopen}
             />
 
-            {/* What's blocking the next state */}
-            <BlockersBanner blockers={liveBlockers} onJumpToTask={onJumpToTask} />
+            {/* Completed banner — read-only with Reopen */}
+            {isDone && (
+              <div className="bg-green-50 border border-green-300 rounded-lg p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-semibold text-green-900 text-sm">✓ Task completed — fields locked</div>
+                    <div className="text-xs text-green-800 mt-0.5">
+                      {meta.completed_at && <>Completed {fmtDateTime(meta.completed_at)}</>}
+                      {meta.completed_by && <span className="text-green-700"> · by user {String(meta.completed_by).slice(0, 8)}</span>}
+                    </div>
+                    <div className="text-[11px] text-green-700 mt-1">
+                      To make corrections, click <strong>Reopen to edit</strong>. The reopen action is recorded in the activity timeline.
+                    </div>
+                  </div>
+                  <button
+                    onClick={reopen}
+                    disabled={busy}
+                    className="text-xs px-3 py-1.5 border border-green-400 hover:bg-white text-green-800 rounded font-medium disabled:opacity-50">
+                    Reopen to edit
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* What's blocking the next state — only when not done */}
+            {!isDone && <BlockersBanner blockers={liveBlockers} onJumpToTask={onJumpToTask} />}
 
             {/* Work surface — generic or specialized */}
             <section>
@@ -230,6 +268,7 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
                 upstreamSuggestions={liveBlockers.upstream_suggestions}
                 onChange={setFields}
                 onProjectChanged={onChange}
+                readOnly={isDone}
               />
             </section>
 
@@ -312,8 +351,8 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
 }
 
 // ── Resolves specialized component by ux marker; all controlled. ──
-function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, missingFields, upstreamSuggestions, onChange, onProjectChanged }) {
-  const common = { schema, values, currentState, missingFields, upstreamSuggestions, onChange };
+function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, missingFields, upstreamSuggestions, onChange, onProjectChanged, readOnly }) {
+  const common = { schema, values, currentState, missingFields, upstreamSuggestions, onChange, readOnly };
   switch (ux) {
     case 'site_survey':
       return <SiteSurveyForm projectId={projectId} lane={lane} itemKey={itemKey} {...common} artifacts={artifacts} onProjectChanged={onProjectChanged} />;

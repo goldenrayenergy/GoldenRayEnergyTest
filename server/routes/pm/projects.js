@@ -344,6 +344,14 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
           meta.completed_at = new Date().toISOString();
           eventsToWrite.push({ event_type: 'gate_check_passed', payload: {} });
         }
+
+        // If we're moving OUT of doneState back to an earlier state, that's a
+        // reopen — emit a dedicated event so audit/dashboards can surface it.
+        if (fromState === def.doneState && resolvedTarget !== def.doneState) {
+          eventsToWrite.push({ event_type: 'task_reopened', payload: { from: fromState, to: resolvedTarget } });
+          meta.last_reopened_at = new Date().toISOString();
+          meta.last_reopened_by = req.user?.id || null;
+        }
       }
 
       // Items[item] mirrors whether we're in doneState
@@ -359,6 +367,20 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
       if (nextLaneState.status === 'not_started' && (eventsToWrite.length > 0)) {
         nextLaneState.status = 'in_progress';
         nextLaneState.started_at = new Date().toISOString();
+      }
+
+      // Auto-promote lane to 'done' when all gate-keepers complete; auto-demote
+      // back to 'in_progress' if a previously-done gate-keeper gets reopened.
+      const provisionalLaneStatus = { ...current.lane_status, [lane]: nextLaneState };
+      const completion = computeLaneCompletion(current.project_type, provisionalLaneStatus);
+      if (completion[lane].complete && nextLaneState.status !== 'done' && nextLaneState.status !== 'blocked') {
+        nextLaneState.status = 'done';
+        nextLaneState.completed_at = new Date().toISOString();
+        eventsToWrite.push({ event_type: 'lane_completed', payload: { lane } });
+      } else if (!completion[lane].complete && nextLaneState.status === 'done') {
+        nextLaneState.status = 'in_progress';
+        delete nextLaneState.completed_at;
+        eventsToWrite.push({ event_type: 'lane_reopened', payload: { lane } });
       }
 
       // Persist events after we've written to DB (below)

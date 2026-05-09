@@ -54,7 +54,7 @@ const STATE_COLORS = {
 
 const colorOf = (s) => STATE_COLORS[s] || 'text-slate-700';
 
-export default function StateMachineControl({ itemDef, currentState, blockers, onSaveAndAdvance, onForceState, busy, dirty }) {
+export default function StateMachineControl({ itemDef, currentState, blockers, onSaveAndAdvance, onForceState, onReopen, isDone, busy, dirty }) {
   const states     = itemDef.states || [];
   const currentIdx = states.indexOf(currentState);
   const nextState  = blockers?.next_state;
@@ -115,28 +115,32 @@ export default function StateMachineControl({ itemDef, currentState, blockers, o
         })}
       </ol>
 
-      {/* Save & advance button — always clickable. Server figures out whether
-          to advance or just save fields. If the user has unfilled required
-          fields, fields persist and state stays put — no error. */}
       <div className="flex items-center gap-2 flex-wrap">
-        <button
-          onClick={onSaveAndAdvance}
-          disabled={busy}
-          className="px-3 py-1.5 rounded font-medium text-sm bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white"
-          title={blocked ? 'Saves your changes; state stays put until blockers resolved' : 'Saves and advances to the highest reachable state'}>
-          {busy
-            ? 'Saving…'
-            : nextState && nextState !== currentState && !blocked
-              ? <>💾 Save &amp; advance to <strong className="ml-1">{nextState.replace(/_/g, ' ')}</strong> →</>
-              : '💾 Save changes'}
-        </button>
-        {dirty && <span className="text-xs text-amber-700">unsaved changes</span>}
-        {!dirty && nextState && nextState !== currentState && !blocked && currentState !== itemDef.doneState && (
+        {isDone ? (
+          <button
+            onClick={onReopen}
+            disabled={busy}
+            className="px-3 py-1.5 rounded font-medium text-sm border border-green-400 hover:bg-white text-green-800 disabled:opacity-50">
+            {busy ? '…' : '🔓 Reopen to edit'}
+          </button>
+        ) : (
+          <button
+            onClick={onSaveAndAdvance}
+            disabled={busy}
+            className="px-3 py-1.5 rounded font-medium text-sm bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white"
+            title={blocked ? 'Saves your changes; state stays put until blockers resolved' : 'Saves and advances to the highest reachable state'}>
+            {busy
+              ? 'Saving…'
+              : nextState && nextState !== currentState && !blocked
+                ? <>💾 Save &amp; advance to <strong className="ml-1">{nextState.replace(/_/g, ' ')}</strong> →</>
+                : '💾 Save changes'}
+          </button>
+        )}
+        {!isDone && dirty && <span className="text-xs text-amber-700">unsaved changes</span>}
+        {!isDone && !dirty && nextState && nextState !== currentState && !blocked && (
           <span className="text-xs text-emerald-700">ready to advance</span>
         )}
-        {currentState === itemDef.doneState && (
-          <span className="text-xs text-green-700 font-medium">✓ task complete</span>
-        )}
+        {isDone && <span className="text-xs text-green-700 font-medium">✓ task complete · fields locked</span>}
       </div>
     </div>
   );
