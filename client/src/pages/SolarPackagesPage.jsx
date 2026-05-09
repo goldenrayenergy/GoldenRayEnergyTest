@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { publicApi } from '../services/api';
 import {
   Sun, Battery, Zap, ArrowRight, Phone, Shield, Award, Clock, CheckCircle, Loader2,
-  Sparkles, Package as PackageIcon, MapPin, ChevronDown, X, Building2,
+  Sparkles, Package as PackageIcon, MapPin, ChevronDown, X, Building2, TrendingUp,
 } from 'lucide-react';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import SolarChatbot from '../components/website/SolarChatbot';
@@ -82,8 +82,8 @@ export default function SolarPackagesPage() {
           <Link to="/" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Home</Link>
           <Link to="/shop" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Shop</Link>
           <Link to="/finance" className="hidden md:block text-xs font-semibold text-white/80 hover:text-amber-300 transition">Finance</Link>
-          <Link to="/#calculator" className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1">
-            <Phone size={12} /> Free Quote
+          <Link to="/bill-analysis" className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold flex items-center gap-1">
+            <TrendingUp size={12} /> See My Savings
           </Link>
         </div>
       </nav>
@@ -99,7 +99,7 @@ export default function SolarPackagesPage() {
           </h1>
           <p className="text-sm md:text-base text-gray-500 max-w-2xl mx-auto mb-6">
             Pre-designed systems for NZ residential customers — Tier-1 components, fixed pricing, no surprises.
-            Not sure which? <Link to="/#calculator" className="text-amber-600 underline">Use our calculator</Link>.
+            Not sure which? <Link to="/bill-analysis" className="text-amber-600 underline">Upload your bills for a 25-year savings projection</Link>.
           </p>
         </div>
       </section>
@@ -154,7 +154,7 @@ export default function SolarPackagesPage() {
                 {bucket ? (
                   <button onClick={clearBucket} className="text-amber-600 underline">View all packages</button>
                 ) : (
-                  <Link to="/#calculator" className="text-amber-600 underline">Request a custom quote</Link>
+                  <Link to="/bill-analysis" className="text-amber-600 underline">Get a custom analysis from your bills</Link>
                 )}
               </div>
             )
@@ -220,11 +220,14 @@ export default function SolarPackagesPage() {
       {/* Final CTA */}
       <section className="py-12 px-6 md:px-10 bg-gradient-to-r from-amber-500 to-orange-500 text-white">
         <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2">Ready for a quote?</h2>
-          <p className="text-xs md:text-sm text-amber-50 mb-5">Free in-home consultation, no pressure. We'll email a tailored proposal within one business day.</p>
-          <Link to="/#calculator" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-amber-600 font-bold text-sm hover:bg-amber-50 transition">
-            Get my free quote <ArrowRight size={14} />
+          <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2">See your real 25-year savings</h2>
+          <p className="text-xs md:text-sm text-amber-50 mb-5">Upload 1–12 months of bills. See do-nothing cost vs solar over 25 years. The most honest quote in NZ.</p>
+          <Link to="/bill-analysis" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-amber-600 font-bold text-sm hover:bg-amber-50 transition">
+            See my 25-year savings <ArrowRight size={14} />
           </Link>
+          <div className="mt-3 text-[11px] text-amber-100">
+            No bills handy? <Link to="/#callback" className="underline hover:text-white">Quick callback form</Link>.
+          </div>
         </div>
       </section>
 
@@ -325,9 +328,9 @@ function CommercialEmptyState({ onClear }) {
         We design and price each one from scratch — no off-the-shelf packages.
       </p>
       <div className="flex flex-wrap justify-center gap-3">
-        <Link to="/#calculator"
+        <Link to="/bill-analysis"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-sm font-bold">
-          Request a commercial quote <ArrowRight size={14} />
+          Start with bill analysis <ArrowRight size={14} />
         </Link>
         <button onClick={onClear}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50">

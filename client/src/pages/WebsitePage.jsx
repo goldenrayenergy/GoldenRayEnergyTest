@@ -183,10 +183,14 @@ export default function WebsitePage() {
             From single-family homes to large commercial sites, <span className="font-semibold text-orange-600 dark:text-orange-400">GoldenRay Energy NZ</span> designs, installs, and supports solar systems built around your usage — with transparent pricing and detailed proposals.
           </p>
           <div className="flex gap-2 md:gap-3 flex-wrap">
-            <a href="#calculator"><Button size="lg" icon={Zap}>Get Free Quote</Button></a>
+            <Link to="/bill-analysis"><Button size="lg" icon={TrendingUp}>See My 25-Year Savings</Button></Link>
             <Button onClick={() => setFinanceModalOpen(true)} variant="success" size="lg" icon={DollarSign}>$0 Upfront Finance</Button>
             <a href="tel:+6421839356"><Button variant="dark" size="lg" icon={Phone}>+64 21 839 356</Button></a>
           </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-3 max-w-md">
+            Upload 1–12 months of power bills, see your real 25-year cost vs solar — the most honest quote in NZ.{' '}
+            <a href="#callback" className="text-amber-600 hover:underline">Or request a callback if you don't have bills handy.</a>
+          </p>
           <div className="grid grid-cols-2 md:flex md:gap-12 gap-4 mt-10 md:mt-12">
             {[
               { n: '1,800+', l: 'Installations', c: 'from-amber-500 to-orange-500' },
@@ -299,18 +303,22 @@ export default function WebsitePage() {
           ))}
         </div>
         <div className="text-center mt-12">
-          <a href="#calculator"><Button size="lg" icon={Zap}>Start Your Free Quote</Button></a>
+          <Link to="/bill-analysis"><Button size="lg" icon={TrendingUp}>See Your 25-Year Savings</Button></Link>
         </div>
       </section>
 
-      {/* ═══════ SOLAR CALCULATOR ═══════ */}
+      {/* ═══════ QUICK CALLBACK FORM (formerly the calculator — now the secondary path) ═══════ */}
       <section id="calculator" className="py-24 px-6 md:px-16 bg-mesh-calc relative overflow-hidden transition-colors">
+        <a id="callback" className="block -mt-20 pt-20" />
         <div className="absolute top-20 -right-32 w-80 h-80 rounded-full bg-gradient-to-br from-amber-300 to-orange-400 opacity-20 blur-3xl animate-blob" />
         <div className="absolute bottom-20 -left-32 w-80 h-80 rounded-full bg-gradient-to-br from-blue-400 to-emerald-400 opacity-20 blur-3xl animate-blob-delay-2" />
         <div className="text-center mb-12 relative">
-          <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-warm">FREE SOLAR CALCULATOR</div>
-          <h2 className="text-2xl md:text-3xl font-extrabold font-display">Get Your <span className="text-gradient-warm">Instant Solar Quote</span></h2>
-          <p className="text-sm text-gray-500 mt-2 max-w-lg mx-auto">Enter your electricity details to see system size, projected savings, and payback period — and download a detailed PDF quote.</p>
+          <div className="text-xs font-extrabold tracking-widest mb-2 text-gradient-warm">PREFER A CALLBACK?</div>
+          <h2 className="text-2xl md:text-3xl font-extrabold font-display">Don't have bills handy? <span className="text-gradient-warm">We'll come to you.</span></h2>
+          <p className="text-sm text-gray-500 mt-2 max-w-xl mx-auto">
+            Quick form, no bills required. We'll call within 24h to discuss your options. For tighter numbers,{' '}
+            <Link to="/bill-analysis" className="text-amber-600 font-semibold hover:underline">upload your bills for a 25-year savings projection</Link>.
+          </p>
         </div>
 
         <div className={submitState.done ? 'max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-5 gap-6' : 'max-w-2xl mx-auto'}>

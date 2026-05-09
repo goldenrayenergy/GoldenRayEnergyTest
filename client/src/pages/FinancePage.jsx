@@ -121,7 +121,7 @@ export default function FinancePage() {
           <Link to="/" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition flex items-center gap-1.5">
             <ArrowLeft size={13} /> Home
           </Link>
-          <a href="/#calculator" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition hidden md:inline">Calculator</a>
+          <Link to="/bill-analysis" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition hidden md:inline">Bill Analysis</Link>
           <a href="/#case-studies" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition hidden md:inline">Case Studies</a>
           <a href="/#contact" className="text-sm text-gray-200 hover:text-amber-300 font-medium transition hidden md:inline">Contact</a>
           <Link to="/login"><Button size="sm" icon={Lock}>Employee Login</Button></Link>
@@ -423,7 +423,7 @@ export default function FinancePage() {
             Speak with a GoldenRay Energy NZ advisor. We will identify the right finance option for your home and walk you through every step of the process — no pressure, no obligation.
           </p>
           <div className="flex gap-3 justify-center flex-wrap">
-            <a href="/#calculator"><Button size="lg" icon={Zap}>Get a free quote</Button></a>
+            <Link to="/bill-analysis"><Button size="lg" icon={Zap}>See My 25-Year Savings</Button></Link>
             <a href="/#contact"><Button variant="dark" size="lg" icon={Phone}>Contact us</Button></a>
           </div>
         </div>

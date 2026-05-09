@@ -27,7 +27,10 @@ export default function SolarPackageDetailPage() {
   }, [slug]);
 
   // Compose the URL params used to prefill the website Get-Free-Quote form
-  const quoteUrl = pkg ? `/?package=${pkg.slug}#calculator` : '/#calculator';
+  // Bill analysis is the primary path; package context isn't needed (engine
+  // recommends a system from real usage). Customers without bills can fall
+  // through to the callback form via the secondary link inside /bill-analysis.
+  const quoteUrl = '/bill-analysis';
 
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-amber-500" size={32} /></div>;
   if (error)   return (
@@ -111,7 +114,7 @@ export default function SolarPackageDetailPage() {
 
                 <Link to={quoteUrl}
                   className="block w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm text-center hover:from-amber-400 hover:to-orange-400 transition flex items-center justify-center gap-2">
-                  Get my free quote <ArrowRight size={14} />
+                  See my 25-year savings <ArrowRight size={14} />
                 </Link>
                 <div className="text-[9px] text-gray-400 text-center mt-2">No pressure · in-home consultation · email proposal in 1 day</div>
               </div>
