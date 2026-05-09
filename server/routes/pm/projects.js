@@ -293,15 +293,18 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
       }
 
       // ── Determine target state ──
-      // Three modes (in priority order):
-      //   target_state: 'X'      → explicit transition
-      //   auto_advance: true     → walk forward as far as fields + gates allow
+      // Three modes (priority order):
+      //   target_state: 'X'      → explicit single-hop transition (validate from→to)
+      //   auto_advance: true     → walk forward via computeReachableState
+      //                            (each hop already validated; skip post-walk validation)
       //   value: true|false      → legacy: jump to doneState or one-before
       let resolvedTarget = undefined;
+      let advancedViaAutoWalk = false;
       if (target_state !== undefined && target_state !== fromState) {
         resolvedTarget = target_state;
       } else if (req.body.auto_advance === true) {
         resolvedTarget = computeReachableState(def, fromState, meta.fields || {}, current.lane_status, lane, item);
+        advancedViaAutoWalk = true;
       } else if (value === true) {
         resolvedTarget = def.doneState;
       } else if (value === false && nextLaneState.items[item] === true) {
@@ -310,20 +313,23 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
       }
 
       if (resolvedTarget !== undefined && resolvedTarget !== fromState) {
-        // Validate fields required at target state
-        const v = validateTransition(def, fromState, resolvedTarget, meta.fields || {});
-        if (!v.ok) {
-          return res.status(409).json({ error: v.error, missing_fields: v.missing_fields });
-        }
-        // Validate cross-lane gates for target state
-        const gate = checkCrossLaneGate(current.lane_status, lane, item, resolvedTarget);
-        if (!gate.ok) {
-          await writeEvent(req, { project_id: id, lane, item_key: item, event_type: 'gate_check_blocked', payload: gate });
-          return res.status(409).json({
-            error: 'Cross-lane gate not satisfied',
-            blockers: gate.blockers,
-            target_state: resolvedTarget,
-          });
+        // For explicit target_state and legacy `value` modes, validate the
+        // single-hop transition and the cross-lane gate. For auto_advance,
+        // computeReachableState already validated each step — skip.
+        if (!advancedViaAutoWalk) {
+          const v = validateTransition(def, fromState, resolvedTarget, meta.fields || {});
+          if (!v.ok) {
+            return res.status(409).json({ error: v.error, missing_fields: v.missing_fields });
+          }
+          const gate = checkCrossLaneGate(current.lane_status, lane, item, resolvedTarget);
+          if (!gate.ok) {
+            await writeEvent(req, { project_id: id, lane, item_key: item, event_type: 'gate_check_blocked', payload: gate });
+            return res.status(409).json({
+              error: 'Cross-lane gate not satisfied',
+              blockers: gate.blockers,
+              target_state: resolvedTarget,
+            });
+          }
         }
 
         meta.state = resolvedTarget;
