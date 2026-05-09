@@ -702,6 +702,8 @@ export const CROSS_LANE_GATES = {
   // Stage-2 proposal cannot begin drafting until the site survey is complete.
   'sales.proposal_final.drafted': [
     { lane: 'engineering', item: 'site_survey' },
+    // Stage 2 has locked pricing — needs BOM finalised (Phase A.2.6).
+    { lane: 'engineering', item: 'bom_locked' },
   ],
   // Distributor application needs declared system size from the design.
   'compliance.distributor_app.drafting': [
@@ -710,6 +712,20 @@ export const CROSS_LANE_GATES = {
   // BOM cannot be locked until system design is approved.
   'engineering.bom_locked.locked': [
     { lane: 'engineering', item: 'system_design' },
+  ],
+
+  // ── Phase A.2.6: additional Sales↔Engineering / Operations↔Compliance gates ──
+  // Don't dispatch a designer to a tire-kicker — qualify the lead first.
+  'engineering.site_survey.scheduled': [
+    { lane: 'sales', item: 'qualification_call' },
+  ],
+  // Contract value comes from the BOM. No BOM, no contract.
+  'sales.contract_signed.drafted': [
+    { lane: 'engineering', item: 'bom_locked' },
+  ],
+  // Distributor will only inspect after commissioning is complete.
+  'compliance.distributor_inspect.scheduled': [
+    { lane: 'operations', item: 'commissioning_form' },
   ],
 };
 
