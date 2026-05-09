@@ -160,57 +160,100 @@ function daysBetween(startStr, endStr) {
 
 const MERCURY = {
   name: 'Mercury',
-  match: (t) => /\bmercury\b/i.test(t) && /\b(NZ Energy|Mercury NZ|electricity)\b/i.test(t),
+  match: (t) => /\bmercury\b/i.test(t) && /\b(NZ Energy|Mercury NZ|mercury\.co\.nz|electricity)\b/i.test(t),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Mercury', plan_name: null };
 
-    // Plan name — Mercury uses "Homeline Standard" / "Homeline Saver" / similar
-    const planMatch = t.match(/Homeline\s+(Standard|Saver|Plus)|Anytime|EveryDay/i);
+    // ── Scope to the ELECTRICITY section only ──
+    // Mercury bills can be electricity-only OR dual-fuel (electricity + gas).
+    // The bill analyser is solar-focused — we only care about the electricity
+    // portion. Slice the text from the "ELECTRICITY" header to the next
+    // major section header (GAS / If you have any concerns / PAYMENT SLIP).
+    let elec = t;
+    const elecStart = t.search(/^\s*ELECTRICITY\s*$|⚡?\s*ELECTRICITY\b/im);
+    if (elecStart >= 0) {
+      const remaining = t.slice(elecStart);
+      // Cut at the next section: GAS section, PAYMENT SLIP, or "If you have"
+      const cutMatch = remaining.slice(15).search(/^\s*GAS\s*$|⚡?\s*GAS\b|PAYMENT\s+SLIP|If you have|^\s*ELECTRICITY\s+TOTAL\b/im);
+      // Include the ELECTRICITY TOTAL line (don't cut before it) but cut at GAS
+      const gasMatch = remaining.search(/(?:^|\n)\s*GAS\b(?!\s+TOTAL)/m);
+      if (gasMatch >= 0) {
+        elec = remaining.slice(0, gasMatch);
+      } else {
+        elec = remaining;
+      }
+    }
+
+    // Plan name — Mercury uses "Homeline Standard" / "Homeline Saver" / "Anytime" / "Off-Peak"
+    const planMatch = elec.match(/Homeline\s+(Standard|Saver|Plus)|\bAnytime\b|\bEveryDay\b|\bOff[- ]?Peak\b/i);
     if (planMatch) out.plan_name = planMatch[0];
 
-    // Billing period — Mercury format: "Period: 1 Jul 2025 to 31 Jul 2025"
-    const periodMatch = pickFirst(t, [
-      /(?:Billing\s+)?[Pp]eriod[:\s]+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+(?:to|–|-)\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
-      /From\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+(?:to|–|-)\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
+    // Billing period — handles "Billing period 7 Nov 2025 - 4 Dec 2025" and variants
+    const periodMatch = pickFirst(elec, [
+      /(?:Billing\s+)?[Pp]eriod[:\s]+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*(?:to|–|—|-)\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
+      /From\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*(?:to|–|—|-)\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
     ]);
     if (periodMatch) {
       out.period_start = parseDate(periodMatch[1]);
       out.period_end   = parseDate(periodMatch[2]);
     } else errors.push({ field: 'period', reason: 'Could not find billing period dates' });
 
-    // Total kWh
-    const kwhMatch = pickFirst(t, [
+    // ── kWh total — Mercury 2025 format ──
+    // Patterns in order of preference:
+    //   "Anytime 273 kWh x 20.96 cents $57.22"  — usage line for variable rate
+    //   "Variable Usage Charge 550 kWh x ..."   — alt label
+    //   "Total kWh used: 273"                    — older format
+    //   "Units used 273 kWh"                     — meter table line
+    //   "(actual) 273 kWh"                       — meter table fallback
+    const kwhMatch = pickFirst(elec, [
+      /(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+([\d,]+(?:\.\d+)?)\s*kWh\s+x/i,
       /Total\s+kWh\s+used[:\s]+([\d,]+(?:\.\d+)?)/i,
-      /(?:Energy|Electricity)\s+(?:charges?|usage)[\s\S]{0,200}?([\d,]+(?:\.\d+)?)\s*kWh/i,
+      /Units\s+used[\s\S]{0,40}?([\d,]+(?:\.\d+)?)\s*kWh/i,
+      /\(actual\)[\s\S]{0,80}?([\d,]+(?:\.\d+)?)\s*kWh\s*$/im,
       /([\d,]+(?:\.\d+)?)\s*kWh\s*@/,
     ]);
     if (kwhMatch) out.kwh_total = parseNum(kwhMatch[1]);
-    else errors.push({ field: 'kwh_total', reason: 'kWh total not found' });
+    else errors.push({ field: 'kwh_total', reason: 'kWh total not found in electricity section' });
 
-    // Total bill amount
-    const totalMatch = pickFirst(t, [
+    // ── Per-fuel ELECTRICITY total — preferred over combined "Amount due" ──
+    // Mercury 2025 format: "ELECTRICITY TOTAL $153.38"
+    // Falls back to combined total for older/single-fuel formats.
+    const totalMatch = pickFirst(elec, [
+      /ELECTRICITY\s+TOTAL[:\s]+\$?([\d,]+\.\d{2})/i,
       /Total\s+amount\s+due[:\s]+\$?([\d,]+\.\d{2})/i,
       /Amount\s+due[:\s]+\$?([\d,]+\.\d{2})/i,
       /Total\s+this\s+bill[:\s]+\$?([\d,]+\.\d{2})/i,
     ]);
     if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
-    else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
+    else errors.push({ field: 'total_nzd', reason: 'Electricity total not found' });
 
-    // Fixed charge
-    const fixedMatch = t.match(/(?:Daily\s+(?:fixed\s+)?charge|Fixed\s+charge)[\s\S]{0,200}?\$?([\d,]+\.\d{2})/i);
+    // ── Fixed charge — must capture $-amount, not the per-day rate (cents) ──
+    // 2025 format: "Daily Fixed Charge 28 Days x 272.00 cents $76.16"
+    // Capture the LAST $-amount on the line (the dollar total), not the rate.
+    const fixedMatch = elec.match(/(?:Daily\s+(?:fixed\s+)?charge|Fixed\s+charge)[\s\S]{0,120}?\$([\d,]+\.\d{2})\s*$/im)
+                    || elec.match(/(?:Daily\s+(?:fixed\s+)?charge|Fixed\s+charge)[\s\S]{0,200}?\$([\d,]+\.\d{2})(?!\s*cents)/i);
     if (fixedMatch) out.fixed_charge_nzd = parseNum(fixedMatch[1]);
 
-    // Variable charge — sum of energy charges
-    const variableMatch = t.match(/(?:Energy|Variable|Electricity)\s+charges?[\s\S]{0,200}?\$?([\d,]+\.\d{2})/i);
+    // ── Variable charge — the per-kWh dollar total on the usage line ──
+    // 2025 format: "Anytime 273 kWh x 20.96 cents $57.22"
+    const variableMatch = pickFirst(elec, [
+      /(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+[\d,]+(?:\.\d+)?\s*kWh\s+x\s+[\d.]+\s*cents\s+\$([\d,]+\.\d{2})/i,
+      /(?:Energy|Variable|Electricity)\s+charges?[\s\S]{0,200}?\$([\d,]+\.\d{2})/i,
+    ]);
     if (variableMatch) out.variable_charge_nzd = parseNum(variableMatch[1]);
 
-    // GST
-    const gstMatch = t.match(/GST(?:\s*\(15%\))?[\s\S]{0,80}?\$?([\d,]+\.\d{2})/i);
+    // ── Subtotal (excl GST) — Mercury 2025 includes a "Subtotal" line ──
+    const subtotalMatch = elec.match(/Subtotal[:\s]+\$?([\d,]+\.\d{2})/i);
+    if (subtotalMatch) out.subtotal_nzd = parseNum(subtotalMatch[1]);
+
+    // ── GST — scoped to electricity section, not the combined header GST ──
+    const gstMatch = elec.match(/^\s*GST[\s\S]{0,80}?\$([\d,]+\.\d{2})/im)
+                  || elec.match(/GST(?:\s*\(15%\))?[\s\S]{0,80}?\$([\d,]+\.\d{2})/i);
     if (gstMatch) out.gst_nzd = parseNum(gstMatch[1]);
 
-    // Export (solar feed-in, if applicable)
-    const exportMatch = t.match(/(?:Solar\s+(?:export|buyback|feed)|Export)\s+(?:credit|payment)?[\s\S]{0,150}?([\d,]+(?:\.\d+)?)\s*kWh.*?\$?([\d,]+\.\d{2})/i);
+    // ── Solar export (if customer already has solar) ──
+    const exportMatch = elec.match(/(?:Solar\s+(?:export|buyback|feed)|Export)\s+(?:credit|payment)?[\s\S]{0,150}?([\d,]+(?:\.\d+)?)\s*kWh.*?\$?([\d,]+\.\d{2})/i);
     if (exportMatch) {
       out.kwh_exported = parseNum(exportMatch[1]);
       out.export_credit_nzd = parseNum(exportMatch[2]);
