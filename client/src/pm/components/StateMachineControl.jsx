@@ -115,24 +115,25 @@ export default function StateMachineControl({ itemDef, currentState, blockers, o
         })}
       </ol>
 
-      {/* Save & advance button */}
+      {/* Save & advance button — always clickable. Server figures out whether
+          to advance or just save fields. If the user has unfilled required
+          fields, fields persist and state stays put — no error. */}
       <div className="flex items-center gap-2 flex-wrap">
         <button
           onClick={onSaveAndAdvance}
           disabled={busy}
-          className={`px-3 py-1.5 rounded font-medium text-sm ${
-            blocked
-              ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-              : 'bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50'
-          }`}
-          title={blocked ? 'Resolve blockers below first' : 'Save fields and advance to the highest reachable state'}>
+          className="px-3 py-1.5 rounded font-medium text-sm bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white"
+          title={blocked ? 'Saves your changes; state stays put until blockers resolved' : 'Saves and advances to the highest reachable state'}>
           {busy
             ? 'Saving…'
-            : (nextState && nextState !== currentState
-                ? <>💾 Save &amp; advance to <strong className="ml-1">{nextState.replace(/_/g, ' ')}</strong> →</>
-                : '💾 Save')}
+            : nextState && nextState !== currentState && !blocked
+              ? <>💾 Save &amp; advance to <strong className="ml-1">{nextState.replace(/_/g, ' ')}</strong> →</>
+              : '💾 Save changes'}
         </button>
         {dirty && <span className="text-xs text-amber-700">unsaved changes</span>}
+        {!dirty && nextState && nextState !== currentState && !blocked && currentState !== itemDef.doneState && (
+          <span className="text-xs text-emerald-700">ready to advance</span>
+        )}
         {currentState === itemDef.doneState && (
           <span className="text-xs text-green-700 font-medium">✓ task complete</span>
         )}

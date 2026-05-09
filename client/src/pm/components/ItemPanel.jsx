@@ -14,6 +14,8 @@ import CommissioningForm  from './specialized/CommissioningForm';
 import CocForm            from './specialized/CocForm';
 import ProposalForm       from './specialized/ProposalForm';
 
+import { liveMissingForNextState } from '../utils/stateMachine';
+
 // ────────────────────────────────────────────────────────────────────────────
 // ItemPanel — Phase A.2.3 with single-button Save & advance.
 //
@@ -38,6 +40,18 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
   // ── Field state lives here, not in form components ──
   const [pendingFields, setPendingFields] = useState(meta.fields || {});
   const [dirty, setDirty]       = useState(false);
+
+  // Live blockers — recomputed on every keystroke from pendingFields. Cross-lane
+  // blockers come from the server (those don't change as you type). Field
+  // requirements are computed locally so feedback is instant.
+  const live           = liveMissingForNextState(itemDef, currentState, pendingFields);
+  const liveBlockers   = {
+    current_state:        currentState,
+    next_state:           live.next_state,
+    missing_fields:       live.missing_fields,
+    cross_lane_blockers:  blockers?.cross_lane_blockers || [],
+    upstream_suggestions: blockers?.upstream_suggestions || {},
+  };
   const [busy, setBusy]         = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError]       = useState('');
@@ -189,7 +203,7 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
             <StateMachineControl
               itemDef={itemDef}
               currentState={currentState}
-              blockers={blockers}
+              blockers={liveBlockers}
               busy={busy}
               dirty={dirty}
               onSaveAndAdvance={saveAndAdvance}
@@ -197,7 +211,7 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
             />
 
             {/* What's blocking the next state */}
-            <BlockersBanner blockers={blockers} onJumpToTask={onJumpToTask} />
+            <BlockersBanner blockers={liveBlockers} onJumpToTask={onJumpToTask} />
 
             {/* Work surface — generic or specialized */}
             <section>
@@ -211,8 +225,8 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
                 values={pendingFields}
                 currentState={currentState}
                 artifacts={artifacts}
-                missingFields={blockers?.missing_fields || []}
-                upstreamSuggestions={blockers?.upstream_suggestions || {}}
+                missingFields={liveBlockers.missing_fields}
+                upstreamSuggestions={liveBlockers.upstream_suggestions}
                 onChange={setFields}
                 onProjectChanged={onChange}
               />
