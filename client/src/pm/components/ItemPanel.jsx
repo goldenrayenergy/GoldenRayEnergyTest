@@ -36,7 +36,11 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
   const meta     = laneState?.item_meta?.[itemKey] || {};
   const checked  = laneState?.items?.[itemKey] === true;
   const itemArts = (artifacts || []).filter(a => a.swim_lane === lane && a.metadata?.item_key === itemKey);
-  const currentState = meta.state || itemDef.initialState || 'not_started';
+  // Derive state: prefer explicit meta.state (set by the state-machine on
+  // any transition). Fall back to doneState if items[key]=true (legacy/seed
+  // data that pre-dates the state machine), else initialState.
+  const currentState = meta.state
+    || (checked ? itemDef.doneState : (itemDef.initialState || 'not_started'));
 
   // ── Field state lives here, not in form components ──
   const [pendingFields, setPendingFields] = useState(meta.fields || {});

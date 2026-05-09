@@ -277,7 +277,10 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
       if (!def) return res.status(400).json({ error: `Unknown item '${item}' in lane '${lane}'` });
 
       const meta = { ...(nextLaneState.item_meta[item] || {}) };
-      const fromState = meta.state || def.initialState || 'not_started';
+      // Same legacy fallback: if items[item]=true but state is missing, treat
+      // as already in doneState so reopen / re-edit transitions work.
+      const fromState = meta.state
+        || (nextLaneState.items[item] === true ? def.doneState : (def.initialState || 'not_started'));
       const eventsToWrite = [];
 
       // Patch structured fields

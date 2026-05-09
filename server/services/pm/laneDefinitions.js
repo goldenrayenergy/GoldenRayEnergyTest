@@ -890,10 +890,13 @@ export function computeAllTaskBlockers(projectType, laneStatus) {
   const out = {};
   for (const lane of LANES) {
     out[lane] = {};
-    const stored = laneStatus?.[lane]?.item_meta || {};
+    const stored      = laneStatus?.[lane]?.item_meta || {};
+    const itemsBools  = laneStatus?.[lane]?.items || {};
     for (const def of checklist[lane]) {
-      const meta = stored[def.key] || {};
-      const state = meta.state || def.initialState || 'not_started';
+      const meta  = stored[def.key] || {};
+      // Fallback for legacy data: if items[key]=true but no meta.state, treat as doneState.
+      const state = meta.state
+        || (itemsBools[def.key] === true ? def.doneState : (def.initialState || 'not_started'));
       out[lane][def.key] = {
         ...getNextStateBlockers(def, state, meta.fields || {}, laneStatus, lane, def.key),
         upstream_suggestions: getUpstreamSuggestions(lane, def.key, meta.fields || {}, laneStatus),
