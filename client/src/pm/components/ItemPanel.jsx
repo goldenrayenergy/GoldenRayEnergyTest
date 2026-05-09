@@ -10,6 +10,7 @@ import BlockersBanner from './BlockersBanner';
 
 import SiteSurveyForm     from './specialized/SiteSurveyForm';
 import SystemDesignForm   from './specialized/SystemDesignForm';
+import BomLockedForm      from './specialized/BomLockedForm';
 import CommissioningForm  from './specialized/CommissioningForm';
 import CocForm            from './specialized/CocForm';
 import ProposalForm       from './specialized/ProposalForm';
@@ -318,6 +319,8 @@ function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, cu
       return <SiteSurveyForm projectId={projectId} lane={lane} itemKey={itemKey} {...common} artifacts={artifacts} onProjectChanged={onProjectChanged} />;
     case 'system_design':
       return <SystemDesignForm {...common} />;
+    case 'bom_locked':
+      return <BomLockedForm {...common} />;
     case 'commissioning_form':
       return <CommissioningForm projectId={projectId} lane={lane} itemKey={itemKey} {...common} onProjectChanged={onProjectChanged} />;
     case 'coc':

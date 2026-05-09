@@ -219,16 +219,19 @@ const BASE = {
     },
     {
       key: 'bom_locked', label: 'Bill of Materials locked', gateKeeper: true,
-      artifactType: null, ux: 'generic',
+      artifactType: null, ux: 'bom_locked',
       states: ['not_started','drafting','locked','done'],
       initialState: 'not_started', doneState: 'done',
       transitions: linear('not_started','drafting','locked','done'),
       schema: { fields: [
-        { key: 'line_count',  type: 'number', label: 'BOM line count' },
-        { key: 'bom_total',   type: 'currency',label: 'BOM total ($NZ)' },
-        { key: 'locked_at',   type: 'datetime',label: 'Locked at', requiredAt: 'locked' },
-        { key: 'locked_by',   type: 'text',   label: 'Locked by', requiredAt: 'locked' },
+        { key: 'locked_at',   type: 'datetime',label: 'Locked at',   requiredAt: 'locked' },
+        { key: 'locked_by',   type: 'text',    label: 'Locked by',   requiredAt: 'locked' },
+        { key: 'lock_notes',  type: 'textarea',label: 'Lock notes' },
       ]},
+      // BOM line items and totals are stored in fields.bom (JSONB), populated
+      // by the BOM picker in the specialized UX. line_count and bom_total_nzd
+      // are computed from fields.bom on save and cached for the upstream
+      // suggestion map.
     },
   ],
 
