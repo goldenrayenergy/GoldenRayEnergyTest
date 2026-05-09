@@ -750,6 +750,75 @@ export function computeHealth(laneStatus) {
   return 'green';
 }
 
+// ── Upstream field map ─────────────────────────────────────────────────────
+// Reduces typing for engineers/installers by pre-populating downstream
+// task fields from already-captured upstream values. Keys are the
+// downstream task ('lane.item') and values map downstream-field-key →
+// 'lane.item.field_key' source path.
+//
+// The frontend uses this to suggest values; users always click to confirm
+// (so they can override if reality differs from the plan — e.g., installer
+// substituted a different panel model).
+
+export const UPSTREAM_FIELD_MAP = {
+  'sales.proposal_initial': {
+    // Stage 1 cost range can hint from bill analysis later (Phase B)
+  },
+  'sales.proposal_final': {
+    locked_cost:     'engineering.bom_locked.bom_total_nzd',
+  },
+  'sales.contract_signed': {
+    contract_value:  'engineering.bom_locked.bom_total_nzd',
+  },
+  'compliance.distributor_app': {
+    declared_kw:     'engineering.system_design.system_size_kw',
+  },
+  'operations.materials_ordered': {
+    order_value:     'engineering.bom_locked.bom_total_nzd',
+  },
+  'operations.commissioning_form': {
+    inverter_make:   'engineering.system_design.inverter_make',
+    inverter_model:  'engineering.system_design.inverter_model',
+    battery_make:    'engineering.system_design.battery_make',
+    battery_model:   'engineering.system_design.battery_model',
+    panel_make:      'engineering.system_design.panel_make',
+    panel_model:     'engineering.system_design.panel_model',
+  },
+  'finance.deposit_paid': {
+    invoice_amount:  'sales.contract_signed.contract_value',  // typically deposit % of contract; user adjusts
+  },
+  'finance.final_paid': {
+    invoice_amount:  'sales.contract_signed.contract_value',
+  },
+};
+
+/**
+ * Resolve upstream field suggestions for a task. Returns an object of
+ * { field_key: { value, source_lane, source_item, source_field } } for
+ * fields where the upstream task has a value AND the downstream task does
+ * not yet have one.
+ */
+export function getUpstreamSuggestions(lane, item, downstreamFields, laneStatus) {
+  const map = UPSTREAM_FIELD_MAP[`${lane}.${item}`];
+  if (!map) return {};
+  const suggestions = {};
+  for (const [downKey, sourcePath] of Object.entries(map)) {
+    const [srcLane, srcItem, srcField] = sourcePath.split('.');
+    const srcValue = laneStatus?.[srcLane]?.item_meta?.[srcItem]?.fields?.[srcField];
+    const downValue = downstreamFields?.[downKey];
+    if (srcValue !== undefined && srcValue !== null && srcValue !== '' &&
+        (downValue === undefined || downValue === null || downValue === '')) {
+      suggestions[downKey] = {
+        value: srcValue,
+        source_lane: srcLane,
+        source_item: srcItem,
+        source_field: srcField,
+      };
+    }
+  }
+  return suggestions;
+}
+
 // ── Auto-advance helpers ───────────────────────────────────────────────────
 
 /**
@@ -822,7 +891,10 @@ export function computeAllTaskBlockers(projectType, laneStatus) {
     for (const def of checklist[lane]) {
       const meta = stored[def.key] || {};
       const state = meta.state || def.initialState || 'not_started';
-      out[lane][def.key] = getNextStateBlockers(def, state, meta.fields || {}, laneStatus, lane, def.key);
+      out[lane][def.key] = {
+        ...getNextStateBlockers(def, state, meta.fields || {}, laneStatus, lane, def.key),
+        upstream_suggestions: getUpstreamSuggestions(lane, def.key, meta.fields || {}, laneStatus),
+      };
     }
   }
   return out;

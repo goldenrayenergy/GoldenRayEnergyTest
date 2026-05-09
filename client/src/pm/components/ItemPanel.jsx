@@ -211,6 +211,8 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
                 values={pendingFields}
                 currentState={currentState}
                 artifacts={artifacts}
+                missingFields={blockers?.missing_fields || []}
+                upstreamSuggestions={blockers?.upstream_suggestions || {}}
                 onChange={setFields}
                 onProjectChanged={onChange}
               />
@@ -294,22 +296,23 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
   );
 }
 
-// ── Resolves specialized component by ux marker; all are controlled (values + onChange). ──
-function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, onChange, onProjectChanged }) {
+// ── Resolves specialized component by ux marker; all controlled. ──
+function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, missingFields, upstreamSuggestions, onChange, onProjectChanged }) {
+  const common = { schema, values, currentState, missingFields, upstreamSuggestions, onChange };
   switch (ux) {
     case 'site_survey':
-      return <SiteSurveyForm projectId={projectId} lane={lane} itemKey={itemKey} schema={schema} values={values} currentState={currentState} artifacts={artifacts} onChange={onChange} onProjectChanged={onProjectChanged} />;
+      return <SiteSurveyForm projectId={projectId} lane={lane} itemKey={itemKey} {...common} artifacts={artifacts} onProjectChanged={onProjectChanged} />;
     case 'system_design':
-      return <SystemDesignForm schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+      return <SystemDesignForm {...common} />;
     case 'commissioning_form':
-      return <CommissioningForm projectId={projectId} lane={lane} itemKey={itemKey} schema={schema} values={values} currentState={currentState} onChange={onChange} onProjectChanged={onProjectChanged} />;
+      return <CommissioningForm projectId={projectId} lane={lane} itemKey={itemKey} {...common} onProjectChanged={onProjectChanged} />;
     case 'coc':
-      return <CocForm schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+      return <CocForm {...common} />;
     case 'initial_proposal':
-      return <ProposalForm stage="initial" schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+      return <ProposalForm stage="initial" {...common} />;
     case 'final_proposal':
-      return <ProposalForm stage="final" schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+      return <ProposalForm stage="final" {...common} />;
     default:
-      return <TaskFormGeneric schema={schema} values={values} currentState={currentState} onChange={onChange} />;
+      return <TaskFormGeneric {...common} />;
   }
 }

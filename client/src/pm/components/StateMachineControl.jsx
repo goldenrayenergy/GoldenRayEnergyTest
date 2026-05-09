@@ -126,14 +126,13 @@ export default function StateMachineControl({ itemDef, currentState, blockers, o
               : 'bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50'
           }`}
           title={blocked ? 'Resolve blockers below first' : 'Save fields and advance to the highest reachable state'}>
-          {busy ? 'Saving…' : '💾 Save & advance'}
+          {busy
+            ? 'Saving…'
+            : (nextState && nextState !== currentState
+                ? <>💾 Save &amp; advance to <strong className="ml-1">{nextState.replace(/_/g, ' ')}</strong> →</>
+                : '💾 Save')}
         </button>
         {dirty && <span className="text-xs text-amber-700">unsaved changes</span>}
-        {nextState && nextState !== currentState && (
-          <span className="text-xs text-slate-500">
-            next: <strong>{nextState.replace(/_/g, ' ')}</strong>
-          </span>
-        )}
         {currentState === itemDef.doneState && (
           <span className="text-xs text-green-700 font-medium">✓ task complete</span>
         )}

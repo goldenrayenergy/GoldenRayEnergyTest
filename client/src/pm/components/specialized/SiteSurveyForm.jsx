@@ -30,7 +30,7 @@ const REQUIRED_SHOTS = [
   { key: 'internet',      label: 'Internet router',        hint: 'Confirms Wi-Fi available for monitoring' },
 ];
 
-export default function SiteSurveyForm({ projectId, lane, itemKey, schema, values, currentState, artifacts, onChange, onProjectChanged }) {
+export default function SiteSurveyForm({ projectId, lane, itemKey, schema, values, currentState, artifacts, missingFields, upstreamSuggestions, onChange, onProjectChanged }) {
   const itemArts = (artifacts || []).filter(a => a.swim_lane === lane && a.metadata?.item_key === itemKey);
 
   // Group artifacts by shot_type
@@ -73,6 +73,8 @@ export default function SiteSurveyForm({ projectId, lane, itemKey, schema, value
           schema={schema}
           values={values}
           currentState={currentState}
+          missingFields={missingFields}
+          upstreamSuggestions={upstreamSuggestions}
           onChange={onChange}
         />
       </div>

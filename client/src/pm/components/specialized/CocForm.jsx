@@ -2,7 +2,7 @@ import TaskFormGeneric from '../TaskFormGeneric';
 
 const EWRB_RE = /^E[0-9]{4,7}$/i;
 
-export default function CocForm({ schema, values, currentState, onChange }) {
+export default function CocForm({ schema, values, currentState, missingFields, upstreamSuggestions, onChange }) {
   const v = values || {};
   const ewrb = v.certifier_license || '';
   const ewrbValid = !ewrb || EWRB_RE.test(ewrb);
@@ -37,6 +37,8 @@ export default function CocForm({ schema, values, currentState, onChange }) {
         schema={schema}
         values={values}
         currentState={currentState}
+        missingFields={missingFields}
+        upstreamSuggestions={upstreamSuggestions}
         onChange={onChange}
       />
     </div>

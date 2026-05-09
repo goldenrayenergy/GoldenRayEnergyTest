@@ -8,7 +8,7 @@ import { fmt$ } from '../../../utils/format';
 // bubbles up via onChange. The single Save & advance button at the top of
 // ItemPanel persists everything in one go.
 
-export default function SystemDesignForm({ schema, values, currentState, onChange }) {
+export default function SystemDesignForm({ schema, values, currentState, missingFields, upstreamSuggestions, onChange }) {
   const [products, setProducts]    = useState([]);
   const [productSearch, setSearch] = useState('');
   const v   = values || {};
@@ -126,7 +126,14 @@ export default function SystemDesignForm({ schema, values, currentState, onChang
 
       <div className="border-t border-slate-200 pt-4">
         <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Design specs</h4>
-        <TaskFormGeneric schema={schema} values={values} currentState={currentState} onChange={onChange} />
+        <TaskFormGeneric
+          schema={schema}
+          values={values}
+          currentState={currentState}
+          missingFields={missingFields}
+          upstreamSuggestions={upstreamSuggestions}
+          onChange={onChange}
+        />
       </div>
     </div>
   );

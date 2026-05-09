@@ -82,8 +82,9 @@ const SECTION_BG = {
   indigo: 'bg-indigo-50 border-indigo-200',
 };
 
-export default function CommissioningForm({ projectId, lane, itemKey, schema, values, currentState, onChange, onProjectChanged }) {
+export default function CommissioningForm({ projectId, lane, itemKey, schema, values, currentState, missingFields, upstreamSuggestions = {}, onChange, onProjectChanged }) {
   const local = values || {};
+  const missingKeys = new Set((missingFields || []).map(m => m.key));
   const [saving, setSaving]   = useState(false);
   const [error, setError]     = useState('');
   const [vppOk, setVppOk]     = useState(null);
@@ -151,7 +152,9 @@ export default function CommissioningForm({ projectId, lane, itemKey, schema, va
             <div className="grid grid-cols-2 gap-2">
               {sec.fields.map(f => {
                 const v = local[f.key];
-                const baseInput = "w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white";
+                const isMissing = missingKeys.has(f.key);
+                const upstream  = upstreamSuggestions[f.key];
+                const baseInput = `w-full px-2 py-1.5 border rounded text-sm bg-white ${isMissing ? 'border-amber-400 ring-1 ring-amber-200' : 'border-slate-300'}`;
                 let control;
                 if (f.type === 'boolean') {
                   control = (
@@ -179,10 +182,19 @@ export default function CommissioningForm({ projectId, lane, itemKey, schema, va
                 }
                 return (
                   <div key={f.key}>
-                    <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
+                    <label className={`block text-[11px] mb-0.5 ${isMissing ? 'font-bold text-amber-900' : 'font-medium text-slate-700'}`}>
                       {f.label}{f.required && <span className="text-amber-600 ml-0.5">*</span>}
+                      {isMissing && <span className="ml-1.5 text-[9px] bg-amber-200 text-amber-900 px-1 rounded">needed now</span>}
                     </label>
                     {control}
+                    {upstream && (
+                      <button
+                        type="button"
+                        onClick={() => set(f.key, upstream.value)}
+                        className="text-[10px] text-amber-700 hover:underline mt-0.5">
+                        ↪ Use <strong>{String(upstream.value).slice(0, 30)}</strong> from {upstream.source_item}
+                      </button>
+                    )}
                   </div>
                 );
               })}
