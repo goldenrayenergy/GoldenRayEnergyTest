@@ -110,6 +110,93 @@ const SAMPLES = [
     text: '',
   },
   {
+    label: 'Pulse Energy bill (Standard User, dual meter)',
+    expectRetailer: 'Pulse Energy',
+    text: `
+      Pulse Energy Alliance LP
+      pulseenergy.co.nz
+
+      Pulse Energy Standard User Counties Power
+
+      For the period from 27/12/2025 to 24/01/2026
+
+      Meter Number: CN28726/1
+      kWh this period: 995
+      Meter Number: CN28726/2
+      kWh this period: 375
+
+      Energy
+      Energy Rate - Uncontrolled Electricity   995 kWh   20.917   $208.12
+      Energy Rate - Controlled Electricity     375 kWh   20.917   $78.44
+      Total Energy   $286.56
+
+      Delivery
+      Metering                       29 Days   38.000   $11.02
+      Network Services Fixed Daily   29 Days  200.000   $58.00
+      Retailer Services              29 Days   82.000   $23.78
+      Total Delivery   $204.87
+
+      GST at 15%   $73.72
+      Current Electricity Charges (including GST)   $565.15
+    `,
+  },
+  {
+    label: 'Contact Energy TOU + free off-peak (with broadband bundle)',
+    expectRetailer: 'Contact Energy',
+    text: `
+      contact.co.nz/myaccount
+
+      Your bill for 31 Dec 2025 to 30 Jan 2026
+
+      Summary
+      Fixed daily charges $91.45
+      Variable charges $63.58
+      Broadband charges $95.65
+      GST $37.60
+      Total amount due $288.28
+
+      Energy used by 58B Commodore Drive
+      Fixed daily charges
+      Daily Charge 31 days @ 2.950 dollars per day $91.45
+      Fixed charges total $91.45
+
+      Variable charges
+      Charged: Midnight - 9pm 220 kWh @ 28.900 cents per kWh $63.58
+      Free: 9pm - Midnight 69 kWh @ 0.000 cent per kWh $0.00
+      Variable charges total $63.58
+
+      Broadband charges
+      Max Fibre $95.65
+    `,
+  },
+  {
+    label: 'Genesis Capricorn commercial (post-discount total)',
+    expectRetailer: 'Genesis',
+    text: `
+      Genesis Energy Limited
+      genesisenergy.co.nz
+
+      Plus Standard plan
+
+      Covers the 30 day period from 02 Feb 2026 to 3 Mar 2026
+
+      A Current Electricity Usage
+      Plus Standard Anytime 251409757 35564 37023 Actual 1459 @ 23.5200 c/unit 343.16
+      Plus Standard Daily Fixed 30 days @ 267.4900 c/day 80.25
+      Sub Total 423.41
+      GST 63.51
+      Total Charges 486.92
+      eBill Discount Elec 1% 4.86cr
+      Dual Fuel Discount Elec 5% 24.35cr
+      Fixed Term Discount Elec 3% 14.60cr
+      Total Discounts 9% (incl GST of 5.71 cr) 43.81 cr
+      TOTAL CURRENT ELECTRICITY CHARGES (INCL GST & DISCOUNTS) $ 443.11
+
+      I Current Bottled Gas Usage
+      Monthly Gas Bottle Rental 2 6.00 $/bottle 12.00
+    `,
+  },
+  {
     label: 'Mercury bill with TOU and solar export',
     expectRetailer: 'Mercury',
     text: `

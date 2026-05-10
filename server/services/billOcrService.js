@@ -275,10 +275,26 @@ const GENESIS = {
     const errors = [];
     const out = { retailer: 'Genesis', plan_name: null };
 
-    const planMatch = t.match(/(Go\s+(?:Standard|Saver|Free)|Energy\s+IQ|Pulse|EnergyDuo)/i);
+    // ── Scope to the electricity *usage detail* (page 2), not the page-1 summary ──
+    // Genesis bills can be electricity-only, dual-fuel (electricity + bottled
+    // gas), or commercial (with Capricorn). The page-1 summary just shows the
+    // total. Per-kWh rates and the days-fixed line live in the
+    // "Current Electricity Usage" detail table on page 2 — anchor there.
+    let elec = t;
+    const elecStart = t.search(/Current\s+Electricity\s+Usage/i);
+    if (elecStart >= 0) {
+      const remaining = t.slice(elecStart);
+      const cutMatch = remaining.slice(20).search(/Current\s+Bottled\s+Gas|Current\s+Gas\s+Usage|For\s+Bottled\s+Gas\s+supply|For\s+Gas\s+supply/i);
+      elec = cutMatch >= 0 ? remaining.slice(0, cutMatch + 20) : remaining;
+    }
+
+    // Plan — Genesis uses "Plus Standard", "Plus Saver", "Energy IQ", "Go Standard"
+    const planMatch = t.match(/(Plus\s+(?:Standard|Saver|Free)|Go\s+(?:Standard|Saver|Free)|Energy\s+IQ|EnergyDuo)/i);
     if (planMatch) out.plan_name = planMatch[0];
 
+    // Billing period — "Covers the 30 day period from 02 Feb 2026 to 3 Mar 2026"
     const periodMatch = pickFirst(t, [
+      /Covers\s+the\s+\d+\s+day\s+period\s+from\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i,
       /(?:Reading|Billing)\s+period[:\s]+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+(?:to|–|-)\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
       /(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+(?:to|–|-)\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
     ]);
@@ -287,7 +303,12 @@ const GENESIS = {
       out.period_end   = parseDate(periodMatch[2]);
     } else errors.push({ field: 'period', reason: 'Could not find billing period dates' });
 
-    const kwhMatch = pickFirst(t, [
+    // ── kWh total ──
+    // Commercial line: "Plus Standard Anytime 251409757 35564 37023 Actual 1459 @ 23.5200 c/unit 343.16"
+    // Older format: "Total electricity used: 1,750 kWh"
+    const kwhMatch = pickFirst(elec, [
+      /Actual\s+([\d,]+(?:\.\d+)?)\s+@\s+[\d.]+\s*c\/unit/i,
+      /([\d,]+(?:\.\d+)?)\s+@\s+[\d.]+\s*c\/unit/,
       /Total\s+(?:electricity|energy)\s+used[:\s]+([\d,]+(?:\.\d+)?)\s*kWh/i,
       /([\d,]+(?:\.\d+)?)\s*kWh\s+used/i,
       /([\d,]+(?:\.\d+)?)\s*kWh\s*@/,
@@ -295,20 +316,39 @@ const GENESIS = {
     if (kwhMatch) out.kwh_total = parseNum(kwhMatch[1]);
     else errors.push({ field: 'kwh_total', reason: 'kWh total not found' });
 
-    const totalMatch = pickFirst(t, [
-      /Total\s+this\s+bill[:\s]+\$?([\d,]+\.\d{2})/i,
-      /Amount\s+(?:due|payable)[:\s]+\$?([\d,]+\.\d{2})/i,
+    // ── Total — prefer post-discount total, fall back to pre-discount ──
+    // Genesis dollar amounts often have a space: "$ 443.11"
+    const totalMatch = pickFirst(elec, [
+      /TOTAL\s+CURRENT\s+ELECTRICITY\s+CHARGES[^$]*\$\s*([\d,]+\.\d{2})/i,
+      /Current\s+Electricity\s+Charges[\s\S]{0,40}?\$\s*([\d,]+\.\d{2})/i,
+      /Total\s+Charges[\s\S]{0,40}?\$?\s*([\d,]+\.\d{2})/i,
+      /Total\s+this\s+bill[:\s]+\$?\s*([\d,]+\.\d{2})/i,
+      /Amount\s+(?:due|payable)[:\s]+\$?\s*([\d,]+\.\d{2})/i,
     ]);
     if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
     else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
 
-    const fixedMatch = t.match(/Daily\s+charge[\s\S]{0,200}?\$?([\d,]+\.\d{2})/i);
+    // ── Fixed charge — "30 days @ 267.4900 c/day 80.25" ──
+    const fixedMatch = pickFirst(elec, [
+      /\d+\s+days\s+@\s+[\d.]+\s*c\/day\s+([\d,]+\.\d{2})/i,
+      /Daily\s+(?:Fixed\s+|Charge)[\s\S]{0,200}?\$?\s*([\d,]+\.\d{2})/i,
+    ]);
     if (fixedMatch) out.fixed_charge_nzd = parseNum(fixedMatch[1]);
 
-    const variableMatch = t.match(/(?:Anytime|Variable|Energy)\s+rate[\s\S]{0,200}?\$?([\d,]+\.\d{2})/i);
+    // ── Variable charge — "1459 @ 23.5200 c/unit 343.16" ──
+    const variableMatch = pickFirst(elec, [
+      /[\d,]+\s+@\s+[\d.]+\s*c\/unit\s+([\d,]+\.\d{2})/i,
+      /(?:Anytime|Variable|Energy)\s+rate[\s\S]{0,200}?\$?\s*([\d,]+\.\d{2})/i,
+    ]);
     if (variableMatch) out.variable_charge_nzd = parseNum(variableMatch[1]);
 
-    const gstMatch = t.match(/GST(?:\s*\(15%\))?[\s\S]{0,80}?\$?([\d,]+\.\d{2})/i);
+    // ── Subtotal (excl GST) ──
+    const subtotalMatch = elec.match(/Sub\s*Total[\s\S]{0,40}?([\d,]+\.\d{2})/i);
+    if (subtotalMatch) out.subtotal_nzd = parseNum(subtotalMatch[1]);
+
+    // ── GST — scoped to electricity section ──
+    const gstMatch = elec.match(/^\s*GST[\s\S]{0,40}?([\d,]+\.\d{2})/im)
+                  || elec.match(/GST(?:\s*\(15%\))?[\s\S]{0,40}?\$?\s*([\d,]+\.\d{2})/i);
     if (gstMatch) out.gst_nzd = parseNum(gstMatch[1]);
 
     if (out.period_start && out.period_end) {
@@ -322,39 +362,106 @@ const GENESIS = {
 
 const CONTACT = {
   name: 'Contact Energy',
-  match: (t) => /\bcontact\s+energy\b/i.test(t) || /\bcontactenergy\.co\.nz\b/i.test(t),
+  match: (t) => /\bcontact\s+energy\b/i.test(t) || /\bcontactenergy\.co\.nz\b/i.test(t) || /\bcontact\.co\.nz\b/i.test(t),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Contact Energy', plan_name: null };
 
-    const planMatch = t.match(/(Standard\s+User|Free\s+Power\s+Saturdays|Bach\s+Plan|Anytime)/i);
+    // ── Scope to the electricity *detail* section (page 2), not the page-1 summary ──
+    // Contact bills can bundle broadband, mobile, and gas. The page-1 summary
+    // shows aggregate amounts only — the per-kWh detail with rates lives in
+    // the "Energy used by …" section on page 2. We slice from there to the
+    // next non-electricity detail section so the parser sees only the electricity
+    // line items it can compute against.
+    let elec = t;
+    const elecStart = t.search(/Energy\s+used\s+by/i);
+    if (elecStart >= 0) {
+      const remaining = t.slice(elecStart);
+      // Cut at the *next* "Broadband charges" / "Gas charges" header (skip
+      // the slice's own start) so we keep the electricity detail.
+      const cutMatch = remaining.slice(20).search(/Broadband\s+charges|Mobile\s+charges|Gas\s+charges|Bottled\s+gas/i);
+      elec = cutMatch >= 0 ? remaining.slice(0, cutMatch + 20) : remaining;
+    }
+
+    // Plan — Contact uses "Good Nights", "Standard User", "Anytime", "Free Power"
+    const planMatch = t.match(/(Good\s+Nights|Standard\s+User|Free\s+Power\s+Saturdays|Bach\s+Plan|Anytime)/i);
     if (planMatch) out.plan_name = planMatch[0];
 
-    const periodMatch = t.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*(?:to|–|-)\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})/);
+    // Billing period — "Your bill for 31 Dec 2025 to 30 Jan 2026"
+    const periodMatch = pickFirst(t, [
+      /Your\s+bill\s+for\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i,
+      /from\s+(\d{1,2}\s+[A-Za-z]+\s+\d{2,4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{2,4})/i,
+      /(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*(?:to|–|-)\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
+    ]);
     if (periodMatch) {
       out.period_start = parseDate(periodMatch[1]);
       out.period_end   = parseDate(periodMatch[2]);
     } else errors.push({ field: 'period', reason: 'Could not find billing period dates' });
 
-    const kwhMatch = pickFirst(t, [
-      /([\d,]+(?:\.\d+)?)\s*kWh\s+used/i,
-      /Total\s+used[:\s]+([\d,]+(?:\.\d+)?)\s*kWh/i,
-      /Anytime[\s\S]{0,200}?([\d,]+(?:\.\d+)?)\s*kWh/i,
-    ]);
-    if (kwhMatch) out.kwh_total = parseNum(kwhMatch[1]);
-    else errors.push({ field: 'kwh_total', reason: 'kWh total not found' });
+    // ── kWh total — sum all "<n> kWh @ <rate> cents per kWh" lines ──
+    // TOU plans split usage into multiple windows (e.g. "Charged: Midnight - 9pm 220 kWh @ 28.900",
+    // "Free: 9pm - Midnight 69 kWh @ 0.000"). We sum *all* kWh lines so total
+    // consumption is captured even when some windows are free.
+    const kwhLines = elec.match(/([\d,]+(?:\.\d+)?)\s*kWh\s+@\s+[\d.]+\s*cent/gi);
+    if (kwhLines && kwhLines.length) {
+      let total = 0;
+      let peak = null;
+      let off = null;
+      for (const line of kwhLines) {
+        const m = line.match(/([\d,]+(?:\.\d+)?)\s*kWh\s+@\s+([\d.]+)\s*cent/i);
+        if (!m) continue;
+        const kwh = parseNum(m[1]);
+        const rate = parseNum(m[2]);
+        total += kwh;
+        if (rate === 0) off = (off || 0) + kwh;
+        else            peak = (peak || 0) + kwh;
+      }
+      out.kwh_total = total;
+      if (peak != null) out.kwh_peak = peak;
+      if (off  != null) out.kwh_off_peak = off;
+    } else {
+      const fallback = pickFirst(elec, [
+        /([\d,]+(?:\.\d+)?)\s*kWh\s+used/i,
+        /Total\s+used[:\s]+([\d,]+(?:\.\d+)?)\s*kWh/i,
+        /Anytime[\s\S]{0,200}?([\d,]+(?:\.\d+)?)\s*kWh/i,
+      ]);
+      if (fallback) out.kwh_total = parseNum(fallback[1]);
+      else errors.push({ field: 'kwh_total', reason: 'kWh total not found in electricity section' });
+    }
 
-    const totalMatch = pickFirst(t, [
-      /Total\s+(?:to\s+pay|this\s+bill|amount)[:\s]+\$?([\d,]+\.\d{2})/i,
+    // ── Fixed charge — "Fixed daily charges $91.45" or "Fixed charges total $91.45" ──
+    const fixedMatch = pickFirst(t, [
+      /Fixed\s+charges\s+total[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
+      /Fixed\s+daily\s+charges[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
+      /(?:Daily|Fixed)\s+(?:charge|fee)[\s\S]{0,200}?\$([\d,]+\.\d{2})/i,
     ]);
-    if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
-    else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
-
-    const fixedMatch = t.match(/(?:Daily|Fixed)\s+(?:charge|fee)[\s\S]{0,200}?\$?([\d,]+\.\d{2})/i);
     if (fixedMatch) out.fixed_charge_nzd = parseNum(fixedMatch[1]);
 
-    const gstMatch = t.match(/GST(?:\s*\(15%\))?[\s\S]{0,80}?\$?([\d,]+\.\d{2})/i);
-    if (gstMatch) out.gst_nzd = parseNum(gstMatch[1]);
+    // ── Variable charge — "Variable charges $63.58" or "Variable charges total $63.58" ──
+    const variableMatch = pickFirst(t, [
+      /Variable\s+charges\s+total[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
+      /Variable\s+charges[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
+    ]);
+    if (variableMatch) out.variable_charge_nzd = parseNum(variableMatch[1]);
+
+    // ── Total — prefer pure-electricity computed total over combined bill total ──
+    // Contact's "Total amount due" includes broadband. If we have fixed + variable,
+    // compute the true electricity total (incl GST). Otherwise fall back to bill total.
+    if (out.fixed_charge_nzd != null && out.variable_charge_nzd != null) {
+      const exclGst = out.fixed_charge_nzd + out.variable_charge_nzd;
+      out.total_nzd = +(exclGst * 1.15).toFixed(2);
+      out.gst_nzd   = +(exclGst * 0.15).toFixed(2);
+    } else {
+      const totalMatch = pickFirst(t, [
+        /Total\s+amount\s+due[^$]{0,80}\$([\d,]+\.\d{2})/i,
+        /Total\s+(?:to\s+pay|this\s+bill|current\s+charges)[:\s]+\$?([\d,]+\.\d{2})/i,
+      ]);
+      if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
+      else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
+
+      const gstMatch = t.match(/^\s*GST[\s\S]{0,40}?\$([\d,]+\.\d{2})/im);
+      if (gstMatch) out.gst_nzd = parseNum(gstMatch[1]);
+    }
 
     if (out.period_start && out.period_end) {
       out.days_in_period = daysBetween(out.period_start, out.period_end);
@@ -391,6 +498,85 @@ const MERIDIAN = {
     const totalMatch = t.match(/(?:Total|Amount)\s+(?:due|to\s+pay|this\s+bill)[:\s]+\$?([\d,]+\.\d{2})/i);
     if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
     else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
+
+    if (out.period_start && out.period_end) {
+      out.days_in_period = daysBetween(out.period_start, out.period_end);
+    }
+
+    out.parse_errors = errors;
+    return out;
+  },
+};
+
+const PULSE = {
+  name: 'Pulse Energy',
+  // Pulse PDFs sometimes mangle "Pulse Energy" into "0ULSE %NERGY" due to font
+  // encoding, so match on multiple fingerprints — domain, plain name, and
+  // a couple of unambiguous strings that survive the encoding issue.
+  match: (t) => /\bpulse\s+energy\b/i.test(t)
+             || /\bpulseenergy\.co\.nz\b/i.test(t)
+             || /pulse\s+energy\s+alliance/i.test(t),
+  parse: (t) => {
+    const errors = [];
+    const out = { retailer: 'Pulse Energy', plan_name: null };
+
+    // Plan — "Pulse Energy Standard User Counties Power", "Standard User",
+    // "Low User", "Freedom Plan"
+    const planMatch = t.match(/Pulse\s+Energy\s+(Standard\s+User|Low\s+User|Freedom)[^\n]{0,40}/i)
+                  || t.match(/Your\s+Freedom\s+Plan/i)
+                  || t.match(/(Standard\s+User|Low\s+User|Freedom\s+Plan)/i);
+    if (planMatch) out.plan_name = planMatch[0].trim();
+
+    // Billing period — "For the period from 24/03/2026 to 25/04/2026"
+    const periodMatch = pickFirst(t, [
+      /For\s+the\s+period\s+from\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+to\s+(\d{1,2}\/\d{1,2}\/\d{4})/i,
+      /period\s+from\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+to\s+(\d{1,2}\/\d{1,2}\/\d{4})/i,
+      /(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+(?:to|–|-)\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
+    ]);
+    if (periodMatch) {
+      out.period_start = parseDate(periodMatch[1]);
+      out.period_end   = parseDate(periodMatch[2]);
+    } else errors.push({ field: 'period', reason: 'Could not find billing period dates' });
+
+    // ── kWh total — sum "kWh this period: NNN" lines (one per meter) ──
+    // Pulse can have controlled + uncontrolled meters; both contribute.
+    const kwhPeriodLines = [...t.matchAll(/kWh\s+this\s+period[:\s]+([\d,]+(?:\.\d+)?)/gi)];
+    if (kwhPeriodLines.length) {
+      out.kwh_total = kwhPeriodLines.reduce((sum, m) => sum + parseNum(m[1]), 0);
+    } else {
+      // Fall back to summing "Energy Rate - … N kWh" lines in the detailed invoice
+      const energyLines = [...t.matchAll(/Energy\s+Rate\s+-[^\n]*?([\d,]+(?:\.\d+)?)\s*kWh/gi)];
+      if (energyLines.length) {
+        out.kwh_total = energyLines.reduce((sum, m) => sum + parseNum(m[1]), 0);
+      } else errors.push({ field: 'kwh_total', reason: 'kWh total not found' });
+    }
+
+    // ── Variable charge — "Total Energy $437.75" ──
+    const variableMatch = t.match(/Total\s+Energy[\s\S]{0,40}?\$([\d,]+\.\d{2})/i);
+    if (variableMatch) out.variable_charge_nzd = parseNum(variableMatch[1]);
+
+    // ── Fixed charge — sum of "X Days @ Y.000 $Z.ZZ" lines for fixed-daily items ──
+    // Pulse's "Total Delivery" mixes per-kWh network charges with per-day fixed
+    // charges, so we sum the unambiguous daily lines instead.
+    const dayLines = [...t.matchAll(/(Metering|Network\s+Services\s+Fixed\s+Daily|Retailer\s+Services|Daily\s+Fixed\s+Charge)[\s\S]{0,30}?\d+\s+Days[\s\S]{0,40}?\$([\d,]+\.\d{2})/gi)];
+    if (dayLines.length) {
+      out.fixed_charge_nzd = +dayLines.reduce((sum, m) => sum + parseNum(m[2]), 0).toFixed(2);
+    }
+
+    // ── Total — "Current Electricity Charges (including GST) $1,335.39" ──
+    // Prefer this over "Total Current Amount Due" which can include opening balance.
+    const totalMatch = pickFirst(t, [
+      /Current\s+Electricity\s+Charges\s+\(including\s+GST\)[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
+      /Electricity\s+Charges[\s\S]{0,20}?\$([\d,]+\.\d{2})/i,
+      /Total\s+Current\s+Amount\s+Due[\s\S]{0,80}?\$([\d,]+\.\d{2})/i,
+    ]);
+    if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
+    else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
+
+    // ── GST — "GST at 15% $108.82" ──
+    const gstMatch = t.match(/GST\s+at\s+15%[\s\S]{0,40}?\$([\d,]+\.\d{2})/i)
+                  || t.match(/GST(?:\s*\(15%\))?[\s\S]{0,40}?\$([\d,]+\.\d{2})/i);
+    if (gstMatch) out.gst_nzd = parseNum(gstMatch[1]);
 
     if (out.period_start && out.period_end) {
       out.days_in_period = daysBetween(out.period_start, out.period_end);
@@ -469,7 +655,7 @@ const GENERIC = {
   },
 };
 
-const RETAILERS = [MERCURY, GENESIS, CONTACT, MERIDIAN, POWERSHOP];
+const RETAILERS = [MERCURY, GENESIS, CONTACT, PULSE, MERIDIAN, POWERSHOP];
 
 // Also export a function to parse from already-extracted text (useful for
 // testing without real PDFs and for systems where text extraction happens
