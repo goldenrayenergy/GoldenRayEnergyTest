@@ -40,13 +40,28 @@ export default function GetQuotePage() {
   const [files, setFiles] = useState([]);
   const filesInputRef = useRef(null);
 
-  // Door B (estimate) state
+  // Door B (estimate) state — covers all customer types; each branch reads
+  // a different subset. Single state keeps back-navigation values preserved.
   const [estimate, setEstimate] = useState({
-    monthly_spend: 250,
-    retailer:      'mercury',
-    postcode:      '',
-    household:     '3-4',
+    // Residential
+    monthly_spend:    250,
+    retailer:         'mercury',
+    postcode:         '',
+    household:        '3-4',
     battery_interest: 'considering',
+    // Off-grid
+    daily_kwh:        20,
+    autonomy_days:    '2',
+    generator_backup: 'no',
+    off_grid_reason:  'no_grid_available',
+    critical_loads:   '',
+    // Commercial
+    business_type:    '',
+    operating_hours:  'business-hours',
+    site_area_sqm:    '',
+    // PPA
+    contract_length:  '15',
+    decision_makers:  'owner-only',
   });
 
   // Step 3 — analysis result (filled by Step3Projection on mount)
@@ -65,20 +80,22 @@ export default function GetQuotePage() {
   const [submitState, setSubmitState] = useState({ loading: false, error: '', done: false });
 
   // ── Navigation ──
+  // Step 3 (projection) is only shown for RESIDENTIAL customers on bills or
+  // estimate intent. Non-residential customers and callback intent skip it.
+  // Reasoning: the 25-yr scenario engine is residential-calibrated; running
+  // it for commercial / off-grid / PPA produces misleading numbers, and
+  // those customers need a site visit anyway.
+  const skipProjection = intent === 'callback' || customerType !== 'residential';
+
   function next() {
     if (step === 1) return setStep(2);
-    if (step === 2) {
-      // Callback branch skips Step 3 (no projection) → straight to Step 4
-      if (intent === 'callback') return setStep(4);
-      return setStep(3);
-    }
+    if (step === 2) return setStep(skipProjection ? 4 : 3);
     if (step === 3) return setStep(4);
     if (step === 4) return setStep(5);
   }
 
   function back() {
-    if (step === 4 && intent === 'callback') return setStep(2);
-    if (step === 4) return setStep(3);
+    if (step === 4) return setStep(skipProjection ? 2 : 3);
     if (step === 3) return setStep(2);
     if (step === 2) return setStep(1);
   }
@@ -99,10 +116,17 @@ export default function GetQuotePage() {
   const removeFile = (i) => setFiles(prev => prev.filter((_, idx) => idx !== i));
 
   // ── Step 2 readiness — controls whether Next is enabled ──
+  // Type-specific minimums for the estimate branch (the bills + callback
+  // branches don't depend on customer type).
   const step2Ready = (() => {
     if (intent === 'bills')    return files.length > 0;
-    if (intent === 'estimate') return estimate.monthly_spend >= 50;
-    if (intent === 'callback') return true;   // no inputs needed
+    if (intent === 'callback') return true;
+    if (intent !== 'estimate') return false;
+
+    if (customerType === 'residential') return estimate.monthly_spend >= 50;
+    if (customerType === 'off-grid')    return estimate.daily_kwh >= 1 && estimate.off_grid_reason;
+    if (customerType === 'commercial')  return estimate.business_type && estimate.monthly_spend >= 50;
+    if (customerType === 'ppa')         return estimate.business_type && estimate.monthly_spend >= 50 && estimate.contract_length;
     return false;
   })();
 
@@ -126,9 +150,12 @@ export default function GetQuotePage() {
           {/* Step content */}
           {step === 1 && <Step1IntentPicker customerType={customerType} setCustomerType={setCustomerType} onPick={pickIntent} />}
           {step === 2 && (
-            <Step2Container subtitle={subtitleForIntent(intent)} onBack={back} onNext={next} nextEnabled={step2Ready}>
+            <Step2Container
+              subtitle={subtitleForIntent(intent, customerType)}
+              onBack={back} onNext={next} nextEnabled={step2Ready}
+              skipProjection={skipProjection}>
               {intent === 'bills'    && <BillsBranch files={files} onDrop={onDropFiles} removeFile={removeFile} inputRef={filesInputRef} />}
-              {intent === 'estimate' && <EstimateBranch estimate={estimate} setEstimate={setEstimate} />}
+              {intent === 'estimate' && <EstimateBranch customerType={customerType} estimate={estimate} setEstimate={setEstimate} />}
               {intent === 'callback' && <CallbackBranch onContinue={next} />}
             </Step2Container>
           )}
@@ -186,7 +213,7 @@ export default function GetQuotePage() {
               }}
             />
           )}
-          {step === 5 && <Step5Confirmation contact={contact} />}
+          {step === 5 && <Step5Confirmation contact={contact} customerType={customerType} />}
 
         </div>
       </main>
@@ -196,9 +223,19 @@ export default function GetQuotePage() {
   );
 }
 
-function subtitleForIntent(intent) {
-  if (intent === 'bills')    return 'Upload your power bills below — drop up to 12.';
-  if (intent === 'estimate') return 'A few quick questions about your power use.';
+function subtitleForIntent(intent, customerType) {
+  if (intent === 'bills') {
+    if (customerType === 'commercial') return "Upload your commercial usage bills (any month — we'll scope from your data).";
+    if (customerType === 'off-grid')   return "Upload existing electricity bills if you have them — gives us your load profile.";
+    if (customerType === 'ppa')        return "Upload your bills so we can scope the PPA against your real consumption.";
+    return 'Upload your power bills below — drop up to 12.';
+  }
+  if (intent === 'estimate') {
+    if (customerType === 'commercial') return 'Tell us about your business and site.';
+    if (customerType === 'off-grid')   return 'Tell us about your site and power needs.';
+    if (customerType === 'ppa')        return 'Tell us about your business and PPA preferences.';
+    return 'A few quick questions about your power use.';
+  }
   if (intent === 'callback') return "We'll skip straight to your contact details.";
   return '';
 }
@@ -352,7 +389,7 @@ function IntentCard({ color, accuracy, icon, title, desc, onClick }) {
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 2 — Shell that wraps the active branch
 // ════════════════════════════════════════════════════════════════════════════
-function Step2Container({ subtitle, onBack, onNext, nextEnabled, children }) {
+function Step2Container({ subtitle, onBack, onNext, nextEnabled, skipProjection, children }) {
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
       <div className="text-center mb-6">
@@ -369,7 +406,7 @@ function Step2Container({ subtitle, onBack, onNext, nextEnabled, children }) {
           onClick={onNext}
           disabled={!nextEnabled}
           className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2">
-          Next <ArrowRight size={14} />
+          {skipProjection ? 'Continue to contact details' : 'See my savings'} <ArrowRight size={14} />
         </button>
       </div>
     </div>
@@ -434,9 +471,16 @@ function BillsBranch({ files, onDrop, removeFile, inputRef }) {
   );
 }
 
-// ── Branch: Estimate form ──
-function EstimateBranch({ estimate, setEstimate }) {
+// ── Branch: Estimate form — branches by customer type ──
+function EstimateBranch({ customerType, estimate, setEstimate }) {
   const update = (k, v) => setEstimate(s => ({ ...s, [k]: v }));
+  if (customerType === 'off-grid')   return <EstimateOffGrid   estimate={estimate} update={update} />;
+  if (customerType === 'commercial') return <EstimateCommercial estimate={estimate} update={update} />;
+  if (customerType === 'ppa')        return <EstimatePPA        estimate={estimate} update={update} />;
+  return <EstimateResidential estimate={estimate} update={update} />;
+}
+
+function EstimateResidential({ estimate, update }) {
   return (
     <div className="space-y-5">
       <div>
@@ -451,50 +495,178 @@ function EstimateBranch({ estimate, setEstimate }) {
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 block">Your retailer</label>
-          <select value={estimate.retailer} onChange={e => update('retailer', e.target.value)}
-            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200">
-            <option value="mercury">Mercury</option>
-            <option value="genesis">Genesis</option>
-            <option value="contact">Contact</option>
-            <option value="meridian">Meridian</option>
-            <option value="electric_kiwi">Electric Kiwi</option>
-            <option value="powershop">Powershop</option>
-            <option value="frank">Frank Energy</option>
-            <option value="flick">Flick Electric</option>
-          </select>
-        </div>
-        <div>
-          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 block">Postcode</label>
-          <input type="text" inputMode="numeric" maxLength={4} placeholder="1010"
-            value={estimate.postcode} onChange={e => update('postcode', e.target.value.replace(/\D/g, ''))}
-            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200" />
-        </div>
-        <div>
-          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 block">Household size</label>
-          <select value={estimate.household} onChange={e => update('household', e.target.value)}
-            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200">
-            <option value="1-2">1-2 people</option>
-            <option value="3-4">3-4 people</option>
-            <option value="5+">5+ people</option>
-          </select>
-        </div>
-        <div>
-          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 block">Battery interest</label>
-          <select value={estimate.battery_interest} onChange={e => update('battery_interest', e.target.value)}
-            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200">
-            <option value="considering">Maybe later</option>
-            <option value="wants_backup">Yes, want outage backup</option>
-            <option value="not_interested">No</option>
-          </select>
+        <SelectInput label="Your retailer" value={estimate.retailer} onChange={v => update('retailer', v)}
+          options={[
+            ['mercury','Mercury'],['genesis','Genesis'],['contact','Contact'],['meridian','Meridian'],
+            ['electric_kiwi','Electric Kiwi'],['powershop','Powershop'],['frank','Frank Energy'],['flick','Flick Electric'],
+          ]} />
+        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', v.replace(/\D/g, '').slice(0, 4))} placeholder="1010" inputMode="numeric" maxLength={4} />
+        <SelectInput label="Household size" value={estimate.household} onChange={v => update('household', v)}
+          options={[['1-2','1-2 people'],['3-4','3-4 people'],['5+','5+ people']]} />
+        <SelectInput label="Battery interest" value={estimate.battery_interest} onChange={v => update('battery_interest', v)}
+          options={[['considering','Maybe later'],['wants_backup','Yes, want outage backup'],['not_interested','No']]} />
+      </div>
+
+      <EstimateNote>
+        We'll back-compute your annual kWh from your monthly spend + your retailer's published rate. Less precise than a bill upload — you can refine later by uploading bills.
+      </EstimateNote>
+    </div>
+  );
+}
+
+function EstimateOffGrid({ estimate, update }) {
+  return (
+    <div className="space-y-5">
+      <div>
+        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide flex items-center justify-between mb-2">
+          Daily power needed
+          <span className="text-amber-600 dark:text-amber-300 font-extrabold text-base font-mono">{estimate.daily_kwh} kWh/day</span>
+        </label>
+        <input type="range" min="1" max="100" step="1" value={estimate.daily_kwh}
+          onChange={e => update('daily_kwh', parseInt(e.target.value))}
+          className="w-full accent-amber-500" />
+        <div className="flex justify-between text-[10px] text-gray-400 mt-1 font-mono">
+          <span>1 kWh (cabin)</span><span>20-30 kWh (typical home)</span><span>100+ kWh (large)</span>
         </div>
       </div>
 
-      <div className="px-3 py-2 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 text-[11px] text-blue-700 dark:text-blue-300 flex items-start gap-2">
-        <Info size={11} className="flex-shrink-0 mt-0.5" />
-        <span>We'll back-compute your annual kWh from your monthly spend + your retailer's published rate. Less precise than a bill upload — you can refine later by uploading bills.</span>
+      <div className="grid grid-cols-2 gap-3">
+        <SelectInput label="Backup autonomy needed" value={estimate.autonomy_days} onChange={v => update('autonomy_days', v)}
+          options={[['1','1 day (sunny climate)'],['2','2 days (typical)'],['3','3 days'],['5','5 days'],['7','7+ days (wet/cloudy)']]} />
+        <SelectInput label="Generator backup?" value={estimate.generator_backup} onChange={v => update('generator_backup', v)}
+          options={[['no','No generator'],['existing','Have one already'],['need_one','Need one designed in']]} />
+        <SelectInput label="Why off-grid?" value={estimate.off_grid_reason} onChange={v => update('off_grid_reason', v)}
+          options={[
+            ['no_grid_available','No grid available at site'],
+            ['grid_connection_cost','Grid connection too expensive'],
+            ['independence','Want full independence'],
+            ['existing_disconnect','Disconnecting from grid'],
+          ]} />
+        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', v.replace(/\D/g, '').slice(0, 4))} placeholder="1010" inputMode="numeric" maxLength={4} />
       </div>
+
+      <div>
+        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 block">Critical loads <span className="text-gray-300 dark:text-gray-600 font-normal normal-case">(optional)</span></label>
+        <textarea value={estimate.critical_loads} onChange={e => update('critical_loads', e.target.value)}
+          placeholder="e.g. 'Heat pump + fridge + lighting' / 'Workshop with welder' / 'Just essentials — fridge, internet, lights'"
+          rows={2} maxLength={400}
+          className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200 resize-y" />
+      </div>
+
+      <EstimateNote>
+        Off-grid sizing requires a site visit — the numbers below give our designer a starting point. We'll confirm everything with a survey before quoting.
+      </EstimateNote>
+    </div>
+  );
+}
+
+function EstimateCommercial({ estimate, update }) {
+  return (
+    <div className="space-y-5">
+      <div>
+        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide flex items-center justify-between mb-2">
+          Monthly power bill
+          <span className="text-amber-600 dark:text-amber-300 font-extrabold text-base font-mono">${estimate.monthly_spend}</span>
+        </label>
+        <input type="range" min="50" max="20000" step="100" value={estimate.monthly_spend}
+          onChange={e => update('monthly_spend', parseInt(e.target.value))}
+          className="w-full accent-amber-500" />
+        <div className="flex justify-between text-[10px] text-gray-400 mt-1 font-mono"><span>$50</span><span>$5,000</span><span>$20,000+</span></div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <SelectInput label="Business type" value={estimate.business_type} onChange={v => update('business_type', v)}
+          options={[
+            ['','— Select —'],
+            ['office','Office'],['warehouse','Warehouse'],['factory','Factory / manufacturing'],
+            ['retail','Retail'],['hospitality','Hospitality / restaurant'],['agriculture','Agriculture / farm'],
+            ['school','School / education'],['other','Other'],
+          ]} />
+        <SelectInput label="Operating hours" value={estimate.operating_hours} onChange={v => update('operating_hours', v)}
+          options={[
+            ['business-hours','Business hours (~8am-6pm)'],
+            ['extended','Extended (~6am-10pm)'],
+            ['24-7','24/7 operation'],
+            ['seasonal','Seasonal / variable'],
+          ]} />
+        <TextInput label="Roof / site area (sqm)" value={estimate.site_area_sqm} onChange={v => update('site_area_sqm', v.replace(/\D/g, '').slice(0, 6))} placeholder="500" inputMode="numeric" />
+        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', v.replace(/\D/g, '').slice(0, 4))} placeholder="1010" inputMode="numeric" maxLength={4} />
+      </div>
+
+      <EstimateNote>
+        Commercial systems are custom-designed against your peak demand, tariff structure, and tax position. Our commercial team will book a site visit and quote with depreciation schedule + IRR.
+      </EstimateNote>
+    </div>
+  );
+}
+
+function EstimatePPA({ estimate, update }) {
+  return (
+    <div className="space-y-5">
+      <div>
+        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide flex items-center justify-between mb-2">
+          Monthly power bill
+          <span className="text-amber-600 dark:text-amber-300 font-extrabold text-base font-mono">${estimate.monthly_spend}</span>
+        </label>
+        <input type="range" min="500" max="50000" step="500" value={estimate.monthly_spend}
+          onChange={e => update('monthly_spend', parseInt(e.target.value))}
+          className="w-full accent-amber-500" />
+        <div className="flex justify-between text-[10px] text-gray-400 mt-1 font-mono"><span>$500</span><span>$10,000</span><span>$50,000+</span></div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <SelectInput label="Business type" value={estimate.business_type} onChange={v => update('business_type', v)}
+          options={[
+            ['','— Select —'],
+            ['office','Office'],['warehouse','Warehouse'],['factory','Factory / manufacturing'],
+            ['retail','Retail'],['hospitality','Hospitality'],['agriculture','Agriculture / farm'],
+            ['school','School / education'],['other','Other'],
+          ]} />
+        <SelectInput label="Contract length willing" value={estimate.contract_length} onChange={v => update('contract_length', v)}
+          options={[['10','10 years'],['15','15 years'],['20','20 years'],['25','25 years']]} />
+        <SelectInput label="Decision-making" value={estimate.decision_makers} onChange={v => update('decision_makers', v)}
+          options={[
+            ['owner-only','I decide alone'],
+            ['small-team','2-3 stakeholders'],
+            ['board','Board / formal approval needed'],
+          ]} />
+        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', v.replace(/\D/g, '').slice(0, 4))} placeholder="1010" inputMode="numeric" maxLength={4} />
+      </div>
+
+      <EstimateNote>
+        Under a PPA you pay no upfront cost — you sign a contract to buy power from us at a discounted rate. Our finance team will design a contract against your site and run you through the terms.
+      </EstimateNote>
+    </div>
+  );
+}
+
+// ── Small shared form primitives ──
+function TextInput({ label, value, onChange, placeholder, type = 'text', inputMode, maxLength }) {
+  return (
+    <div>
+      <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 block">{label}</label>
+      <input type={type} value={value} placeholder={placeholder} inputMode={inputMode} maxLength={maxLength}
+        onChange={e => onChange(e.target.value)}
+        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-amber-300" />
+    </div>
+  );
+}
+function SelectInput({ label, value, onChange, options }) {
+  return (
+    <div>
+      <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 block">{label}</label>
+      <select value={value} onChange={e => onChange(e.target.value)}
+        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200">
+        {options.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+      </select>
+    </div>
+  );
+}
+function EstimateNote({ children }) {
+  return (
+    <div className="px-3 py-2 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 text-[11px] text-blue-700 dark:text-blue-300 flex items-start gap-2">
+      <Info size={11} className="flex-shrink-0 mt-0.5" />
+      <span>{children}</span>
     </div>
   );
 }
@@ -916,11 +1088,19 @@ function StatPill({ label, value }) {
 // ════════════════════════════════════════════════════════════════════════════
 function Step4ContactForm({ intent, customerType, estimate, analysisId, analysisResult, contact, setContact, otp, setOtp, submitState, onBack, onSubmit }) {
   const set = (k, v) => setContact(c => ({ ...c, [k]: v }));
+  // Customer-type-aware subtitle
+  const teamLabel =
+    customerType === 'commercial' ? 'Our commercial team'
+    : customerType === 'off-grid'  ? 'Our off-grid specialist'
+    : customerType === 'ppa'       ? 'Our finance team'
+    :                                'Eric (our sales lead)';
+  const responseWindow = customerType === 'residential' ? 'within 24 hours' : 'within 2 business days';
+
   const subtitle = intent === 'callback'
-    ? "We'll need a few more details so the right specialist can call within 24 hours."
+    ? `We'll need a few more details so ${teamLabel.toLowerCase()} can call ${responseWindow}.`
     : analysisResult
-      ? `Eric will call within 24 hours to walk you through your projection.`
-      : "Eric will call within 24 hours to talk things through.";
+      ? `${teamLabel} will call ${responseWindow} to walk you through your projection.`
+      : `${teamLabel} will call ${responseWindow} to talk things through.`;
 
   // OTP is REQUIRED for callback-only intent (no bills, no projection — we
   // need extra signal the customer is genuine). For bills/estimate intents,
@@ -1078,7 +1258,9 @@ function Step4ContactForm({ intent, customerType, estimate, analysisId, analysis
         onClick={onSubmit}
         disabled={!requiredOk || submitState.loading}
         className="mt-6 w-full py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-extrabold text-base hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md shadow-amber-500/30">
-        {submitState.loading ? <><Loader2 size={16} className="animate-spin" /> Submitting…</> : <>Submit · Eric will call within 24h <Send size={14} /></>}
+        {submitState.loading
+          ? <><Loader2 size={16} className="animate-spin" /> Submitting…</>
+          : <>Submit · {teamLabel} will call {responseWindow} <Send size={14} /></>}
       </button>
 
       <p className="text-[10px] text-gray-400 dark:text-gray-500 text-center mt-3">
@@ -1209,23 +1391,57 @@ function SelectField({ label, value, onChange, options }) {
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 5 — Confirmation
 // ════════════════════════════════════════════════════════════════════════════
-function Step5Confirmation({ contact }) {
+function Step5Confirmation({ contact, customerType }) {
+  const isCommercial = customerType === 'commercial' || customerType === 'ppa';
+  const isOffGrid    = customerType === 'off-grid';
+  const teamLabel =
+    customerType === 'commercial' ? 'Our commercial team'
+    : customerType === 'off-grid'  ? 'Our off-grid specialist'
+    : customerType === 'ppa'       ? 'Our finance team'
+    :                                'Eric';
+  const responseWindow = customerType === 'residential' ? 'within 24h' : 'within 2 business days';
+
+  const steps = customerType === 'residential' ? [
+    'Email confirmation in a few minutes',
+    `Eric calls ${responseWindow} with 3 system options`,
+    'Free on-site survey (typically 5-7 days)',
+    'Detailed proposal + install schedule within 1 week',
+  ] : isOffGrid ? [
+    'Email confirmation in a few minutes',
+    `Off-grid specialist calls ${responseWindow} to walk through your needs`,
+    'On-site survey scheduled to map roof + battery location + generator setup',
+    'Custom-designed system + quote with autonomy guarantee (~2 weeks)',
+  ] : customerType === 'commercial' ? [
+    'Email confirmation in a few minutes',
+    `Commercial team calls ${responseWindow} to discuss your operation`,
+    'On-site survey + tariff analysis (typically 1-2 weeks)',
+    'Custom proposal with depreciation schedule + IRR (~3 weeks total)',
+  ] : [   // ppa
+    'Email confirmation in a few minutes',
+    `Finance team calls ${responseWindow} to review your suitability`,
+    'On-site survey + tariff modelling (typically 2-3 weeks)',
+    'PPA contract draft + per-kWh rate proposal (~4-6 weeks total)',
+  ];
+
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-emerald-200 dark:border-emerald-500/30 shadow-xl p-8 text-center animate-fade-in">
       <div className="w-20 h-20 mx-auto rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-300 text-4xl mb-4">✓</div>
       <h1 className="text-2xl md:text-3xl font-extrabold font-display mb-3 dark:text-gray-100">
-        {contact?.firstName ? `Thanks ${contact.firstName}!` : 'Got it!'} Eric will call within 24h.
+        {contact?.firstName ? `Thanks ${contact.firstName}!` : 'Got it!'} {teamLabel} will call {responseWindow}.
       </h1>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-md mx-auto">
-        We'll prepare 3 tailored system options. Look for a call from <strong>+64 21 839 356</strong>.
+        {customerType === 'residential'
+          ? <>We'll prepare 3 tailored system options. Look for a call from <strong>+64 21 839 356</strong>.</>
+          : isCommercial
+            ? <>We'll prepare a custom site assessment. Look for a call from <strong>+64 21 839 356</strong>.</>
+            : <>We'll prepare a custom off-grid design. Look for a call from <strong>+64 21 839 356</strong>.</>}
       </p>
       <div className="bg-amber-50 dark:bg-amber-500/10 rounded-xl border border-amber-200 dark:border-amber-500/30 p-5 max-w-md mx-auto text-left mb-6">
         <div className="text-[10px] font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">WHAT HAPPENS NEXT</div>
         <ul className="space-y-2 text-xs text-gray-700 dark:text-gray-300">
-          <li className="flex items-start gap-2"><span className="text-amber-600 font-bold">1.</span> Email confirmation in a few minutes</li>
-          <li className="flex items-start gap-2"><span className="text-amber-600 font-bold">2.</span> Eric calls within 24h with 3 system options</li>
-          <li className="flex items-start gap-2"><span className="text-amber-600 font-bold">3.</span> Free on-site survey (typically 5-7 days)</li>
-          <li className="flex items-start gap-2"><span className="text-amber-600 font-bold">4.</span> Detailed proposal + install schedule within 1 week</li>
+          {steps.map((s, i) => (
+            <li key={i} className="flex items-start gap-2"><span className="text-amber-600 font-bold">{i + 1}.</span> {s}</li>
+          ))}
         </ul>
       </div>
       <Link to="/" className="text-xs font-bold text-amber-700 dark:text-amber-300 hover:underline">← Back to home</Link>
