@@ -123,8 +123,8 @@ function UploadView({ files, onDrop, removeFile, region, setRegion, postcode, se
             See what 25 years of <span className="text-gradient-warm">your power bills</span> cost.
           </h1>
           <p className="text-sm md:text-base text-gray-500 max-w-2xl mx-auto">
-            Upload 6-12 months of bills. We'll show you the 25-year cost of doing nothing,
-            switching retailer, or going solar — using your real numbers, not generic estimates.
+            Upload your last <strong>12 power bills</strong> (or as many as you have) — we'll build a full-year usage profile
+            and show you the 25-year cost of doing nothing vs going solar, using your real numbers.
           </p>
         </div>
 
@@ -141,12 +141,42 @@ function UploadView({ files, onDrop, removeFile, region, setRegion, postcode, se
             ${dragOver ? 'border-amber-500 bg-amber-50' : 'border-gray-300 hover:border-amber-300'}`}
         >
           <Upload size={36} className="mx-auto text-amber-500 mb-3" />
-          <div className="text-sm font-bold mb-1">Drop your power bill PDFs here</div>
-          <div className="text-xs text-gray-500">Or click to browse · Up to 12 PDFs · Mercury, Genesis, Contact, Meridian, Powershop supported</div>
+          <div className="text-sm font-bold mb-1">Drop up to 12 power bill PDFs</div>
+          <div className="text-xs text-gray-500">Or click to browse · Mercury, Pulse, Contact, Genesis supported · 5 MB max per file</div>
           <input ref={inputRef} type="file" accept=".pdf,application/pdf" multiple
             onChange={e => onDrop(e.target.files)}
             className="hidden" />
         </div>
+
+        {/* Bill count progress + seasonality hint */}
+        {files.length > 0 && (
+          <div className="mt-3 px-4 py-3 rounded-xl bg-white border border-amber-100">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-xs font-bold text-gray-700">
+                {files.length} of 12 bills uploaded
+              </div>
+              <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full
+                ${files.length >= 12 ? 'bg-emerald-100 text-emerald-700'
+                : files.length >= 6 ? 'bg-amber-100 text-amber-700'
+                : 'bg-gray-100 text-gray-500'}`}>
+                {files.length >= 12 ? '✓ Full seasonality'
+                : files.length >= 6 ? 'Good coverage'
+                : 'Basic estimate'}
+              </div>
+            </div>
+            <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-amber-400 to-emerald-400 transition-all"
+                   style={{ width: `${Math.min(100, (files.length / 12) * 100)}%` }} />
+            </div>
+            <div className="text-[10px] text-gray-400 mt-1.5">
+              {files.length >= 12
+                ? 'Maximum accuracy — your projection will reflect summer + winter usage.'
+                : files.length >= 6
+                  ? `Add ${12 - files.length} more for a complete 12-month seasonal profile.`
+                  : `Add ${12 - files.length} more bills for the most accurate 25-year projection.`}
+            </div>
+          </div>
+        )}
 
         {/* Files list */}
         {files.length > 0 && (
@@ -278,6 +308,11 @@ function ResultsView({ result, onReset }) {
         </div>
       </section>
 
+      {/* Bills analysed — per-bill parse breakdown */}
+      {result.parse_summary && result.parse_summary.length > 0 && (
+        <BillsAnalysedPanel parseSummary={result.parse_summary} ocrErrors={result.ocr_errors} />
+      )}
+
       {/* TAB: comparison / patterns / transparency */}
       <section className="px-6 md:px-10 py-8 bg-gray-50">
         <div className="max-w-6xl mx-auto">
@@ -373,6 +408,78 @@ function ScenarioBadgeCard({ scenario, accent, doNothingCost, bestPick }) {
         <div className="text-[10px] text-emerald-600 font-semibold">No upfront cost</div>
       )}
     </div>
+  );
+}
+
+// ── Bills analysed panel ───────────────────────────────────────────────
+// Shows the per-bill parse result so the customer can verify each bill
+// was read correctly. Failures shown with a red badge + explanatory note.
+function BillsAnalysedPanel({ parseSummary, ocrErrors }) {
+  const total = parseSummary.length;
+  const usable = parseSummary.filter(b => b.kwh_total != null && b.total_nzd != null).length;
+  const fmtDate = (s) => s ? new Date(s + 'T00:00:00Z').toLocaleDateString('en-NZ', { month: 'short', year: '2-digit' }) : '—';
+
+  return (
+    <section className="px-6 md:px-10 py-8 bg-gray-50 border-b border-gray-100">
+      <div className="max-w-5xl mx-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-extrabold font-display">Bills analysed</h2>
+          <div className="text-[11px] font-bold">
+            <span className="text-emerald-700">{usable} parsed</span>
+            {usable < total && <span className="text-red-500"> · {total - usable} failed</span>}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+          <div className="grid grid-cols-12 px-3 py-2 bg-gray-50 border-b border-gray-100 text-[9px] font-bold uppercase tracking-wide text-gray-400">
+            <div className="col-span-1">#</div>
+            <div className="col-span-3">Retailer</div>
+            <div className="col-span-3">Period</div>
+            <div className="col-span-2 text-right">kWh</div>
+            <div className="col-span-2 text-right">Total $</div>
+            <div className="col-span-1 text-right">Confidence</div>
+          </div>
+          {parseSummary.map((b, i) => {
+            const failed = b.kwh_total == null || b.total_nzd == null;
+            return (
+              <div key={i} className={`grid grid-cols-12 px-3 py-2.5 text-xs border-b border-gray-50 last:border-b-0
+                ${failed ? 'bg-red-50/30' : ''}`}>
+                <div className="col-span-1 text-gray-400 font-mono">{i + 1}</div>
+                <div className="col-span-3 font-semibold">{b.retailer || <span className="text-red-500">Unknown</span>}</div>
+                <div className="col-span-3 text-gray-600">{fmtDate(b.period_start)} → {fmtDate(b.period_end)}</div>
+                <div className="col-span-2 text-right font-mono font-semibold">
+                  {b.kwh_total != null ? b.kwh_total.toLocaleString() : <span className="text-red-500">—</span>}
+                </div>
+                <div className="col-span-2 text-right font-mono font-semibold">
+                  {b.total_nzd != null ? fmt$(b.total_nzd) : <span className="text-red-500">—</span>}
+                </div>
+                <div className="col-span-1 text-right">
+                  <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold
+                    ${b.ocr_confidence >= 0.9 ? 'bg-emerald-100 text-emerald-700'
+                    : b.ocr_confidence >= 0.6 ? 'bg-amber-100 text-amber-700'
+                    : 'bg-red-100 text-red-700'}`}>
+                    {Math.round((b.ocr_confidence || 0) * 100)}%
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {ocrErrors && ocrErrors.length > 0 && (
+          <div className="mt-3 px-3 py-2 rounded-lg bg-red-50 border border-red-100 text-[11px] text-red-700">
+            <strong>{ocrErrors.length} bill{ocrErrors.length > 1 ? 's' : ''} couldn't be read:</strong>{' '}
+            {ocrErrors.map(e => e.file).join(', ')}. They may be image-scanned PDFs — try re-uploading as a text PDF.
+          </div>
+        )}
+
+        {usable < total && usable > 0 && (
+          <p className="text-[10px] text-gray-400 mt-2">
+            The analysis above used the {usable} bills we could parse. For maximum accuracy, re-upload the failed ones in a text-PDF format.
+          </p>
+        )}
+      </div>
+    </section>
   );
 }
 
