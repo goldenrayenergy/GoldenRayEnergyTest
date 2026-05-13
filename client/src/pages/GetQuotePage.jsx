@@ -56,7 +56,9 @@ export default function GetQuotePage() {
     firstName: '', lastName: '', email: '', phone: '',
     address: '', owns_home: '', roof_type: '', battery_option: '',
     installation_timeframe: '', lead_source: 'website',
+    notes: '',                                                // open-ended customer message
   });
+  const [otp, setOtp] = useState({ sent: false, value: '', verified: false, loading: false, error: '', demoCode: '' });
   const [submitState, setSubmitState] = useState({ loading: false, error: '', done: false });
 
   // ── Navigation ──
@@ -146,6 +148,8 @@ export default function GetQuotePage() {
               analysisResult={analysisResult}
               contact={contact}
               setContact={setContact}
+              otp={otp}
+              setOtp={setOtp}
               submitState={submitState}
               onBack={back}
               onSubmit={async () => {
@@ -157,6 +161,7 @@ export default function GetQuotePage() {
                       monthlyBill: estimate.monthly_spend,
                       installationType: 'residential',
                       callToDiscuss: 'yes',
+                      phoneVerified: otp.verified,                // surface verified flag in CRM
                       // Wizard provenance — surface in CRM
                       wizardIntent:   intent,
                       analysisId:    analysisId,
@@ -843,7 +848,7 @@ function StatPill({ label, value }) {
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 4 — Contact form — submits to existing /api/quote/submit
 // ════════════════════════════════════════════════════════════════════════════
-function Step4ContactForm({ intent, estimate, analysisId, analysisResult, contact, setContact, submitState, onBack, onSubmit }) {
+function Step4ContactForm({ intent, estimate, analysisId, analysisResult, contact, setContact, otp, setOtp, submitState, onBack, onSubmit }) {
   const set = (k, v) => setContact(c => ({ ...c, [k]: v }));
   const subtitle = intent === 'callback'
     ? "Eric will call within 24 hours to discuss your options."
@@ -851,8 +856,36 @@ function Step4ContactForm({ intent, estimate, analysisId, analysisResult, contac
       ? `Eric will call within 24 hours to walk you through your projection.`
       : "Eric will call within 24 hours to talk things through.";
 
+  // OTP is REQUIRED for callback-only intent (no bills, no projection — we
+  // need extra signal the customer is genuine). For bills/estimate intents,
+  // OTP is optional — they've already given us real data.
+  const otpRequired = intent === 'callback';
+  const phoneVerifiedOk = !otpRequired || otp.verified;
+
   const requiredOk = contact.firstName && contact.lastName
-    && (contact.email || contact.phone);   // at minimum, give us a way to reach you
+    && (contact.email || contact.phone)   // at minimum, give us a way to reach you
+    && phoneVerifiedOk;
+
+  const sendOtp = async () => {
+    if (!contact.phone) return;
+    setOtp(s => ({ ...s, loading: true, error: '', demoCode: '' }));
+    try {
+      const { data } = await publicApi.post('/otp/send', { phone: contact.phone });
+      setOtp(s => ({ ...s, loading: false, sent: true, demoCode: data.demoOtp || '' }));
+    } catch (e) {
+      setOtp(s => ({ ...s, loading: false, error: e.response?.data?.error || 'Failed to send OTP.' }));
+    }
+  };
+
+  const verifyOtp = async () => {
+    setOtp(s => ({ ...s, loading: true, error: '' }));
+    try {
+      await publicApi.post('/otp/verify', { phone: contact.phone, otp: otp.value });
+      setOtp(s => ({ ...s, loading: false, verified: true, sent: false, demoCode: '' }));
+    } catch (e) {
+      setOtp(s => ({ ...s, loading: false, error: e.response?.data?.error || 'Invalid OTP.' }));
+    }
+  };
 
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
@@ -868,7 +901,88 @@ function Step4ContactForm({ intent, estimate, analysisId, analysisResult, contac
           <Field label="Last name *"  value={contact.lastName}  onChange={v => set('lastName', v)}  placeholder="Smith" />
         </div>
         <Field label="Email" value={contact.email} onChange={v => set('email', v)} placeholder="john@example.com" type="email" />
-        <Field label="Phone" value={contact.phone} onChange={v => set('phone', v)} placeholder="+64 21 …" type="tel" />
+
+        {/* Phone + OTP verification — required for callback-only intent */}
+        <div>
+          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+            Phone {otpRequired && <span className="text-red-500">*</span>}
+            {otp.verified && <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-300 normal-case font-semibold ml-1"><CheckCircle size={11} /> Verified</span>}
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="tel"
+              value={contact.phone}
+              onChange={e => {
+                set('phone', e.target.value);
+                // If they change the phone after verifying, reset
+                if (otp.verified || otp.sent) setOtp({ sent: false, value: '', verified: false, loading: false, error: '', demoCode: '' });
+              }}
+              disabled={otp.verified}
+              placeholder="+64 21 …"
+              className={`flex-1 px-3 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 transition
+                ${otp.verified
+                  ? 'border-emerald-400 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200'
+                  : 'border-gray-200 dark:border-white/10 bg-white dark:bg-brand-dark dark:text-gray-200'}`}
+            />
+            {!otp.verified && (
+              <button onClick={sendOtp} disabled={!contact.phone || otp.loading}
+                className="px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold transition disabled:opacity-50 whitespace-nowrap flex items-center gap-1">
+                {otp.loading && !otp.sent ? <Loader2 size={13} className="animate-spin" /> : null}
+                {otp.sent ? 'Resend' : 'Send OTP'}
+              </button>
+            )}
+          </div>
+
+          {/* Demo-mode display of the OTP (when SMS provider isn't configured server-side) */}
+          {otp.demoCode && (
+            <div className="mt-2 px-3 py-2 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded-lg flex items-center justify-between">
+              <span className="text-[10px] text-blue-600 dark:text-blue-300 font-semibold">Demo OTP (no SMS key set):</span>
+              <span className="text-sm font-extrabold text-blue-700 dark:text-blue-200 tracking-[0.25em]">{otp.demoCode}</span>
+            </div>
+          )}
+
+          {/* OTP code input + Verify button */}
+          {otp.sent && !otp.verified && (
+            <div className="mt-2 space-y-1.5">
+              <div className="flex gap-2">
+                <input type="text" inputMode="numeric" maxLength={6} placeholder="Enter 6-digit code"
+                  value={otp.value}
+                  onChange={e => setOtp(s => ({ ...s, value: e.target.value.replace(/\D/g, ''), error: '' }))}
+                  className="flex-1 px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 transition text-center font-bold tracking-[0.3em]" />
+                <button onClick={verifyOtp} disabled={otp.value.length !== 6 || otp.loading}
+                  className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold transition disabled:opacity-50 flex items-center gap-1">
+                  {otp.loading ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                  Verify
+                </button>
+              </div>
+              {otp.error && <p className="text-[10px] text-red-500 font-medium">{otp.error}</p>}
+              <p className="text-[9px] text-gray-400 dark:text-gray-500">Code expires in 5 minutes.</p>
+            </div>
+          )}
+
+          {otpRequired && !otp.verified && !otp.sent && contact.phone && (
+            <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-1.5 flex items-center gap-1">
+              <Info size={10} /> We verify phone numbers for callback-only enquiries so our sales team isn't chasing wrong numbers.
+            </p>
+          )}
+        </div>
+
+        {/* Open notes — anything else the customer wants the sales rep to know */}
+        <div>
+          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 block">
+            Anything else to mention? <span className="text-gray-300 dark:text-gray-600 font-normal normal-case">(optional)</span>
+          </label>
+          <textarea
+            value={contact.notes}
+            onChange={e => set('notes', e.target.value)}
+            placeholder="e.g. 'We're getting an EV in 2026 — can you size for that?' / 'Best to call after 6pm' / 'We've had quotes from X and Y — interested in your difference'"
+            rows={3}
+            maxLength={1000}
+            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-amber-300 resize-y" />
+          <div className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 text-right font-mono">
+            {(contact.notes || '').length} / 1000
+          </div>
+        </div>
 
         <details className="bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/10">
           <summary className="px-4 py-3 cursor-pointer text-xs font-bold text-gray-700 dark:text-gray-200 select-none">
