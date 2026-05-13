@@ -197,16 +197,18 @@ export default function SolarPackagesPage() {
         </div>
       </section>
 
-      {/* Final CTA */}
+      {/* Final CTA — single conversion entry to the Buyer path */}
       <section className="py-12 px-6 md:px-10 bg-gradient-to-r from-amber-500 to-orange-500 text-white">
         <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2">See your real 25-year savings</h2>
-          <p className="text-xs md:text-sm text-amber-50 mb-5">Upload 1–12 months of bills. See do-nothing cost vs solar over 25 years. The most honest quote in NZ.</p>
-          <Link to="/bill-analysis" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-amber-600 font-bold text-sm hover:bg-amber-50 transition">
-            See my 25-year savings <ArrowRight size={14} />
+          <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2">Ready for a tailored quote?</h2>
+          <p className="text-xs md:text-sm text-amber-50 mb-5">
+            Done browsing? Walk through our 4-step quote wizard and a sales rep will call within 24h with 3 system options.
+          </p>
+          <Link to="/get-quote" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-amber-600 font-bold text-sm hover:bg-amber-50 transition">
+            Get a tailored quote <ArrowRight size={14} />
           </Link>
           <div className="mt-3 text-[11px] text-amber-100">
-            No bills handy? <Link to="/#callback" className="underline hover:text-white">Quick callback form</Link>.
+            Still researching? Keep browsing — no pressure.
           </div>
         </div>
       </section>

@@ -27,11 +27,11 @@ export default function SolarPackageDetailPage() {
       .finally(() => setLoading(false));
   }, [slug]);
 
-  // Compose the URL params used to prefill the website Get-Free-Quote form
-  // Bill analysis is the primary path; package context isn't needed (engine
-  // recommends a system from real usage). Customers without bills can fall
-  // through to the callback form via the secondary link inside /bill-analysis.
-  const quoteUrl = '/bill-analysis';
+  // Option 6: package detail is part of the Explorer path. The single
+  // conversion CTA at the bottom takes the customer to the Buyer-path
+  // wizard with the current package slug pre-attached, so the wizard
+  // knows which package the customer was reading about.
+  const quoteUrl = `/get-quote?package=${slug}`;
 
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-amber-500" size={32} /></div>;
   if (error)   return (
@@ -170,14 +170,17 @@ export default function SolarPackageDetailPage() {
         </div>
       </section>
 
-      {/* Trust band */}
+      {/* Single conversion CTA at the bottom — only entry to Buyer path from this page */}
       <section className="py-10 px-6 md:px-10 bg-gradient-to-r from-amber-500 to-orange-500 text-white">
         <div className="max-w-3xl mx-auto text-center">
           <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2">Ready to make this your system?</h2>
-          <p className="text-xs text-amber-50 mb-5">Free in-home consultation. We'll lock in pricing and fit a tailored proposal to your roof and bills within one business day.</p>
+          <p className="text-xs text-amber-50 mb-5">Walk through our 4-step quote wizard and a sales rep will call within 24h with 3 options based on this package.</p>
           <Link to={quoteUrl} className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-amber-600 font-extrabold text-sm hover:bg-amber-50 transition">
-            Get my free quote <ArrowRight size={14} />
+            Get a tailored quote <ArrowRight size={14} />
           </Link>
+          <div className="mt-3 text-[11px] text-amber-100">
+            Or <Link to="/solar-packages" className="underline hover:text-white">browse other packages first</Link>
+          </div>
         </div>
       </section>
 
