@@ -64,7 +64,10 @@ export default function App() {
       <Route path="/solar-packages/:slug" element={<SolarPackageDetailPage />} />
       <Route path="/shop" element={<ShopPage />} />
       <Route path="/shop/:sku" element={<ShopProductDetailPage />} />
-      <Route path="/bill-analysis" element={<BillAnalysisPage />} />
+      {/* Option 6.5: /bill-analysis now redirects into the wizard's bills branch.
+          The old page lives on as a deep-link for power users via /bill-analysis/legacy. */}
+      <Route path="/bill-analysis" element={<Navigate to="/get-quote" replace />} />
+      <Route path="/bill-analysis/legacy" element={<BillAnalysisPage />} />
       <Route path="/get-quote" element={<GetQuotePage />} />
 
       <Route

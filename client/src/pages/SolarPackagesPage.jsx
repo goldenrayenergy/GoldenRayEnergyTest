@@ -79,7 +79,7 @@ export default function SolarPackagesPage() {
           </h1>
           <p className="text-sm md:text-base text-gray-500 max-w-2xl mx-auto mb-6">
             Pre-designed systems for NZ residential customers — Tier-1 components, fixed pricing, no surprises.
-            Not sure which? <Link to="/bill-analysis" className="text-amber-600 underline">Upload your bills for a 25-year savings projection</Link>.
+            Not sure which? <Link to="/get-quote" className="text-amber-600 underline">Get a tailored quote based on your bills or a quick estimate</Link>.
           </p>
         </div>
       </section>
@@ -134,7 +134,7 @@ export default function SolarPackagesPage() {
                 {bucket ? (
                   <button onClick={clearBucket} className="text-amber-600 underline">View all packages</button>
                 ) : (
-                  <Link to="/bill-analysis" className="text-amber-600 underline">Get a custom analysis from your bills</Link>
+                  <Link to="/get-quote" className="text-amber-600 underline">Get a tailored quote for your home</Link>
                 )}
               </div>
             )
@@ -310,9 +310,9 @@ function CommercialEmptyState({ onClear }) {
         We design and price each one from scratch — no off-the-shelf packages.
       </p>
       <div className="flex flex-wrap justify-center gap-3">
-        <Link to="/bill-analysis"
+        <Link to="/get-quote"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-sm font-bold">
-          Start with bill analysis <ArrowRight size={14} />
+          Get a tailored quote <ArrowRight size={14} />
         </Link>
         <button onClick={onClear}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50">

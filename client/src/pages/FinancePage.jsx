@@ -400,7 +400,7 @@ export default function FinancePage() {
             Speak with a GoldenRay Energy NZ advisor. We will identify the right finance option for your home and walk you through every step of the process — no pressure, no obligation.
           </p>
           <div className="flex gap-3 justify-center flex-wrap">
-            <Link to="/bill-analysis"><Button size="lg" icon={Zap}>See My 25-Year Savings</Button></Link>
+            <Link to="/get-quote"><Button size="lg" icon={Zap}>Get a tailored quote</Button></Link>
             <a href="/#contact"><Button variant="dark" size="lg" icon={Phone}>Contact us</Button></a>
           </div>
         </div>
