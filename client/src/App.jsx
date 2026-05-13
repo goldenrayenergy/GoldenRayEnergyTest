@@ -14,6 +14,7 @@ import SolarPackageDetailPage from './pages/SolarPackageDetailPage';
 import ShopPage from './pages/ShopPage';
 import ShopProductDetailPage from './pages/ShopProductDetailPage';
 import BillAnalysisPage from './pages/BillAnalysisPage';
+import GetQuotePage from './pages/GetQuotePage';
 
 // Portal pages
 import PortalLayout from './components/layout/PortalLayout';
@@ -64,6 +65,7 @@ export default function App() {
       <Route path="/shop" element={<ShopPage />} />
       <Route path="/shop/:sku" element={<ShopProductDetailPage />} />
       <Route path="/bill-analysis" element={<BillAnalysisPage />} />
+      <Route path="/get-quote" element={<GetQuotePage />} />
 
       <Route
         path="/pm/*"

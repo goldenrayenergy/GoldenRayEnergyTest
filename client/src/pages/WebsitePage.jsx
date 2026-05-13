@@ -143,31 +143,73 @@ export default function WebsitePage() {
             <circle cx="100" cy="100" r="35" fill="#F5A623" />
           </svg>
         </div>
-        <div className="relative z-10 max-w-2xl">
-          <div className="inline-flex items-center px-4 py-1.5 rounded-full bg-white dark:bg-brand-dark-1 border border-amber-300 dark:border-amber-500/40 shadow-sm shadow-amber-200/60 dark:shadow-none mb-6">
-            <span className="text-xs font-bold text-gradient-warm">NEW ZEALAND'S SOLAR ENERGY EXPERTS</span>
+        <div className="relative z-10 max-w-5xl w-full mx-auto">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center px-4 py-1.5 rounded-full bg-white dark:bg-brand-dark-1 border border-amber-300 dark:border-amber-500/40 shadow-sm shadow-amber-200/60 dark:shadow-none mb-6">
+              <span className="text-xs font-bold text-gradient-warm">★ 200+ NZ HOMES POWERED</span>
+            </div>
+            <h1 className="text-3xl md:text-5xl lg:text-6xl font-extrabold font-display leading-tight mb-4 dark:text-gray-100">
+              Solar in NZ, done <span className="text-gradient-warm animate-gradient">properly.</span>
+            </h1>
+            <p className="text-sm md:text-base text-gray-600 dark:text-gray-300 leading-relaxed max-w-2xl mx-auto">
+              Pick the path that fits where you are right now.
+            </p>
           </div>
-          <h1 className="text-3xl md:text-5xl font-extrabold font-display leading-tight mb-5 dark:text-gray-100">
-            Clean Energy for<br />New Zealand's <span className="text-gradient-warm animate-gradient">Future</span>
-          </h1>
-          <p className="text-base text-gray-600 dark:text-gray-300 leading-relaxed max-w-lg mb-8">
-            From single-family homes to large commercial sites, <span className="font-semibold text-orange-600 dark:text-orange-400">GoldenRay Energy NZ</span> designs, installs, and supports solar systems built around your usage — with transparent pricing and detailed proposals.
-          </p>
-          <div className="flex gap-2 md:gap-3 flex-wrap">
-            <Link to="/bill-analysis"><Button size="lg" icon={TrendingUp}>See My 25-Year Savings</Button></Link>
-            <Button onClick={() => setFinanceModalOpen(true)} variant="success" size="lg" icon={DollarSign}>$0 Upfront Finance</Button>
-            <a href="tel:+6421839356"><Button variant="dark" size="lg" icon={Phone}>+64 21 839 356</Button></a>
+
+          {/* ─── Option 6: Two-path card selector ─── */}
+          <div className="grid md:grid-cols-2 gap-4 md:gap-5 max-w-4xl mx-auto">
+            {/* Explorer path */}
+            <Link
+              to="/solar-packages"
+              className="group bg-white dark:bg-brand-dark-1 rounded-3xl border-2 border-blue-200 dark:border-blue-500/40 hover:border-blue-500 hover:shadow-2xl hover:shadow-blue-200/40 transition p-6 md:p-7 flex flex-col">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-500/20 dark:to-blue-500/10 flex items-center justify-center text-2xl mb-3">🔍</div>
+              <div className="text-[10px] font-extrabold tracking-widest text-blue-700 dark:text-blue-300 mb-2">I'M JUST EXPLORING</div>
+              <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2 dark:text-gray-100">Browse solar systems</h2>
+              <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 leading-relaxed mb-4 flex-1">
+                See all our packages, compare panels and batteries, learn how solar pricing works in NZ. No forms, no pressure.
+              </p>
+              <ul className="space-y-1 text-[11px] text-gray-600 dark:text-gray-400 mb-4">
+                <li className="flex items-center gap-2"><span className="text-blue-500">✓</span> 6 packages from 3kW to 13kW</li>
+                <li className="flex items-center gap-2"><span className="text-blue-500">✓</span> Real install photos &amp; case studies</li>
+                <li className="flex items-center gap-2"><span className="text-blue-500">✓</span> Transparent component breakdowns</li>
+              </ul>
+              <div className="inline-flex items-center gap-1.5 text-blue-700 dark:text-blue-300 font-bold text-sm group-hover:gap-2.5 transition-all">
+                Browse the catalogue <ArrowRight size={14} />
+              </div>
+            </Link>
+
+            {/* Buyer path */}
+            <Link
+              to="/get-quote"
+              className="group bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-500/10 dark:to-orange-500/10 rounded-3xl border-2 border-amber-300 dark:border-amber-400/50 hover:border-amber-500 hover:shadow-2xl hover:shadow-amber-200/40 transition p-6 md:p-7 flex flex-col">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-2xl mb-3">💬</div>
+              <div className="text-[10px] font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">I'M READY FOR A QUOTE</div>
+              <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2 dark:text-gray-100">Get a tailored quote</h2>
+              <p className="text-xs md:text-sm text-gray-700 dark:text-gray-300 leading-relaxed mb-4 flex-1">
+                Tell us about your home — see your 25-year savings instantly and a sales rep will call within 24 hours.
+              </p>
+              <ul className="space-y-1 text-[11px] text-gray-700 dark:text-gray-400 mb-4">
+                <li className="flex items-center gap-2"><span className="text-amber-600 font-bold">✓</span> Upload bills or use a quick estimate</li>
+                <li className="flex items-center gap-2"><span className="text-amber-600 font-bold">✓</span> See your 25-year savings number</li>
+                <li className="flex items-center gap-2"><span className="text-amber-600 font-bold">✓</span> Sales call within 24h, no obligation</li>
+              </ul>
+              <div className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-300 font-bold text-sm group-hover:gap-2.5 transition-all">
+                Start my quote <ArrowRight size={14} />
+              </div>
+            </Link>
           </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-3 max-w-md">
-            Upload 1–12 months of power bills, see your real 25-year cost vs solar — the most honest quote in NZ.{' '}
-            <a href="#callback" className="text-amber-600 hover:underline">Or request a callback if you don't have bills handy.</a>
+
+          <p className="text-center text-xs text-gray-500 dark:text-gray-400 mt-6">
+            Still on the fence? <a href="tel:+6421839356" className="text-amber-600 dark:text-amber-300 font-semibold hover:underline">Call +64 21 839 356</a> — we'll talk it through.
           </p>
-          <div className="grid grid-cols-2 md:flex md:gap-12 gap-4 mt-10 md:mt-12">
+
+          {/* Trust stats — kept from the previous hero */}
+          <div className="grid grid-cols-2 md:flex md:gap-12 gap-4 mt-10 md:mt-12 justify-center text-center md:text-left max-w-3xl mx-auto">
             {[
               { n: '1,800+', l: 'Installations', c: 'from-amber-500 to-orange-500' },
-              { n: '$32M+', l: 'Savings',       c: 'from-emerald-500 to-emerald-600' },
-              { n: '12,000t', l: 'CO₂ Saved',   c: 'from-blue-500 to-emerald-500' },
-              { n: '98%', l: 'Satisfaction',    c: 'from-amber-500 to-blue-500' },
+              { n: '$32M+',  l: 'Savings',       c: 'from-emerald-500 to-emerald-600' },
+              { n: '12,000t',l: 'CO₂ Saved',     c: 'from-blue-500 to-emerald-500' },
+              { n: '98%',    l: 'Satisfaction',  c: 'from-amber-500 to-blue-500' },
             ].map((s, i) => (
               <div key={i}>
                 <div className={`text-xl md:text-2xl font-extrabold font-display bg-gradient-to-br ${s.c} bg-clip-text text-transparent`}>{s.n}</div>

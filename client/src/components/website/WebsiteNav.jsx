@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   Menu, X, Phone, Mail, ArrowRight, TrendingUp, Lock,
   Zap, Package, ShoppingBag, DollarSign, Award, Users, FileText,
-  HelpCircle, MapPin, MessageCircle, Calendar, Sun,
+  HelpCircle, MapPin, MessageCircle, Calendar, Sun, Search, MessageSquare,
 } from 'lucide-react';
 import FinanceModal from './FinanceModal';
 
@@ -79,13 +79,20 @@ export default function WebsiteNav({ extras }) {
             <span className="hidden md:inline text-xs font-bold">+64 21 839 356</span>
           </a>
 
-          {/* Primary CTA — Bill Analysis (always visible) */}
+          {/* Browse path — secondary CTA, desktop only */}
           <Link
-            to="/bill-analysis"
+            to="/solar-packages"
+            className="hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-white/85 hover:text-amber-300 border border-white/15 hover:border-amber-400 text-xs md:text-sm font-semibold transition">
+            <Search size={14} />
+            <span>Browse solar systems</span>
+          </Link>
+
+          {/* Buyer path — primary CTA (always visible) */}
+          <Link
+            to="/get-quote"
             className="hidden sm:inline-flex items-center gap-1.5 px-3 md:px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white text-xs md:text-sm font-bold transition shadow-md shadow-amber-500/30">
-            <TrendingUp size={14} />
-            <span className="hidden md:inline">See My 25-Year Savings</span>
-            <span className="md:hidden">Bill Analysis</span>
+            <MessageSquare size={14} />
+            <span>Get a quote</span>
           </Link>
 
           {/* Page-specific extras (e.g. shop cart button) */}
@@ -131,10 +138,10 @@ export default function WebsiteNav({ extras }) {
 
             {/* Drawer body — scrollable */}
             <div className="flex-1 overflow-y-auto">
-              {/* Primary actions — most prominent */}
+              {/* Primary actions — Option 6: two clear paths first, everything else below */}
               <div className="p-5 space-y-2 bg-gradient-to-b from-amber-50 to-white dark:from-amber-500/10 dark:to-brand-dark">
-                <DrawerCTA to="/bill-analysis" icon={TrendingUp} label="See My 25-Year Savings" sub="Upload bills, get the most honest quote in NZ" onClick={close} primary />
-                <DrawerCTA to="/solar-packages" icon={Package} label="Solar Packages" sub="Pre-designed systems with fixed pricing" onClick={close} />
+                <DrawerCTA to="/get-quote" icon={MessageSquare} label="Get a quote" sub="4-step wizard · proposal in 24 hours" onClick={close} primary />
+                <DrawerCTA to="/solar-packages" icon={Search} label="Browse solar systems" sub="Compare 6 packages · learn how pricing works" onClick={close} />
                 <DrawerCTA to="/shop" icon={ShoppingBag} label="Trade Shop" sub="For NZ electricians — wholesale + delivery" onClick={close} />
                 <DrawerCTA onClickButton={() => { setFinanceOpen(true); close(); }} icon={DollarSign} label="Finance Options" sub="$0 upfront · Q Card · green loans" />
               </div>
