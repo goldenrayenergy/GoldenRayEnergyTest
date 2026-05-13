@@ -3,6 +3,7 @@ import { calculateSolar } from '../services/calcService.js';
 import { generateQuotePDF } from '../services/quotePdfService.js';
 import { sendQuoteEmail, sendTeamNewLeadEmail, sendCustomerAckEmail } from '../services/emailService.js';
 import { supabaseAdmin } from '../config/supabase.js';
+import { validateQuoteForm } from '../utils/validators.js';
 
 // Multi-touch follow-up cadence created at enquiry time. Sales rep ticks
 // each off as they happen; remaining ones cancel naturally if the lead
@@ -82,12 +83,16 @@ router.post('/submit', async (req, res) => {
     if (!form) return res.status(400).json({ error: 'Form data is required.' });
     if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
 
-    if (!form.firstName && !form.lastName && !form.email && !form.phone)
-      return res.status(400).json({ error: 'Please provide at least a name, email, or phone number.' });
-
-    // Friend referrals must include who referred them — required for the rewards program
-    if (form.leadSource === 'friend_referral' && (!form.referrerName || !form.referrerPhone))
-      return res.status(400).json({ error: 'Please tell us who referred you (name + phone).' });
+    // Centralised validation (migration 020) — friendly messages BEFORE the
+    // DB rejects with a CHECK constraint violation. Covers email/phone format,
+    // postcode 4-digit, monetary fields non-negative, and the referrer rule.
+    const validationErrors = validateQuoteForm(form);
+    if (validationErrors.length) {
+      return res.status(400).json({
+        error: validationErrors[0],   // primary error for legacy UIs
+        errors: validationErrors,     // full list for new UIs that handle multiple
+      });
+    }
 
     // Calculate server-side so landing page doesn't need a pre-calc step
     const calculation = form.monthlyBill

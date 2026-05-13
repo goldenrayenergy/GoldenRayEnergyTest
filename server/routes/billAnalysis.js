@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { parseBillPdf } from '../services/billOcrService.js';
 import { analyzeBills } from '../services/billAnalysisService.js';
 import { normaliseFromBillAnalysis, normaliseFromEstimate } from '../services/pm/customerProfileService.js';
+import { validateEstimateForm } from '../utils/validators.js';
 
 const router = Router();
 
@@ -236,10 +237,12 @@ router.post('/estimate', async (req, res) => {
   try {
     if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
 
-    const monthlySpend = parseFloat(req.body.monthly_spend);
-    if (!monthlySpend || monthlySpend < 30) {
-      return res.status(400).json({ error: 'Please enter your monthly power spend (NZD, ≥ $30).' });
+    // Centralised validation
+    const validationErrors = validateEstimateForm(req.body);
+    if (validationErrors.length) {
+      return res.status(400).json({ error: validationErrors[0], errors: validationErrors });
     }
+    const monthlySpend = parseFloat(req.body.monthly_spend);
 
     const region    = req.body.region || regionFromPostcode(req.body.postcode);
     const retailerId = req.body.retailer_id || 'mercury';
