@@ -3,6 +3,7 @@ import multer from 'multer';
 import { supabaseAdmin } from '../config/supabase.js';
 import { parseBillPdf } from '../services/billOcrService.js';
 import { analyzeBills } from '../services/billAnalysisService.js';
+import { normaliseFromBillAnalysis, normaliseFromEstimate } from '../services/pm/customerProfileService.js';
 
 const router = Router();
 
@@ -165,9 +166,15 @@ router.post('/', upload.array('files', 12), async (req, res) => {
     const { error: uplErr } = await supabaseAdmin.from('bill_uploads').insert(uploadRows);
     if (uplErr) console.error('Bill uploads insert failed (non-fatal):', uplErr.message);
 
+    // 4. Normalise into customer_profiles (Phase 1.5) — non-blocking
+    const normResult = await normaliseFromBillAnalysis(inserted.id, { ...analysis, region }, parsedBills);
+
     res.status(201).json({
       id: inserted.id,
       analysis,
+      source_door: parsedBills.length >= 6 ? 'bill_upload_12' : 'bill_upload_partial',
+      confidence_band: normResult.profile?.confidence_band || 'medium',
+      profile_normalised: normResult.ok,
       parse_summary: parsedBills.map(b => ({
         retailer:        b.retailer,
         period_start:    b.period_start,
@@ -295,11 +302,20 @@ router.post('/estimate', async (req, res) => {
       .single();
     if (insErr) throw insErr;
 
+    // Normalise into customer_profiles (Phase 1.5) — non-blocking
+    const normResult = await normaliseFromEstimate(inserted.id, {
+      monthly_spend:  monthlySpend,
+      retailer_id:    retailerId,
+      postcode:       req.body.postcode,
+      household_size: req.body.household_size,
+    }, { ...analysis, region });
+
     res.status(201).json({
       id: inserted.id,
       analysis,
       source_door: 'quote_form',
       confidence_band: 'medium',
+      profile_normalised: normResult.ok,
       parse_summary: [{
         retailer: rate.retailer,
         period_start: periodStart,
