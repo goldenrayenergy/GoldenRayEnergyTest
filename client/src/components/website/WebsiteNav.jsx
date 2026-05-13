@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   Menu, X, Phone, Mail, ArrowRight, TrendingUp, Lock,
   Zap, Package, ShoppingBag, DollarSign, Award, Users, FileText,
-  HelpCircle, MapPin, MessageCircle, Calendar, Sun, Search, MessageSquare,
+  HelpCircle, MapPin, MessageCircle, Calendar, Sun, Search, MessageSquare, Home,
 } from 'lucide-react';
 import FinanceModal from './FinanceModal';
 
@@ -79,6 +79,17 @@ export default function WebsiteNav({ extras }) {
             <span className="hidden md:inline text-xs font-bold">+64 21 839 356</span>
           </a>
 
+          {/* Home — visible on all breakpoints; suppress on the home page so it doesn't link to itself */}
+          {!isHome && (
+            <Link
+              to="/"
+              className="hidden sm:inline-flex items-center gap-1.5 px-2 md:px-3 py-2 rounded-lg text-white/85 hover:text-amber-300 hover:bg-white/5 text-xs md:text-sm font-semibold transition"
+              title="Back to home">
+              <Home size={14} />
+              <span className="hidden md:inline">Home</span>
+            </Link>
+          )}
+
           {/* Browse path — secondary CTA, desktop only */}
           <Link
             to="/solar-packages"
@@ -140,6 +151,7 @@ export default function WebsiteNav({ extras }) {
             <div className="flex-1 overflow-y-auto">
               {/* Primary actions — Option 6: two clear paths first, everything else below */}
               <div className="p-5 space-y-2 bg-gradient-to-b from-amber-50 to-white dark:from-amber-500/10 dark:to-brand-dark">
+                <DrawerCTA to="/" icon={Home} label="Home" sub="Back to the main page" onClick={close} />
                 <DrawerCTA to="/get-quote" icon={MessageSquare} label="Get a quote" sub="4-step wizard · proposal in 24 hours" onClick={close} primary />
                 <DrawerCTA to="/solar-packages" icon={Search} label="Browse solar systems" sub="Compare 6 packages · learn how pricing works" onClick={close} />
                 <DrawerCTA to="/shop" icon={ShoppingBag} label="Trade Shop" sub="For NZ electricians — wholesale + delivery" onClick={close} />
