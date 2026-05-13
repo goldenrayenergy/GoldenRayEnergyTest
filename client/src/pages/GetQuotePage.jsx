@@ -16,12 +16,14 @@ import { Link, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, Upload, FileText, Zap, Phone, X, CheckCircle,
   Info, Loader2, AlertTriangle, TrendingUp, DollarSign, Battery, Sun, Send,
+  ChevronDown,
 } from 'lucide-react';
 import { publicApi } from '../services/api';
 import WebsiteNav from '../components/website/WebsiteNav';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 
 const fmt$ = n => '$' + Math.round(Number(n || 0)).toLocaleString('en-NZ');
+const fmtSign = n => (n >= 0 ? '+' : '') + fmt$(n);
 
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -573,7 +575,21 @@ function Step3Projection({ intent, files, estimate, onAnalysisReady, cachedResul
         )}
       </div>
 
-      <div className="rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-500/10 dark:to-orange-500/10 border border-amber-200 dark:border-amber-500/30 p-5 text-center mb-5">
+      {/* Energy snapshot — the data we used to calculate */}
+      <div className="bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/10 p-5 mb-5">
+        <div className="text-[10px] font-extrabold tracking-widest text-gray-500 dark:text-gray-400 mb-3">YOUR ENERGY SNAPSHOT — THE NUMBERS BEHIND THE PROJECTION</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <SnapStat label="Annual usage"    value={`${a.aggregate.annual_kwh.toLocaleString()} kWh`} />
+          <SnapStat label="Annual spend"    value={fmt$(a.aggregate.annual_spend_nzd)} />
+          <SnapStat label="Effective rate"  value={`${(a.aggregate.effective_rate_nzd * 100).toFixed(1)}c/kWh`} />
+          <SnapStat label="Current retailer" value={a.aggregate.retailer || '—'} sub={a.aggregate.plan_name} />
+        </div>
+      </div>
+
+      {/* ─── Tabbed deep-dive: insights / transparency / scenarios table ─── */}
+      <DeepDive analysis={a} />
+
+      <div className="rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-500/10 dark:to-orange-500/10 border border-amber-200 dark:border-amber-500/30 p-5 text-center my-5">
         <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
           Want this tailored to your home with 3 system options?
         </p>
@@ -582,12 +598,235 @@ function Step3Projection({ intent, files, estimate, onAnalysisReady, cachedResul
         </p>
       </div>
 
+      {/* Disclaimer */}
+      {a.transparency?.disclaimer && (
+        <div className="px-4 py-3 rounded-lg bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/10 text-[10px] text-gray-500 dark:text-gray-400 leading-relaxed mb-5">
+          <strong className="text-gray-700 dark:text-gray-300">Disclaimer:</strong> {a.transparency.disclaimer}
+        </div>
+      )}
+
       <div className="flex items-center justify-between pt-5 border-t border-gray-100 dark:border-white/10">
         <button onClick={onBack} className="text-xs font-bold text-gray-500 hover:text-gray-700">← Back</button>
         <button onClick={onNext} className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm hover:opacity-90 transition flex items-center gap-2 shadow-md shadow-amber-500/30">
           Get my tailored proposal <ArrowRight size={14} />
         </button>
       </div>
+    </div>
+  );
+}
+
+function SnapStat({ label, value, sub }) {
+  return (
+    <div className="bg-white dark:bg-brand-dark-1 rounded-lg border border-gray-100 dark:border-white/10 p-3 text-center">
+      <div className="text-[9px] text-gray-400 uppercase tracking-widest font-bold mb-1">{label}</div>
+      <div className="text-base font-extrabold dark:text-gray-100 truncate">{value}</div>
+      {sub && <div className="text-[9px] text-gray-400 mt-0.5 truncate">{sub}</div>}
+    </div>
+  );
+}
+
+// ── Deep-dive tabbed view: Scenarios / Insights / How we calculated this ──
+function DeepDive({ analysis }) {
+  const [tab, setTab] = useState('scenarios');
+  return (
+    <div>
+      <div className="flex gap-1 mb-4 border-b border-gray-200 dark:border-white/10 overflow-x-auto">
+        <TabBtn label="Compare scenarios" active={tab === 'scenarios'} onClick={() => setTab('scenarios')} />
+        <TabBtn label="Insights" active={tab === 'insights'} onClick={() => setTab('insights')} count={analysis.patterns?.length || 0} />
+        <TabBtn label="How we calculated this" active={tab === 'transparency'} onClick={() => setTab('transparency')} />
+      </div>
+      {tab === 'scenarios'    && <ScenariosTable scenarios={analysis.scenarios} switchAdvice={analysis.switch_advice} />}
+      {tab === 'insights'     && <PatternsList patterns={analysis.patterns || []} switchAdvice={analysis.switch_advice} />}
+      {tab === 'transparency' && <TransparencyView t={analysis.transparency} />}
+    </div>
+  );
+}
+
+function TabBtn({ label, active, onClick, count }) {
+  return (
+    <button onClick={onClick}
+      className={`px-4 py-2 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 whitespace-nowrap
+        ${active ? 'border-amber-500 text-amber-600 dark:text-amber-300' : 'border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}>
+      {label}
+      {count > 0 && <span className="text-[9px] bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400 rounded-full px-1.5 py-0.5">{count}</span>}
+    </button>
+  );
+}
+
+function ScenariosTable({ scenarios, switchAdvice }) {
+  const orderedIds = ['do-nothing', 'switch-retailer', 'solar-only', 'solar-plus-battery'];
+  const ordered = orderedIds.map(id => scenarios.find(s => s.id === id)).filter(Boolean);
+  const best = [...scenarios].sort((a, b) => b.net_25yr - a.net_25yr)[0];
+  return (
+    <div className="bg-white dark:bg-brand-dark-1 rounded-xl border border-gray-100 dark:border-white/10 overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead className="bg-gray-50 dark:bg-white/5 border-b border-gray-100 dark:border-white/10">
+          <tr>
+            <th className="px-3 py-3 text-left text-[10px] font-bold text-gray-400 uppercase">Option</th>
+            <th className="px-3 py-3 text-right text-[10px] font-bold text-gray-400 uppercase">Upfront</th>
+            <th className="px-3 py-3 text-right text-[10px] font-bold text-gray-400 uppercase">Year 1</th>
+            <th className="px-3 py-3 text-right text-[10px] font-bold text-gray-400 uppercase">Year 25</th>
+            <th className="px-3 py-3 text-right text-[10px] font-bold text-gray-400 uppercase">Payback</th>
+            <th className="px-3 py-3 text-right text-[10px] font-bold text-gray-400 uppercase">25-yr Net</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-50 dark:divide-white/5">
+          {ordered.map(s => (
+            <tr key={s.id} className={best.id === s.id ? 'bg-emerald-50/40 dark:bg-emerald-500/5' : ''}>
+              <td className="px-3 py-3">
+                <div className="font-bold dark:text-gray-100">{s.label}</div>
+                {s.id === 'switch-retailer' && switchAdvice && (
+                  <div className="text-[9px] text-blue-600 mt-0.5">Save {fmt$(switchAdvice.annualSaving)}/yr</div>
+                )}
+              </td>
+              <td className="px-3 py-3 text-right dark:text-gray-200">{s.upfront_cost === 0 ? '—' : fmt$(s.upfront_cost)}</td>
+              <td className="px-3 py-3 text-right dark:text-gray-200">
+                <div className="font-semibold">{fmt$(s.year_1_cost)}</div>
+                {s.year_1_cost_range && (
+                  <div className="text-[9px] text-gray-400">{fmt$(s.year_1_cost_range.low)} – {fmt$(s.year_1_cost_range.high)}</div>
+                )}
+              </td>
+              <td className="px-3 py-3 text-right font-semibold dark:text-gray-200">{fmt$(s.year_25_cost)}</td>
+              <td className="px-3 py-3 text-right dark:text-gray-200">
+                {s.payback_years === null ? <span className="text-red-500 font-semibold">never</span>
+                 : s.payback_years === 0 ? <span className="text-emerald-600 font-semibold">0 (free)</span>
+                 : `${s.payback_years} yrs`}
+              </td>
+              <td className={`px-3 py-3 text-right font-extrabold ${s.net_25yr > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                {fmtSign(s.net_25yr)}
+                {best.id === s.id && <span className="ml-1 text-[9px] bg-emerald-500 text-white px-1 py-0.5 rounded">BEST</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PatternsList({ patterns, switchAdvice }) {
+  if (patterns.length === 0 && !switchAdvice) {
+    return <div className="text-center py-8 text-sm text-gray-400">No specific patterns detected — your usage looks typical for an NZ household.</div>;
+  }
+  const sevColors = {
+    info:     'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30',
+    warning:  'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30',
+    positive: 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30',
+  };
+  return (
+    <div className="space-y-3">
+      {switchAdvice && (
+        <div className="bg-white dark:bg-brand-dark-1 rounded-xl border-2 border-blue-200 dark:border-blue-500/40 p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp size={14} className="text-blue-600 dark:text-blue-400" />
+            <div className="text-[11px] font-extrabold uppercase tracking-wide text-blue-700 dark:text-blue-300">Switch retailer (independent advice)</div>
+          </div>
+          <div className="text-sm font-bold mb-1 dark:text-gray-100">Switch to {switchAdvice.retailerName} {switchAdvice.planName}</div>
+          <div className="text-xs text-gray-600 dark:text-gray-300">
+            Save approximately <strong>{fmt$(switchAdvice.annualSaving)}/year</strong> based on your usage profile — before you do anything else. We don't earn commission from this; it's just what the numbers say.
+          </div>
+        </div>
+      )}
+      {patterns.map((p, i) => (
+        <div key={i} className={`rounded-xl border p-4 ${sevColors[p.severity] || sevColors.info}`}>
+          <div className="text-sm font-bold mb-1">{p.label}</div>
+          <div className="text-xs mb-2">{p.details}</div>
+          {p.recommendation && <div className="text-[11px] italic">{p.recommendation}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TransparencyView({ t }) {
+  if (!t) return <div className="text-xs text-gray-400 py-6 text-center">No transparency data available for this analysis.</div>;
+  return (
+    <div className="space-y-3">
+      <div className="bg-white dark:bg-brand-dark-1 rounded-xl border border-gray-100 dark:border-white/10 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Info size={14} className="text-amber-500" />
+          <div className="text-sm font-bold dark:text-gray-100">
+            Confidence in this analysis: <span className="text-amber-600 dark:text-amber-300 uppercase">{t.overall_confidence}</span>
+          </div>
+        </div>
+        <div className="text-xs text-gray-600 dark:text-gray-300 mb-3">{t.confidence_explanation}</div>
+        <div className="text-[11px] text-gray-500 dark:text-gray-400">
+          Data current as of {t.as_of} · Next refresh due {t.next_data_refresh_due}
+        </div>
+      </div>
+
+      {t.data_sources && (
+        <Collapsible title="Public data sources" count={t.data_sources.length}>
+          <ul className="space-y-2 text-xs">
+            {t.data_sources.map((s, i) => (
+              <li key={i} className="flex flex-col">
+                <span className="font-semibold dark:text-gray-200">{s.name}</span>
+                <span className="text-gray-500 dark:text-gray-400">{s.source}</span>
+                {s.value_used && <span className="text-amber-600 dark:text-amber-300 font-mono text-[10px]">value used: {s.value_used}</span>}
+              </li>
+            ))}
+          </ul>
+        </Collapsible>
+      )}
+
+      {t.assumptions && (
+        <Collapsible title="Key assumptions" count={t.assumptions.length}>
+          <ul className="space-y-2 text-xs">
+            {t.assumptions.map((a, i) => (
+              <li key={i}>
+                <div className="font-semibold dark:text-gray-200">
+                  {a.label} = <span className="font-mono">{typeof a.value === 'number' && a.value < 1 && a.value > 0 ? (a.value * 100).toFixed(1) + '%' : a.value}</span>
+                </div>
+                <div className="text-gray-500 dark:text-gray-400">Basis: {a.basis}</div>
+                {a.why_matters && <div className="text-amber-600 dark:text-amber-300 italic">Why it matters: {a.why_matters}</div>}
+              </li>
+            ))}
+          </ul>
+        </Collapsible>
+      )}
+
+      {t.limitations && (
+        <Collapsible title="Known limitations" count={t.limitations.length}>
+          <ul className="space-y-3 text-xs">
+            {t.limitations.map((l, i) => (
+              <li key={i} className="p-3 rounded-lg bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/10">
+                <div className="font-semibold dark:text-gray-200">
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded mr-2 ${l.severity === 'high' ? 'bg-red-100 text-red-700' : l.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-700'}`}>{l.severity}</span>
+                  {l.label}
+                </div>
+                <div className="text-gray-600 dark:text-gray-400 mt-1">{l.impact}</div>
+                {l.mitigation && <div className="text-emerald-700 dark:text-emerald-300 italic mt-1">→ {l.mitigation}</div>}
+              </li>
+            ))}
+          </ul>
+        </Collapsible>
+      )}
+
+      {t.methodology_summary && (
+        <Collapsible title="Methodology">
+          <div className="text-xs text-gray-700 dark:text-gray-300">{t.methodology_summary}</div>
+          {t.sensitivity?.basis && (
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-2">Sensitivity basis: {t.sensitivity.basis}</div>
+          )}
+        </Collapsible>
+      )}
+    </div>
+  );
+}
+
+function Collapsible({ title, count, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="bg-white dark:bg-brand-dark-1 rounded-xl border border-gray-100 dark:border-white/10 overflow-hidden">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-white/5 transition">
+        <div className="text-sm font-bold flex items-center gap-2 dark:text-gray-100">
+          {title}
+          {count != null && <span className="text-[9px] bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400 rounded-full px-1.5 py-0.5">{count}</span>}
+        </div>
+        <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''} dark:text-gray-400`} />
+      </button>
+      {open && <div className="px-4 pb-4 pt-1 border-t border-gray-100 dark:border-white/10">{children}</div>}
     </div>
   );
 }
