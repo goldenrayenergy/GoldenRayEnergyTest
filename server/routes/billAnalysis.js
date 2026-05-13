@@ -185,6 +185,139 @@ router.post('/', upload.array('files', 12), async (req, res) => {
   }
 });
 
+// ── PUBLIC: estimate analysis from form inputs (Door B — no bill upload) ──
+//
+// For customers who don't have their bills handy but want the same
+// 25-year projection. Takes inputs: monthly_spend, retailer (optional),
+// postcode/region, household_size. Synthesizes a single bill that mimics
+// what would have been parsed from a real PDF, then runs the SAME
+// scenario engine the bill-upload path uses. Confidence is flagged as
+// 'medium' since the inputs are user-reported, not retailer-verified.
+//
+// Body (JSON):
+//   monthly_spend     — required, NZD
+//   retailer_id       — optional, defaults to 'mercury'
+//   postcode          — optional, derives region
+//   region            — optional, overrides postcode
+//   household_size    — optional, '1-2'/'3-4'/'5+'
+//   email             — optional
+import { readFileSync as fsReadFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const __dirnameRetailers = path.dirname(fileURLToPath(import.meta.url));
+const RETAILER_RATES = JSON.parse(fsReadFileSync(path.join(__dirnameRetailers, '../data/nz-retailer-rates.json'), 'utf8'));
+
+function findRetailerRate(retailerId, region) {
+  const retailer = RETAILER_RATES.retailers.find(r => r.id === retailerId)
+                 || RETAILER_RATES.retailers.find(r => r.id === 'mercury');
+  if (!retailer) return null;
+  const planKey = retailer.default_plan;
+  const plan = retailer.plans[planKey];
+  if (!plan) return null;
+  const regionRate = plan.regions[region] || plan.regions['auckland'];
+  return {
+    retailer:           retailer.name,
+    plan_name:          plan.label,
+    fixed_per_day_nzd:  regionRate.fixed_per_day_nzd,
+    variable_per_kwh_nzd: typeof regionRate.variable_per_kwh_nzd === 'number'
+                          ? regionRate.variable_per_kwh_nzd
+                          : regionRate.peak_per_kwh_nzd || 0.30,
+  };
+}
+
+router.post('/estimate', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    const monthlySpend = parseFloat(req.body.monthly_spend);
+    if (!monthlySpend || monthlySpend < 30) {
+      return res.status(400).json({ error: 'Please enter your monthly power spend (NZD, ≥ $30).' });
+    }
+
+    const region    = req.body.region || regionFromPostcode(req.body.postcode);
+    const retailerId = req.body.retailer_id || 'mercury';
+    const rate = findRetailerRate(retailerId, region);
+    if (!rate) return res.status(400).json({ error: 'Unknown retailer.' });
+
+    // Back-compute kWh from monthly spend:
+    //   monthly_spend = fixed_per_day × 30 + variable_per_kwh × kwh
+    //   kwh = (monthly_spend - fixed_per_day × 30) / variable_per_kwh
+    const fixedMonthly = rate.fixed_per_day_nzd * 30;
+    const variableSpend = Math.max(0, monthlySpend - fixedMonthly);
+    const estimatedKwh  = Math.round(variableSpend / rate.variable_per_kwh_nzd);
+
+    if (estimatedKwh < 50) {
+      return res.status(400).json({
+        error: 'That monthly spend looks low for the selected retailer/region — please double-check your inputs.',
+      });
+    }
+
+    // Synthesize 1 representative "bill" covering 30 days. The aggregator
+    // will scale it up to annual. Confidence is medium because the
+    // numbers came from form input, not a parsed retailer bill.
+    const today = new Date();
+    const periodEnd   = today.toISOString().slice(0, 10);
+    const periodStart = new Date(today.getTime() - 30 * 86400000).toISOString().slice(0, 10);
+    const syntheticBill = {
+      retailer:             rate.retailer,
+      plan_name:            rate.plan_name,
+      period_start:         periodStart,
+      period_end:           periodEnd,
+      days_in_period:       30,
+      kwh_total:            estimatedKwh,
+      kwh_peak:             null,
+      kwh_off_peak:         null,
+      kwh_exported:         null,
+      fixed_charge_nzd:     +fixedMonthly.toFixed(2),
+      variable_charge_nzd:  +(variableSpend / 1.15).toFixed(2),    // pre-GST
+      export_credit_nzd:    null,
+      gst_nzd:              +(monthlySpend - monthlySpend / 1.15).toFixed(2),
+      total_nzd:            monthlySpend,
+      ocr_confidence:       0.65,                                  // medium — user-reported, not verified
+      file_name:            null,
+      file_size_bytes:      0,
+      ocr_text_excerpt:     '',
+      parse_errors:         [],
+    };
+
+    const analysis = analyzeBills({ bills: [syntheticBill], region });
+
+    // Persist with door='estimate' marker
+    const row = buildAnalysisRow(analysis, {
+      region, postcode: req.body.postcode, email: req.body.email, contactId: null,
+    });
+    row.bills_uploaded = 0;  // marker: no bills uploaded for this analysis
+
+    const { data: inserted, error: insErr } = await supabaseAdmin
+      .from('bill_analyses')
+      .insert(row)
+      .select('id')
+      .single();
+    if (insErr) throw insErr;
+
+    res.status(201).json({
+      id: inserted.id,
+      analysis,
+      source_door: 'quote_form',
+      confidence_band: 'medium',
+      parse_summary: [{
+        retailer: rate.retailer,
+        period_start: periodStart,
+        period_end: periodEnd,
+        kwh_total: estimatedKwh,
+        total_nzd: monthlySpend,
+        ocr_confidence: 0.65,
+        parse_errors: [{ field: 'all', reason: 'Estimated from form input (not parsed from a retailer bill)' }],
+      }],
+      ocr_errors: [],
+    });
+  } catch (e) {
+    console.error('Bill analysis estimate error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 // ── PUBLIC: fetch a saved analysis by id ─────────────────────────────────
 //
 // Customers can come back to a result via the URL share. Excludes the raw

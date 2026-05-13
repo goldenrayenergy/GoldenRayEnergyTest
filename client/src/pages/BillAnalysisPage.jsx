@@ -28,10 +28,15 @@ const REGIONS = [
 ];
 
 export default function BillAnalysisPage() {
+  const [door, setDoor] = useState('upload');       // upload | estimate
   const [files, setFiles] = useState([]);
   const [region, setRegion] = useState('');
   const [postcode, setPostcode] = useState('');
   const [email, setEmail] = useState('');
+  // Door B inputs
+  const [monthlySpend, setMonthlySpend] = useState('');
+  const [retailerId, setRetailerId] = useState('mercury');
+  const [householdSize, setHouseholdSize] = useState('');
   const [stage, setStage] = useState('upload');     // upload | analysing | results | error
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -46,7 +51,7 @@ export default function BillAnalysisPage() {
 
   const removeFile = (i) => setFiles(prev => prev.filter((_, idx) => idx !== i));
 
-  const submit = async () => {
+  const submitBills = async () => {
     if (files.length === 0) return;
     setStage('analysing');
     setError('');
@@ -69,6 +74,30 @@ export default function BillAnalysisPage() {
     }
   };
 
+  const submitEstimate = async () => {
+    if (!monthlySpend) return;
+    setStage('analysing');
+    setError('');
+    try {
+      const { data } = await publicApi.post('/bill-analysis/estimate', {
+        monthly_spend: parseFloat(monthlySpend),
+        retailer_id:   retailerId,
+        postcode:      postcode || undefined,
+        region:        region || undefined,
+        household_size: householdSize || undefined,
+        email:         email || undefined,
+      }, { timeout: 60000 });
+      setResult(data);
+      setStage('results');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+      setStage('error');
+    }
+  };
+
+  const submit = () => (door === 'upload' ? submitBills() : submitEstimate());
+
   // Reset everything back to the upload screen. Linking to /bill-analysis
   // alone wouldn't re-render the page since we're already on that route —
   // we need to actively clear state.
@@ -77,6 +106,10 @@ export default function BillAnalysisPage() {
     setRegion('');
     setPostcode('');
     setEmail('');
+    setMonthlySpend('');
+    setRetailerId('mercury');
+    setHouseholdSize('');
+    setDoor('upload');
     setResult(null);
     setError('');
     setStage('upload');
@@ -88,10 +121,14 @@ export default function BillAnalysisPage() {
       <WebsiteNav />
 
       {stage === 'upload' && <UploadView
+        door={door} setDoor={setDoor}
         files={files} setFiles={setFiles} onDrop={onDrop} removeFile={removeFile}
         region={region} setRegion={setRegion}
         postcode={postcode} setPostcode={setPostcode}
         email={email} setEmail={setEmail}
+        monthlySpend={monthlySpend} setMonthlySpend={setMonthlySpend}
+        retailerId={retailerId} setRetailerId={setRetailerId}
+        householdSize={householdSize} setHouseholdSize={setHouseholdSize}
         inputRef={inputRef}
         onSubmit={submit}
       />}
@@ -110,8 +147,16 @@ export default function BillAnalysisPage() {
 // Nav extracted into shared WebsiteNav component (client/src/components/website/WebsiteNav.jsx)
 
 // ── Upload state ─────────────────────────────────────────────────────────
-function UploadView({ files, onDrop, removeFile, region, setRegion, postcode, setPostcode, email, setEmail, inputRef, onSubmit }) {
+function UploadView({
+  door, setDoor,
+  files, onDrop, removeFile,
+  region, setRegion, postcode, setPostcode, email, setEmail,
+  monthlySpend, setMonthlySpend, retailerId, setRetailerId, householdSize, setHouseholdSize,
+  inputRef, onSubmit,
+}) {
   const [dragOver, setDragOver] = useState(false);
+  const submitDisabled = door === 'upload' ? files.length === 0 : !monthlySpend || parseFloat(monthlySpend) < 30;
+
   return (
     <div className="pt-24 md:pt-32 pb-16 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50 min-h-screen">
       <div className="max-w-3xl mx-auto">
@@ -123,12 +168,103 @@ function UploadView({ files, onDrop, removeFile, region, setRegion, postcode, se
             See what 25 years of <span className="text-gradient-warm">your power bills</span> cost.
           </h1>
           <p className="text-sm md:text-base text-gray-500 max-w-2xl mx-auto">
-            Upload your last <strong>12 power bills</strong> (or as many as you have) — we'll build a full-year usage profile
-            and show you the 25-year cost of doing nothing vs going solar, using your real numbers.
+            {door === 'upload'
+              ? <>Upload your last <strong>12 power bills</strong> (or as many as you have) — we'll build a full-year usage profile and show you the 25-year cost of doing nothing vs going solar, using your real numbers.</>
+              : <>No bills handy? Tell us about your home in 30 seconds — we'll give you a solid estimate. <span className="text-gray-400">Upload your bills later for an exact projection.</span></>
+            }
           </p>
         </div>
 
-        {/* Drop zone */}
+        {/* Door selector — two cards / tabs */}
+        <div className="grid grid-cols-2 gap-2 mb-6 bg-white rounded-2xl border border-gray-200 p-1.5">
+          <button
+            onClick={() => setDoor('upload')}
+            className={`px-4 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center gap-2
+              ${door === 'upload'
+                ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow'
+                : 'bg-transparent text-gray-500 hover:text-gray-700'}`}>
+            <Upload size={14} /> Upload my bills
+            {door === 'upload' && <span className="text-[9px] uppercase tracking-widest opacity-80 ml-1">±2% accurate</span>}
+          </button>
+          <button
+            onClick={() => setDoor('estimate')}
+            className={`px-4 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center gap-2
+              ${door === 'estimate'
+                ? 'bg-gradient-to-r from-blue-500 to-emerald-500 text-white shadow'
+                : 'bg-transparent text-gray-500 hover:text-gray-700'}`}>
+            <Zap size={14} /> No bills? Estimate
+            {door === 'estimate' && <span className="text-[9px] uppercase tracking-widest opacity-80 ml-1">±15% accurate</span>}
+          </button>
+        </div>
+
+        {/* Door B — Estimate form */}
+        {door === 'estimate' && (
+          <div className="bg-white rounded-2xl border border-blue-200 p-6 mb-4">
+            <div className="text-[10px] font-extrabold tracking-widest text-blue-700 mb-3">TELL US ABOUT YOUR POWER USE</div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Monthly power spend *</label>
+                <div className="relative mt-1">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-semibold">$</span>
+                  <input
+                    type="number"
+                    min="30"
+                    step="10"
+                    placeholder="200"
+                    value={monthlySpend}
+                    onChange={e => setMonthlySpend(e.target.value)}
+                    className="w-full pl-7 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400"
+                  />
+                </div>
+                <div className="text-[10px] text-gray-400 mt-1">An average month, NZD incl GST</div>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Your retailer</label>
+                <select value={retailerId} onChange={e => setRetailerId(e.target.value)}
+                  className="mt-1 w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400">
+                  <option value="mercury">Mercury</option>
+                  <option value="genesis">Genesis</option>
+                  <option value="contact">Contact</option>
+                  <option value="meridian">Meridian</option>
+                  <option value="electric_kiwi">Electric Kiwi</option>
+                  <option value="powershop">Powershop</option>
+                  <option value="frank">Frank Energy</option>
+                  <option value="flick">Flick Electric</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Postcode</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={4}
+                  placeholder="1010"
+                  value={postcode}
+                  onChange={e => setPostcode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  className="mt-1 w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400"
+                />
+                <div className="text-[10px] text-gray-400 mt-1">Drives regional sun hours</div>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Household size <span className="text-gray-300 font-normal">(optional)</span></label>
+                <select value={householdSize} onChange={e => setHouseholdSize(e.target.value)}
+                  className="mt-1 w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400">
+                  <option value="">—</option>
+                  <option value="1-2">1-2 people</option>
+                  <option value="3-4">3-4 people</option>
+                  <option value="5+">5+ people</option>
+                </select>
+              </div>
+            </div>
+            <div className="mt-4 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 text-[11px] text-blue-700 flex items-start gap-2">
+              <Info size={11} className="flex-shrink-0 mt-0.5" />
+              <span>We'll back-compute your annual kWh from your monthly spend and retailer's published rate. Less precise than a bill upload — your projection will say "estimate" and you can refine it later.</span>
+            </div>
+          </div>
+        )}
+
+        {/* Door A — Drop zone */}
+        {door === 'upload' && <>
         <div
           onDragOver={e => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
@@ -191,15 +327,19 @@ function UploadView({ files, onDrop, removeFile, region, setRegion, postcode, se
             ))}
           </div>
         )}
+        </>}
+        {/* End Door A — Drop zone */}
 
-        {/* Optional metadata */}
-        <div className="grid md:grid-cols-3 gap-3 mt-5">
-          <div>
-            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Postcode <span className="text-gray-300 font-normal">(optional)</span></label>
-            <input value={postcode} onChange={e => setPostcode(e.target.value.replace(/\D/g, '').slice(0, 4))}
-              placeholder="1010" inputMode="numeric"
-              className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs" />
-          </div>
+        {/* Shared optional metadata — region + email (Door A also shows postcode here; Door B has its own) */}
+        <div className={`grid gap-3 mt-5 ${door === 'upload' ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
+          {door === 'upload' && (
+            <div>
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Postcode <span className="text-gray-300 font-normal">(optional)</span></label>
+              <input value={postcode} onChange={e => setPostcode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="1010" inputMode="numeric"
+                className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs" />
+            </div>
+          )}
           <div>
             <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Region</label>
             <select value={region} onChange={e => setRegion(e.target.value)}
@@ -217,16 +357,22 @@ function UploadView({ files, onDrop, removeFile, region, setRegion, postcode, se
 
         <button
           onClick={onSubmit}
-          disabled={files.length === 0}
-          className="mt-6 w-full py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-extrabold text-base disabled:opacity-40 disabled:cursor-not-allowed hover:from-amber-400 hover:to-orange-400 transition flex items-center justify-center gap-2"
+          disabled={submitDisabled}
+          className={`mt-6 w-full py-4 rounded-2xl text-white font-extrabold text-base disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2
+            ${door === 'upload'
+              ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400'
+              : 'bg-gradient-to-r from-blue-500 to-emerald-500 hover:from-blue-400 hover:to-emerald-400'}`}
         >
-          {files.length === 0 ? 'Drop bills above to start' : `Analyse my ${files.length} bill${files.length > 1 ? 's' : ''}`}
-          {files.length > 0 && <ArrowRight size={16} />}
+          {door === 'upload'
+            ? (files.length === 0 ? 'Drop bills above to start' : `Analyse my ${files.length} bill${files.length > 1 ? 's' : ''}`)
+            : (!monthlySpend ? 'Enter your monthly spend to start' : 'Get my estimate →')}
+          {!submitDisabled && door === 'upload' && <ArrowRight size={16} />}
         </button>
 
         <p className="text-[10px] text-gray-400 text-center mt-4">
-          Your bills are parsed once for the analysis and not stored permanently.
-          Anonymous analyses auto-delete after 90 days.
+          {door === 'upload'
+            ? 'Your bills are parsed once for the analysis and not stored permanently. Anonymous analyses auto-delete after 90 days.'
+            : 'Estimates use your reported monthly spend + your retailer\'s published rate. Upload your bills later for precision.'}
         </p>
       </div>
     </div>
