@@ -16,11 +16,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, Upload, FileText, Zap, Phone, X, CheckCircle,
   Info, Loader2, AlertTriangle, TrendingUp, DollarSign, Battery, Sun, Send,
-  ChevronDown,
+  ChevronDown, Home, Building2, FilePen,
 } from 'lucide-react';
 import { publicApi } from '../services/api';
 import WebsiteNav from '../components/website/WebsiteNav';
 import WebsiteFooter from '../components/website/WebsiteFooter';
+import AddressAutocomplete from '../components/ui/AddressAutocomplete';
 
 const fmt$ = n => '$' + Math.round(Number(n || 0)).toLocaleString('en-NZ');
 const fmtSign = n => (n >= 0 ? '+' : '') + fmt$(n);
@@ -32,6 +33,7 @@ export default function GetQuotePage() {
   const prefilledPackage = searchParams.get('package');
 
   const [step, setStep] = useState(1);
+  const [customerType, setCustomerType] = useState('residential');   // Phase 7.1 segmentation
   const [intent, setIntent] = useState(null);                // 'bills' | 'estimate' | 'callback'
 
   // Door A (bills) state
@@ -54,7 +56,8 @@ export default function GetQuotePage() {
   // Step 4 — contact form state
   const [contact, setContact] = useState({
     firstName: '', lastName: '', email: '', phone: '',
-    address: '', owns_home: '', roof_type: '', battery_option: '',
+    address: '', addressStreet: '', addressSuburb: '', addressCity: '', addressPostcode: '',
+    owns_home: '', roof_type: '', battery_option: '',
     installation_timeframe: '', lead_source: 'website',
     notes: '',                                                // open-ended customer message
   });
@@ -121,7 +124,7 @@ export default function GetQuotePage() {
           <ProgressBar step={step} />
 
           {/* Step content */}
-          {step === 1 && <Step1IntentPicker onPick={pickIntent} />}
+          {step === 1 && <Step1IntentPicker customerType={customerType} setCustomerType={setCustomerType} onPick={pickIntent} />}
           {step === 2 && (
             <Step2Container subtitle={subtitleForIntent(intent)} onBack={back} onNext={next} nextEnabled={step2Ready}>
               {intent === 'bills'    && <BillsBranch files={files} onDrop={onDropFiles} removeFile={removeFile} inputRef={filesInputRef} />}
@@ -143,6 +146,7 @@ export default function GetQuotePage() {
           {step === 4 && (
             <Step4ContactForm
               intent={intent}
+              customerType={customerType}
               estimate={estimate}
               analysisId={analysisId}
               analysisResult={analysisResult}
@@ -155,11 +159,18 @@ export default function GetQuotePage() {
               onSubmit={async () => {
                 setSubmitState({ loading: true, error: '', done: false });
                 try {
+                  // Map our customerType to the legacy installationType field the server already understands
+                  const installationType =
+                    customerType === 'off-grid'   ? 'off-grid' :
+                    customerType === 'commercial' ? 'commercial' :
+                    customerType === 'ppa'        ? 'ppa' :
+                                                    'residential';
                   await publicApi.post('/quote/submit', {
                     form: {
                       ...contact,
                       monthlyBill: estimate.monthly_spend,
-                      installationType: 'residential',
+                      installationType,
+                      customerType,                              // Phase 7.1 segmentation tag
                       callToDiscuss: 'yes',
                       phoneVerified: otp.verified,                // surface verified flag in CRM
                       // Wizard provenance — surface in CRM
@@ -223,27 +234,66 @@ function ProgressBar({ step }) {
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 1 — Intent picker (the door selector)
 // ════════════════════════════════════════════════════════════════════════════
-function Step1IntentPicker({ onPick }) {
+function Step1IntentPicker({ customerType, setCustomerType, onPick }) {
+  const isResidential = customerType === 'residential';
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
       <div className="text-center mb-6">
         <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 1 OF 4</div>
         <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-3 dark:text-gray-100">How can we help?</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400">Pick whichever fits your situation today.</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">Tell us about your installation, then how you'd like to engage.</p>
       </div>
 
+      {/* ── Customer type segmentation (Phase 7.1) ── */}
+      <div className="mb-6">
+        <div className="text-[10px] font-extrabold tracking-widest text-gray-500 dark:text-gray-400 mb-2 uppercase">
+          What kind of installation?
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <TypeCard active={customerType === 'residential'} onClick={() => setCustomerType('residential')}
+            icon={Home}   label="Residential" sub="My home" />
+          <TypeCard active={customerType === 'off-grid'}    onClick={() => setCustomerType('off-grid')}
+            icon={Sun}    label="Off-grid"    sub="No grid / autonomy" />
+          <TypeCard active={customerType === 'commercial'}  onClick={() => setCustomerType('commercial')}
+            icon={Building2} label="Commercial" sub="Business site" />
+          <TypeCard active={customerType === 'ppa'}         onClick={() => setCustomerType('ppa')}
+            icon={FilePen} label="PPA"        sub="$0 upfront contract" />
+        </div>
+
+        {!isResidential && (
+          <div className="mt-3 px-3 py-2.5 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 text-[11px] text-blue-700 dark:text-blue-300 flex items-start gap-2">
+            <Info size={12} className="flex-shrink-0 mt-0.5" />
+            <span>
+              {customerType === 'off-grid'   && <>Off-grid systems need a site assessment to size battery autonomy + generator backup. We'll capture your basics now and a specialist will call within 2 business days to schedule a survey.</>}
+              {customerType === 'commercial' && <>Commercial sites are custom-designed against your peak demand, hours of operation and tariff structure. We'll capture basics now and our commercial team will call within 2 business days.</>}
+              {customerType === 'ppa'        && <>Power Purchase Agreements are negotiated per-site (rate, term length, ownership). We'll capture basics now and our finance team will call within 2 business days.</>}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Intent cards (same as before — but framed by customer type above) ── */}
+      <div className="text-[10px] font-extrabold tracking-widest text-gray-500 dark:text-gray-400 mb-2 uppercase">
+        How would you like to proceed?
+      </div>
       <div className="space-y-3">
         <IntentCard color="amber" accuracy="±2%" icon="📄"
           title="I have my power bills"
-          desc="Upload 1-12 PDFs · Get your exact 25-year savings · Most accurate path"
+          desc={isResidential
+            ? 'Upload 1-12 PDFs · Get your exact 25-year savings · Most accurate path'
+            : 'Upload your usage bills · Helps us scope your install accurately'}
           onClick={() => onPick('bills')} />
         <IntentCard color="blue" accuracy="±15%" icon="⚡"
           title="I don't have bills handy"
-          desc="Answer 4 quick questions · Get an estimate · Refine later"
+          desc={isResidential
+            ? 'Answer 4 quick questions · Get an estimate · Refine later'
+            : 'Answer a few questions about your site · We\'ll fill in detail on the call'}
           onClick={() => onPick('estimate')} />
         <IntentCard color="emerald" accuracy="FAST" icon="📞"
           title="I just want a callback"
-          desc="Skip the numbers · Sales rep will call within 24h"
+          desc={isResidential
+            ? 'Skip the numbers · Sales rep will call within 24h'
+            : 'Skip the numbers · Our specialist will call to walk through your site'}
           onClick={() => onPick('callback')} />
       </div>
 
@@ -251,6 +301,22 @@ function Step1IntentPicker({ onPick }) {
         All three paths produce one customer record. You can change your mind later.
       </p>
     </div>
+  );
+}
+
+function TypeCard({ active, onClick, icon: Icon, label, sub }) {
+  return (
+    <button onClick={onClick}
+      className={`px-3 py-3 rounded-xl border-2 text-left transition flex items-start gap-2
+        ${active
+          ? 'border-amber-400 bg-amber-50 dark:bg-amber-500/10 ring-1 ring-amber-300'
+          : 'border-gray-200 dark:border-white/10 bg-white dark:bg-brand-dark-1 hover:border-amber-300'}`}>
+      <Icon size={18} className={`flex-shrink-0 mt-0.5 ${active ? 'text-amber-600 dark:text-amber-300' : 'text-gray-400'}`} />
+      <div className="min-w-0">
+        <div className={`text-xs font-bold leading-tight ${active ? 'text-amber-700 dark:text-amber-200' : 'dark:text-gray-200'}`}>{label}</div>
+        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">{sub}</div>
+      </div>
+    </button>
   );
 }
 
@@ -848,10 +914,10 @@ function StatPill({ label, value }) {
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 4 — Contact form — submits to existing /api/quote/submit
 // ════════════════════════════════════════════════════════════════════════════
-function Step4ContactForm({ intent, estimate, analysisId, analysisResult, contact, setContact, otp, setOtp, submitState, onBack, onSubmit }) {
+function Step4ContactForm({ intent, customerType, estimate, analysisId, analysisResult, contact, setContact, otp, setOtp, submitState, onBack, onSubmit }) {
   const set = (k, v) => setContact(c => ({ ...c, [k]: v }));
   const subtitle = intent === 'callback'
-    ? "Eric will call within 24 hours to discuss your options."
+    ? "We'll need a few more details so the right specialist can call within 24 hours."
     : analysisResult
       ? `Eric will call within 24 hours to walk you through your projection.`
       : "Eric will call within 24 hours to talk things through.";
@@ -862,9 +928,18 @@ function Step4ContactForm({ intent, estimate, analysisId, analysisResult, contac
   const otpRequired = intent === 'callback';
   const phoneVerifiedOk = !otpRequired || otp.verified;
 
+  // For callback intent the optional fields are promoted to REQUIRED — the
+  // sales rep needs enough context to make the call worthwhile.
+  const detailsRequired = intent === 'callback';
+
+  const detailsOk = !detailsRequired || (
+    contact.address && contact.owns_home && contact.roof_type && contact.installation_timeframe
+  );
+
   const requiredOk = contact.firstName && contact.lastName
     && (contact.email || contact.phone)   // at minimum, give us a way to reach you
-    && phoneVerifiedOk;
+    && phoneVerifiedOk
+    && detailsOk;
 
   const sendOtp = async () => {
     if (!contact.phone) return;
@@ -984,38 +1059,13 @@ function Step4ContactForm({ intent, estimate, analysisId, analysisResult, contac
           </div>
         </div>
 
-        <details className="bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/10">
-          <summary className="px-4 py-3 cursor-pointer text-xs font-bold text-gray-700 dark:text-gray-200 select-none">
-            Optional but helpful — speeds up your quote ▼
-          </summary>
-          <div className="p-4 space-y-3 border-t border-gray-100 dark:border-white/10">
-            <Field label="Address" value={contact.address} onChange={v => set('address', v)} placeholder="12 Queen St, Auckland" />
-            <div className="grid grid-cols-2 gap-3">
-              <SelectField label="Own home?" value={contact.owns_home} onChange={v => set('owns_home', v)}
-                options={[{value:'',label:'—'},{value:'yes',label:'Yes'},{value:'no',label:'No'}]} />
-              <SelectField label="Roof type" value={contact.roof_type} onChange={v => set('roof_type', v)}
-                options={[{value:'',label:'—'},
-                  {value:'corrugated-iron',label:'Coloursteel'},
-                  {value:'concrete-tiles', label:'Concrete tile'},
-                  {value:'clay-tiles',     label:'Clay tile'},
-                  {value:'flat-membrane',  label:'Flat membrane'},
-                  {value:'other',          label:'Other'}]} />
-              <SelectField label="Battery preference" value={contact.battery_option} onChange={v => set('battery_option', v)}
-                options={[{value:'',label:'—'},
-                  {value:'with-battery',   label:'With battery'},
-                  {value:'without-battery',label:'Without'},
-                  {value:'unsure',         label:'Unsure'}]} />
-              <SelectField label="Install when?" value={contact.installation_timeframe} onChange={v => set('installation_timeframe', v)}
-                options={[{value:'',label:'—'},
-                  {value:'asap',         label:'ASAP'},
-                  {value:'1-month',      label:'Within 1 month'},
-                  {value:'1-3-months',   label:'1-3 months'},
-                  {value:'3-6-months',   label:'3-6 months'},
-                  {value:'6-12-months',  label:'6-12 months'},
-                  {value:'researching',  label:'Just researching'}]} />
-            </div>
-          </div>
-        </details>
+        {/* Property details — required when callback intent, optional otherwise */}
+        <DetailsSection
+          required={detailsRequired}
+          intent={intent}
+          contact={contact}
+          set={set}
+        />
       </div>
 
       {submitState.error && (
@@ -1040,6 +1090,95 @@ function Step4ContactForm({ intent, estimate, analysisId, analysisResult, contac
           ← {analysisResult ? 'Back to savings' : 'Back'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// Property details — collapsible (optional) for bills/estimate intent,
+// open + required for callback intent. Always uses the NZ AddressAutocomplete
+// for the address field so postcode + suburb get auto-filled on selection.
+function DetailsSection({ required, intent, contact, set }) {
+  const [open, setOpen] = useState(required);  // open by default when required
+
+  const handleAddressSelect = (parsed) => {
+    set('address',         parsed.formatted);
+    set('addressStreet',   parsed.street);
+    set('addressSuburb',   parsed.suburb);
+    set('addressCity',     parsed.city);
+    set('addressPostcode', parsed.postcode);
+  };
+
+  const Body = (
+    <div className={`p-4 space-y-3 ${required ? '' : 'border-t border-gray-100 dark:border-white/10'}`}>
+      {/* Address with NZ autocomplete */}
+      <div>
+        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-1">
+          Address {required && <span className="text-red-500">*</span>}
+        </label>
+        <AddressAutocomplete
+          value={contact.address}
+          onChange={(e) => set('address', e.target.value)}
+          onSelect={handleAddressSelect}
+        />
+        {/* Show parsed components as confirmation pills once an address is selected */}
+        {(contact.addressStreet || contact.addressSuburb || contact.addressCity || contact.addressPostcode) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {contact.addressStreet   && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{contact.addressStreet}</span>}
+            {contact.addressSuburb   && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{contact.addressSuburb}</span>}
+            {contact.addressCity     && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{contact.addressCity}</span>}
+            {contact.addressPostcode && <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{contact.addressPostcode}</span>}
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <SelectField label={`Own home? ${required ? '*' : ''}`} value={contact.owns_home} onChange={v => set('owns_home', v)}
+          options={[{value:'',label:'—'},{value:'yes',label:'Yes'},{value:'no',label:'No'}]} />
+        <SelectField label={`Roof type ${required ? '*' : ''}`} value={contact.roof_type} onChange={v => set('roof_type', v)}
+          options={[{value:'',label:'—'},
+            {value:'corrugated-iron',label:'Coloursteel'},
+            {value:'concrete-tiles', label:'Concrete tile'},
+            {value:'clay-tiles',     label:'Clay tile'},
+            {value:'flat-membrane',  label:'Flat membrane'},
+            {value:'other',          label:'Other'}]} />
+        <SelectField label="Battery preference" value={contact.battery_option} onChange={v => set('battery_option', v)}
+          options={[{value:'',label:'—'},
+            {value:'with-battery',   label:'With battery'},
+            {value:'without-battery',label:'Without'},
+            {value:'unsure',         label:'Unsure'}]} />
+        <SelectField label={`Install when? ${required ? '*' : ''}`} value={contact.installation_timeframe} onChange={v => set('installation_timeframe', v)}
+          options={[{value:'',label:'—'},
+            {value:'asap',         label:'ASAP'},
+            {value:'1-month',      label:'Within 1 month'},
+            {value:'1-3-months',   label:'1-3 months'},
+            {value:'3-6-months',   label:'3-6 months'},
+            {value:'6-12-months',  label:'6-12 months'},
+            {value:'researching',  label:'Just researching'}]} />
+      </div>
+    </div>
+  );
+
+  if (required) {
+    // Open + required header
+    return (
+      <div className="bg-amber-50/40 dark:bg-amber-500/5 rounded-xl border border-amber-200 dark:border-amber-500/30">
+        <div className="px-4 py-3 text-xs font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+          <Info size={12} /> Required for callback enquiries — helps our sales rep make a useful call
+        </div>
+        {Body}
+      </div>
+    );
+  }
+
+  // Optional collapsible (legacy behaviour for bills / estimate intent)
+  return (
+    <div className="bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/10">
+      <button onClick={() => setOpen(o => !o)} type="button"
+        className="w-full px-4 py-3 cursor-pointer text-xs font-bold text-gray-700 dark:text-gray-200 select-none flex items-center justify-between">
+        <span>Optional but helpful — speeds up your quote</span>
+        <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && Body}
     </div>
   );
 }
