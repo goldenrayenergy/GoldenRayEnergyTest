@@ -143,20 +143,58 @@ export default function WebsitePage() {
             <circle cx="100" cy="100" r="35" fill="#F5A623" />
           </svg>
         </div>
-        <div className="relative z-10 max-w-5xl w-full mx-auto">
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center px-4 py-1.5 rounded-full bg-white dark:bg-brand-dark-1 border border-amber-300 dark:border-amber-500/40 shadow-sm shadow-amber-200/60 dark:shadow-none mb-6">
-              <span className="text-xs font-bold text-gradient-warm">★ 200+ NZ HOMES POWERED</span>
+        {/* ── Original brand hero — kept for narrative + brand recall ── */}
+        <div className="relative z-10 max-w-2xl">
+          <div className="inline-flex items-center px-4 py-1.5 rounded-full bg-white dark:bg-brand-dark-1 border border-amber-300 dark:border-amber-500/40 shadow-sm shadow-amber-200/60 dark:shadow-none mb-6">
+            <span className="text-xs font-bold text-gradient-warm">NEW ZEALAND'S SOLAR ENERGY EXPERTS</span>
+          </div>
+          <h1 className="text-3xl md:text-5xl font-extrabold font-display leading-tight mb-5 dark:text-gray-100">
+            Clean Energy for<br />New Zealand's <span className="text-gradient-warm animate-gradient">Future</span>
+          </h1>
+          <p className="text-base text-gray-600 dark:text-gray-300 leading-relaxed max-w-lg mb-8">
+            From single-family homes to large commercial sites, <span className="font-semibold text-orange-600 dark:text-orange-400">GoldenRay Energy NZ</span> designs, installs, and supports solar systems built around your usage — with transparent pricing and detailed proposals.
+          </p>
+          <div className="flex gap-2 md:gap-3 flex-wrap">
+            <Link to="/get-quote"><Button size="lg" icon={Zap}>Get Free Quote</Button></Link>
+            <Button onClick={() => setFinanceModalOpen(true)} variant="success" size="lg" icon={DollarSign}>$0 Upfront Finance</Button>
+            <a href="tel:+6421839356"><Button variant="dark" size="lg" icon={Phone}>+64 21 839 356</Button></a>
+          </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-3 max-w-md">
+            Two ways to engage:{' '}
+            <a href="#path-selector" className="text-amber-600 hover:underline font-semibold">browse our packages</a> at your own pace, or{' '}
+            <Link to="/get-quote" className="text-amber-600 hover:underline font-semibold">walk through our 4-step quote wizard</Link>.
+          </p>
+          <div className="grid grid-cols-2 md:flex md:gap-12 gap-4 mt-10 md:mt-12">
+            {[
+              { n: '1,800+', l: 'Installations', c: 'from-amber-500 to-orange-500' },
+              { n: '$32M+',  l: 'Savings',       c: 'from-emerald-500 to-emerald-600' },
+              { n: '12,000t',l: 'CO₂ Saved',     c: 'from-blue-500 to-emerald-500' },
+              { n: '98%',    l: 'Satisfaction',  c: 'from-amber-500 to-blue-500' },
+            ].map((s, i) => (
+              <div key={i}>
+                <div className={`text-xl md:text-2xl font-extrabold font-display bg-gradient-to-br ${s.c} bg-clip-text text-transparent`}>{s.n}</div>
+                <div className="text-[11px] md:text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">{s.l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Path selector (Option 6 two-card panel) — separate section under the brand hero ── */}
+      <section id="path-selector" className="py-16 md:py-20 px-4 md:px-16 bg-gradient-to-br from-amber-50/60 via-white to-emerald-50/60 dark:from-brand-dark dark:via-brand-dark-1 dark:to-brand-dark relative overflow-hidden">
+        <div className="max-w-5xl mx-auto relative">
+          <div className="text-center mb-10">
+            <div className="inline-flex items-center px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[11px] font-bold mb-4">
+              ★ 200+ NZ HOMES POWERED
             </div>
-            <h1 className="text-3xl md:text-5xl lg:text-6xl font-extrabold font-display leading-tight mb-4 dark:text-gray-100">
-              Solar in NZ, done <span className="text-gradient-warm animate-gradient">properly.</span>
-            </h1>
-            <p className="text-sm md:text-base text-gray-600 dark:text-gray-300 leading-relaxed max-w-2xl mx-auto">
+            <h2 className="text-2xl md:text-4xl font-extrabold font-display leading-tight mb-3 dark:text-gray-100">
+              Solar in NZ, done <span className="text-gradient-warm">properly.</span>
+            </h2>
+            <p className="text-sm md:text-base text-gray-500 dark:text-gray-400 max-w-2xl mx-auto">
               Pick the path that fits where you are right now.
             </p>
           </div>
 
-          {/* ─── Option 6: Two-path card selector ─── */}
           <div className="grid md:grid-cols-2 gap-4 md:gap-5 max-w-4xl mx-auto">
             {/* Explorer path */}
             <Link
@@ -164,7 +202,7 @@ export default function WebsitePage() {
               className="group bg-white dark:bg-brand-dark-1 rounded-3xl border-2 border-blue-200 dark:border-blue-500/40 hover:border-blue-500 hover:shadow-2xl hover:shadow-blue-200/40 transition p-6 md:p-7 flex flex-col">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-500/20 dark:to-blue-500/10 flex items-center justify-center text-2xl mb-3">🔍</div>
               <div className="text-[10px] font-extrabold tracking-widest text-blue-700 dark:text-blue-300 mb-2">I'M JUST EXPLORING</div>
-              <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2 dark:text-gray-100">Browse solar systems</h2>
+              <h3 className="text-xl md:text-2xl font-extrabold font-display mb-2 dark:text-gray-100">Browse solar systems</h3>
               <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 leading-relaxed mb-4 flex-1">
                 See all our packages, compare panels and batteries, learn how solar pricing works in NZ. No forms, no pressure.
               </p>
@@ -184,7 +222,7 @@ export default function WebsitePage() {
               className="group bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-500/10 dark:to-orange-500/10 rounded-3xl border-2 border-amber-300 dark:border-amber-400/50 hover:border-amber-500 hover:shadow-2xl hover:shadow-amber-200/40 transition p-6 md:p-7 flex flex-col">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-2xl mb-3">💬</div>
               <div className="text-[10px] font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">I'M READY FOR A QUOTE</div>
-              <h2 className="text-xl md:text-2xl font-extrabold font-display mb-2 dark:text-gray-100">Get a tailored quote</h2>
+              <h3 className="text-xl md:text-2xl font-extrabold font-display mb-2 dark:text-gray-100">Get a tailored quote</h3>
               <p className="text-xs md:text-sm text-gray-700 dark:text-gray-300 leading-relaxed mb-4 flex-1">
                 Tell us about your home — see your 25-year savings instantly and a sales rep will call within 24 hours.
               </p>
@@ -202,21 +240,6 @@ export default function WebsitePage() {
           <p className="text-center text-xs text-gray-500 dark:text-gray-400 mt-6">
             Still on the fence? <a href="tel:+6421839356" className="text-amber-600 dark:text-amber-300 font-semibold hover:underline">Call +64 21 839 356</a> — we'll talk it through.
           </p>
-
-          {/* Trust stats — kept from the previous hero */}
-          <div className="grid grid-cols-2 md:flex md:gap-12 gap-4 mt-10 md:mt-12 justify-center text-center md:text-left max-w-3xl mx-auto">
-            {[
-              { n: '1,800+', l: 'Installations', c: 'from-amber-500 to-orange-500' },
-              { n: '$32M+',  l: 'Savings',       c: 'from-emerald-500 to-emerald-600' },
-              { n: '12,000t',l: 'CO₂ Saved',     c: 'from-blue-500 to-emerald-500' },
-              { n: '98%',    l: 'Satisfaction',  c: 'from-amber-500 to-blue-500' },
-            ].map((s, i) => (
-              <div key={i}>
-                <div className={`text-xl md:text-2xl font-extrabold font-display bg-gradient-to-br ${s.c} bg-clip-text text-transparent`}>{s.n}</div>
-                <div className="text-[11px] md:text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">{s.l}</div>
-              </div>
-            ))}
-          </div>
         </div>
       </section>
 
