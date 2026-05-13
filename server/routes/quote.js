@@ -6,15 +6,64 @@ import { supabaseAdmin } from '../config/supabase.js';
 
 // Multi-touch follow-up cadence created at enquiry time. Sales rep ticks
 // each off as they happen; remaining ones cancel naturally if the lead
-// converts (we don't auto-cancel — the rep marks them done). Adjust
-// timing here in one place if business rules change.
-const CADENCE = [
-  { offsetDays: 0,  title: 'First call within 1 hour', priority: 'high',   task_type: 'call' },
-  { offsetDays: 1,  title: 'Day 1: text + email follow-up', priority: 'medium', task_type: 'call' },
-  { offsetDays: 3,  title: 'Day 3: phone check-in',         priority: 'medium', task_type: 'call' },
-  { offsetDays: 7,  title: 'Day 7: email follow-up',         priority: 'low',    task_type: 'email' },
-  { offsetDays: 14, title: 'Day 14: final follow-up',        priority: 'low',    task_type: 'call' },
-];
+// converts (we don't auto-cancel — the rep marks them done).
+//
+// Cadence varies by customer type (Phase 7.3):
+//   residential — fast cadence (1h / 1d / 3d / 7d / 14d). B2C sales cycles
+//                 are short; speed-to-lead matters most.
+//   off-grid    — medium cadence (1d / 3d / 7d / 14d / 30d). Site survey
+//                 is the first concrete step, not a phone call.
+//   commercial  — slow cadence (1d / 5d / 14d / 30d / 60d). B2B procurement
+//                 cycles run 3-12 months; chasing too hard burns goodwill.
+//   ppa         — slowest cadence (2d / 7d / 21d / 45d / 90d). Multi-month
+//                 contract negotiations with finance + legal involvement.
+const CADENCE_BY_TYPE = {
+  residential: [
+    { offsetDays: 0,  title: 'First call within 1 hour',        priority: 'high',   task_type: 'call' },
+    { offsetDays: 1,  title: 'Day 1: text + email follow-up',    priority: 'medium', task_type: 'call' },
+    { offsetDays: 3,  title: 'Day 3: phone check-in',            priority: 'medium', task_type: 'call' },
+    { offsetDays: 7,  title: 'Day 7: email follow-up',           priority: 'low',    task_type: 'email' },
+    { offsetDays: 14, title: 'Day 14: final follow-up',          priority: 'low',    task_type: 'call' },
+  ],
+  'off-grid': [
+    { offsetDays: 0,  title: 'Off-grid: initial call within 1 business day',     priority: 'high',   task_type: 'call' },
+    { offsetDays: 3,  title: 'Off-grid: schedule on-site survey',                 priority: 'high',   task_type: 'call' },
+    { offsetDays: 7,  title: 'Off-grid: confirm survey date + site access',       priority: 'medium', task_type: 'call' },
+    { offsetDays: 14, title: 'Off-grid: deliver custom design + quote',           priority: 'medium', task_type: 'email' },
+    { offsetDays: 30, title: 'Off-grid: 30-day proposal follow-up',               priority: 'low',    task_type: 'call' },
+  ],
+  commercial: [
+    { offsetDays: 0,  title: 'Commercial: initial call within 1 business day',    priority: 'high',   task_type: 'call' },
+    { offsetDays: 5,  title: 'Commercial: schedule on-site survey + tariff review', priority: 'high', task_type: 'call' },
+    { offsetDays: 14, title: 'Commercial: deliver proposal + IRR / depreciation', priority: 'medium', task_type: 'email' },
+    { offsetDays: 30, title: 'Commercial: stakeholder follow-up call',            priority: 'medium', task_type: 'call' },
+    { offsetDays: 60, title: 'Commercial: 60-day proposal check-in',              priority: 'low',    task_type: 'call' },
+  ],
+  ppa: [
+    { offsetDays: 1,  title: 'PPA: initial finance call within 2 business days',  priority: 'high',   task_type: 'call' },
+    { offsetDays: 7,  title: 'PPA: site survey + tariff modelling kicked off',    priority: 'high',   task_type: 'call' },
+    { offsetDays: 21, title: 'PPA: deliver contract draft + per-kWh rate',        priority: 'medium', task_type: 'email' },
+    { offsetDays: 45, title: 'PPA: legal / board review follow-up',               priority: 'medium', task_type: 'call' },
+    { offsetDays: 90, title: 'PPA: 90-day decision check-in',                     priority: 'low',    task_type: 'call' },
+  ],
+};
+
+// Resolve which cadence to apply. Accept either the new `customerType` or
+// the legacy `installationType` field. Fall back to residential.
+function pickCadence(form) {
+  const key = form.customerType || form.installationType;
+  return CADENCE_BY_TYPE[key] || CADENCE_BY_TYPE.residential;
+}
+
+// Human-readable team label for the activity description — surfaces in
+// the CRM so the right team picks the lead up.
+function teamForCustomerType(form) {
+  const key = form.customerType || form.installationType;
+  if (key === 'off-grid')   return 'Off-grid specialist';
+  if (key === 'commercial') return 'Commercial team';
+  if (key === 'ppa')        return 'PPA / Finance team';
+  return 'Sales';
+}
 
 const router = Router();
 
@@ -154,17 +203,33 @@ router.post('/submit', async (req, res) => {
     // when the customer commits (POST /api/leads/:id/promote-to-project).
     // Until then the contact lives in /portal/pipeline only.
 
-    // ── 3. Create the multi-touch follow-up cadence ─────────────────────────
+    // ── 3. Create the multi-touch follow-up cadence (Phase 7.3 type-aware) ──
+    const team = teamForCustomerType(form);
+    const cadence = pickCadence(form);
+
     const baseDescription = [
+      `[${team}]`,
       `New website enquiry${form.monthlyBill ? ` — $${form.monthlyBill}/mo bill` : ''}.`,
-      form.installationType      && `Installation: ${form.installationType}.`,
+      form.customerType          && `Customer type: ${form.customerType}.`,
+      form.installationType      && form.installationType !== form.customerType && `Installation: ${form.installationType}.`,
+      form.wizardIntent          && `Wizard intent: ${form.wizardIntent}.`,
+      form.phoneVerified === true  && '✓ Phone OTP-verified.',
+      form.phoneVerified === false && '⚠ Phone NOT verified (passers-by risk).',
+      form.businessType          && `Business type: ${form.businessType}.`,
+      form.operatingHours        && `Hours: ${form.operatingHours}.`,
+      form.dailyKwh              && `Daily kWh need: ${form.dailyKwh}.`,
+      form.autonomyDays          && `Autonomy days: ${form.autonomyDays}.`,
+      form.offGridReason         && `Off-grid reason: ${form.offGridReason}.`,
+      form.contractLength        && `Contract length: ${form.contractLength} yrs.`,
+      form.decisionMakers        && `Decision-makers: ${form.decisionMakers}.`,
       form.batteryOption         && `Battery: ${form.batteryOption}.`,
       form.installationTimeframe && `Timeframe: ${form.installationTimeframe}.`,
       form.callToDiscuss === 'yes' && 'Customer requested a callback.',
+      form.notes                 && `Customer notes: ${form.notes}`,
       calculation?.systemSize && `Est. system: ${calculation.systemSize} kW, $${Math.round(calculation.totalCost).toLocaleString()}.`,
     ].filter(Boolean).join(' ');
 
-    const cadenceTasks = CADENCE.map(step => ({
+    const cadenceTasks = cadence.map(step => ({
       title:       `${step.title} — ${name}`,
       description: baseDescription,
       contact_id:  contact.id,

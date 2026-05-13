@@ -203,6 +203,19 @@ export default function GetQuotePage() {
                       // Wizard provenance — surface in CRM
                       wizardIntent:   intent,
                       analysisId:    analysisId,
+                      // Phase 7.2 — type-specific estimate fields ride along
+                      // (server logs them in task description; column persistence
+                      // is a separate schema change)
+                      dailyKwh:        estimate.daily_kwh,
+                      autonomyDays:    estimate.autonomy_days,
+                      generatorBackup: estimate.generator_backup,
+                      offGridReason:   estimate.off_grid_reason,
+                      criticalLoads:   estimate.critical_loads,
+                      businessType:    estimate.business_type,
+                      operatingHours:  estimate.operating_hours,
+                      siteAreaSqm:     estimate.site_area_sqm,
+                      contractLength:  estimate.contract_length,
+                      decisionMakers:  estimate.decision_makers,
                     },
                   });
                   setSubmitState({ loading: false, error: '', done: true });
