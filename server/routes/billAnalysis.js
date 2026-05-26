@@ -337,6 +337,144 @@ router.post('/estimate', async (req, res) => {
 });
 
 
+// ─────────────────────────────────────────────────────────────────────────
+// POST /api/bill-analysis/tabular  — manual rows fallback (Door D).
+//
+// When PDF parsing fails (image-only PDFs, unrecognised retailer, OCR low
+// confidence), customers paste their bill numbers from a spreadsheet — one
+// row per billing period:
+//   { days, fixed_nzd, kwh, usage_nzd, total_nzd }
+//
+// Each row becomes a synthesised bill record with ocr_confidence=0.95
+// (user-verified, higher than the 0.65 of /estimate's monthly-spend back-
+// computation but slightly below a clean PDF parse). The existing scenario
+// engine + normaliser run unchanged.
+//
+// Period dating: most-recent row first. The most-recent row's period_end
+// defaults to today; we walk backward by `days` per row to assign the rest.
+// Customers can optionally include a `month_year` (e.g. "2025-08") on any
+// row to anchor it explicitly.
+// ─────────────────────────────────────────────────────────────────────────
+router.post('/tabular', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ error: 'Provide an array of bill rows in `rows`.' });
+    }
+    if (rows.length > 12) {
+      return res.status(400).json({ error: 'Maximum 12 rows accepted (one per billing period).' });
+    }
+
+    // Validate each row — must have positive days, kwh, total. Fixed + usage
+    // are recoverable from total if missing, but better to require them.
+    const cleanRows = [];
+    for (const [i, r] of rows.entries()) {
+      const days     = Number(r.days);
+      const fixed    = Number(r.fixed_nzd);
+      const kwh      = Number(r.kwh);
+      const usage    = Number(r.usage_nzd);
+      const total    = Number(r.total_nzd);
+      if (!Number.isFinite(days)  || days  <= 0 || days > 90)        return res.status(400).json({ error: `Row ${i + 1}: days must be 1-90` });
+      if (!Number.isFinite(kwh)   || kwh   <= 0 || kwh > 10000)      return res.status(400).json({ error: `Row ${i + 1}: kWh must be 1-10,000` });
+      if (!Number.isFinite(total) || total <= 0 || total > 10000)    return res.status(400).json({ error: `Row ${i + 1}: total must be $1-$10,000` });
+      if (!Number.isFinite(fixed) || fixed <  0)                     return res.status(400).json({ error: `Row ${i + 1}: fixed charges must be ≥ 0` });
+      if (!Number.isFinite(usage) || usage <  0)                     return res.status(400).json({ error: `Row ${i + 1}: usage charges must be ≥ 0` });
+      cleanRows.push({ days, fixed_nzd: fixed, kwh, usage_nzd: usage, total_nzd: total, month_year: r.month_year || null });
+    }
+
+    // Walk dates backward from today (or from the latest explicit month_year).
+    const anchor = new Date();
+    let periodEnd = anchor;
+    const bills = cleanRows.map((r, i) => {
+      // If an explicit month_year is supplied, anchor period_end to that month-end.
+      if (r.month_year) {
+        const [y, m] = r.month_year.split('-').map(Number);
+        if (y && m) periodEnd = new Date(y, m, 0);   // last day of given month
+      }
+      const periodEndIso  = periodEnd.toISOString().slice(0, 10);
+      const periodStart   = new Date(periodEnd.getTime() - (r.days - 1) * 86400000);
+      const periodStartIso = periodStart.toISOString().slice(0, 10);
+      // Step back for next row (one day before this row's start)
+      periodEnd = new Date(periodStart.getTime() - 86400000);
+
+      // Variable_charge_nzd is stored ex-GST per the existing schema convention.
+      const exGstUsage = +(r.usage_nzd / 1.15).toFixed(2);
+      const gst        = +(r.total_nzd - r.total_nzd / 1.15).toFixed(2);
+
+      return {
+        retailer:             'Manual entry',
+        plan_name:            null,
+        period_start:         periodStartIso,
+        period_end:           periodEndIso,
+        days_in_period:       r.days,
+        kwh_total:            r.kwh,
+        kwh_peak:             null,
+        kwh_off_peak:         null,
+        kwh_exported:         null,
+        fixed_charge_nzd:     +r.fixed_nzd.toFixed(2),
+        variable_charge_nzd:  exGstUsage,
+        export_credit_nzd:    null,
+        gst_nzd:              gst,
+        total_nzd:            +r.total_nzd.toFixed(2),
+        ocr_confidence:       0.95,                     // user-verified — high
+        file_name:            null,
+        file_size_bytes:      0,
+        ocr_text_excerpt:     '',
+        parse_errors:         [],
+      };
+    });
+
+    const region   = req.body.region || regionFromPostcode(req.body.postcode);
+    const analysis = analyzeBills({ bills, region });
+
+    const row = buildAnalysisRow(analysis, {
+      region, postcode: req.body.postcode, email: req.body.email, contactId: null,
+    });
+    row.bills_uploaded = bills.length;
+
+    const { data: inserted, error: insErr } = await supabaseAdmin
+      .from('bill_analyses')
+      .insert(row)
+      .select('id')
+      .single();
+    if (insErr) throw insErr;
+
+    // Persist the synthesised bill rows so future audits can see what the
+    // customer typed (and the date assumptions).
+    const uploadRows = buildUploadRows(bills, inserted.id);
+    if (uploadRows.length) {
+      await supabaseAdmin.from('bill_uploads').insert(uploadRows);
+    }
+
+    // Normalise into customer_profiles (Phase 1.5) — non-blocking
+    const normResult = await normaliseFromBillAnalysis(inserted.id, analysis).catch(() => ({ ok: false }));
+
+    res.status(201).json({
+      id:                 inserted.id,
+      analysis,
+      source_door:        'manual_table',
+      confidence_band:    'high',
+      profile_normalised: normResult.ok,
+      parse_summary:      bills.map(b => ({
+        retailer:       b.retailer,
+        period_start:   b.period_start,
+        period_end:     b.period_end,
+        kwh_total:      b.kwh_total,
+        total_nzd:      b.total_nzd,
+        ocr_confidence: b.ocr_confidence,
+        parse_errors:   [],
+      })),
+      ocr_errors: [],
+    });
+  } catch (e) {
+    console.error('Bill analysis tabular error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 // ── PUBLIC: fetch a saved analysis by id ─────────────────────────────────
 //
 // Customers can come back to a result via the URL share. Excludes the raw

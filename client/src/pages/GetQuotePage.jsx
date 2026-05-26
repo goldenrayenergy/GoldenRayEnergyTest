@@ -34,11 +34,19 @@ export default function GetQuotePage() {
 
   const [step, setStep] = useState(1);
   const [customerType, setCustomerType] = useState('residential');   // Phase 7.1 segmentation
-  const [intent, setIntent] = useState(null);                // 'bills' | 'estimate' | 'callback'
+  const [intent, setIntent] = useState(null);                // 'bills' | 'estimate' | 'callback' | 'manual_table'
 
   // Door A (bills) state
   const [files, setFiles] = useState([]);
   const filesInputRef = useRef(null);
+
+  // Door D (manual table) state — fallback when PDF parsing can't read the bills
+  // (image-only PDFs, unrecognised retailers), or when the customer prefers to
+  // type their numbers from a spreadsheet they already keep.
+  // Each row: { days, fixed_nzd, kwh, usage_nzd, total_nzd }
+  const [manualRows, setManualRows] = useState([
+    { days: '', fixed_nzd: '', kwh: '', usage_nzd: '', total_nzd: '' },
+  ]);
 
   // Door B (estimate) state — covers all customer types; each branch reads
   // a different subset. Single state keeps back-navigation values preserved.
@@ -119,9 +127,10 @@ export default function GetQuotePage() {
   // Type-specific minimums for the estimate branch (the bills + callback
   // branches don't depend on customer type).
   const step2Ready = (() => {
-    if (intent === 'bills')    return files.length > 0;
-    if (intent === 'callback') return true;
-    if (intent !== 'estimate') return false;
+    if (intent === 'bills')        return files.length > 0;
+    if (intent === 'callback')     return true;
+    if (intent === 'manual_table') return manualRows.some(r => r.days && r.kwh && r.total_nzd);
+    if (intent !== 'estimate')     return false;
 
     if (customerType === 'residential') return estimate.monthly_spend >= 50;
     if (customerType === 'off-grid')    return estimate.daily_kwh >= 1 && estimate.off_grid_reason;
@@ -154,9 +163,10 @@ export default function GetQuotePage() {
               subtitle={subtitleForIntent(intent, customerType)}
               onBack={back} onNext={next} nextEnabled={step2Ready}
               skipProjection={skipProjection}>
-              {intent === 'bills'    && <BillsBranch files={files} onDrop={onDropFiles} removeFile={removeFile} inputRef={filesInputRef} />}
-              {intent === 'estimate' && <EstimateBranch customerType={customerType} estimate={estimate} setEstimate={setEstimate} />}
-              {intent === 'callback' && <CallbackBranch onContinue={next} />}
+              {intent === 'bills'        && <BillsBranch files={files} onDrop={onDropFiles} removeFile={removeFile} inputRef={filesInputRef} onSwitchToManual={() => setIntent('manual_table')} />}
+              {intent === 'estimate'     && <EstimateBranch customerType={customerType} estimate={estimate} setEstimate={setEstimate} />}
+              {intent === 'callback'     && <CallbackBranch onContinue={next} />}
+              {intent === 'manual_table' && <ManualTableBranch rows={manualRows} setRows={setManualRows} onSwitchToUpload={() => setIntent('bills')} />}
             </Step2Container>
           )}
           {step === 3 && (
@@ -164,10 +174,12 @@ export default function GetQuotePage() {
               intent={intent}
               files={files}
               estimate={estimate}
+              manualRows={manualRows}
               onAnalysisReady={(data) => { setAnalysisResult(data); setAnalysisId(data?.id || null); }}
               cachedResult={analysisResult}
               onBack={back}
               onNext={next}
+              onFallbackToManual={() => { setIntent('manual_table'); setStep(2); setAnalysisResult(null); }}
             />
           )}
           {step === 4 && (
@@ -250,6 +262,7 @@ function subtitleForIntent(intent, customerType) {
     return 'A few quick questions about your power use.';
   }
   if (intent === 'callback') return "We'll skip straight to your contact details.";
+  if (intent === 'manual_table') return "Type the numbers from your bills below — paste from Excel works.";
   return '';
 }
 
@@ -427,7 +440,7 @@ function Step2Container({ subtitle, onBack, onNext, nextEnabled, skipProjection,
 }
 
 // ── Branch: Bills upload ──
-function BillsBranch({ files, onDrop, removeFile, inputRef }) {
+function BillsBranch({ files, onDrop, removeFile, inputRef, onSwitchToManual }) {
   const [dragOver, setDragOver] = useState(false);
   return (
     <div>
@@ -444,6 +457,15 @@ function BillsBranch({ files, onDrop, removeFile, inputRef }) {
         <input ref={inputRef} type="file" accept=".pdf,application/pdf" multiple
           onChange={e => onDrop(e.target.files)} className="hidden" />
       </div>
+
+      {onSwitchToManual && (
+        <div className="mt-3 text-center text-xs text-gray-500 dark:text-gray-400">
+          PDFs not working? Some NZ retailer bills are image-only and can't be auto-read.{' '}
+          <button onClick={onSwitchToManual} className="text-amber-700 dark:text-amber-300 font-bold hover:underline">
+            Type my numbers instead →
+          </button>
+        </div>
+      )}
 
       {files.length > 0 && (
         <>
@@ -479,6 +501,120 @@ function BillsBranch({ files, onDrop, removeFile, inputRef }) {
             ))}
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// ── Branch: Manual entry table (Door D) — fallback when PDFs can't be parsed ──
+// Customers paste from a spreadsheet (Excel paste works natively in input
+// fields) one row per billing period. Five columns map directly onto the
+// fields a successful PDF parse would have produced.
+function ManualTableBranch({ rows, setRows, onSwitchToUpload }) {
+  const update = (i, k, v) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
+  const addRow = () => setRows(rs => rs.length >= 12 ? rs : [...rs, { days: '', fixed_nzd: '', kwh: '', usage_nzd: '', total_nzd: '' }]);
+  const removeRow = (i) => setRows(rs => rs.length <= 1 ? rs : rs.filter((_, idx) => idx !== i));
+
+  // Paste handler — supports pasting a multi-row block from Excel/Sheets into
+  // any cell. Splits on \n / \r\n, then \t / "  +" between columns.
+  const onCellPaste = (startRowIdx, startColIdx, cols) => (e) => {
+    const text = e.clipboardData.getData('text');
+    if (!text || !text.includes('\n') && !text.includes('\t')) return;   // single value paste — let default happen
+    e.preventDefault();
+    const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+    setRows(prev => {
+      const next = [...prev];
+      for (let i = 0; i < lines.length; i++) {
+        const cells = lines[i].split(/\t|\s{2,}/).map(c => c.replace(/[^0-9.]/g, ''));
+        const rowIdx = startRowIdx + i;
+        // Auto-grow rows if needed
+        while (next.length <= rowIdx && next.length < 12) {
+          next.push({ days: '', fixed_nzd: '', kwh: '', usage_nzd: '', total_nzd: '' });
+        }
+        if (rowIdx >= next.length) break;
+        const r = { ...next[rowIdx] };
+        for (let j = 0; j < cells.length && (startColIdx + j) < cols.length; j++) {
+          if (cells[j]) r[cols[startColIdx + j]] = cells[j];
+        }
+        next[rowIdx] = r;
+      }
+      return next;
+    });
+  };
+
+  const COLS = ['days', 'fixed_nzd', 'kwh', 'usage_nzd', 'total_nzd'];
+  const completedRows = rows.filter(r => r.days && r.kwh && r.total_nzd).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border-2 border-amber-200 dark:border-amber-500/30 bg-amber-50/40 dark:bg-amber-500/5 p-4">
+        <div className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-1">Type your power bill numbers</div>
+        <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+          One row per billing period (most recent first works best). <strong>You can paste rows from Excel</strong> — copy your spreadsheet, click into the first cell, and Ctrl+V. We need at least the days, kWh, and total for each row.
+        </p>
+      </div>
+
+      <div className="overflow-x-auto bg-white dark:bg-brand-dark-1 border border-gray-200 dark:border-white/10 rounded-xl">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 dark:bg-white/5">
+            <tr>
+              <th className="px-3 py-2 text-left font-bold text-gray-600 dark:text-gray-300">#</th>
+              <th className="px-3 py-2 text-left font-bold text-gray-600 dark:text-gray-300">Days <span className="text-amber-600">*</span></th>
+              <th className="px-3 py-2 text-left font-bold text-gray-600 dark:text-gray-300">Fixed daily NZ$</th>
+              <th className="px-3 py-2 text-left font-bold text-gray-600 dark:text-gray-300">Electricity kWh <span className="text-amber-600">*</span></th>
+              <th className="px-3 py-2 text-left font-bold text-gray-600 dark:text-gray-300">Usage NZ$</th>
+              <th className="px-3 py-2 text-left font-bold text-gray-600 dark:text-gray-300">Total incl GST NZ$ <span className="text-amber-600">*</span></th>
+              <th className="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-t border-gray-100 dark:border-white/5">
+                <td className="px-3 py-1 text-gray-400 text-[10px] font-mono">{i + 1}</td>
+                {COLS.map((c, j) => (
+                  <td key={c} className="px-2 py-1">
+                    <input
+                      type="number" step="0.01" inputMode="decimal"
+                      value={r[c] ?? ''}
+                      onChange={e => update(i, c, e.target.value)}
+                      onPaste={onCellPaste(i, j, COLS)}
+                      placeholder={c === 'days' ? '32' : c === 'kwh' ? '1906' : c === 'total_nzd' ? '558.23' : '0.00'}
+                      className="w-full px-2 py-1 rounded border border-gray-200 dark:border-white/10 text-xs bg-white dark:bg-brand-dark focus:border-amber-400 outline-none"
+                    />
+                  </td>
+                ))}
+                <td className="px-2 py-1 text-right">
+                  {rows.length > 1 && (
+                    <button onClick={() => removeRow(i)} className="text-gray-300 hover:text-red-500" title="Remove row">
+                      <X size={12} />
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <button
+          onClick={addRow}
+          disabled={rows.length >= 12}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          + Add another row {rows.length >= 12 && '(max 12)'}
+        </button>
+        <div className="text-[11px] text-gray-500 dark:text-gray-400">
+          <span className={completedRows >= 1 ? 'text-emerald-600 font-bold' : ''}>{completedRows}</span> of {rows.length} rows ready · need at least 1 to continue
+        </div>
+      </div>
+
+      {onSwitchToUpload && (
+        <div className="text-center text-xs text-gray-500 dark:text-gray-400">
+          <button onClick={onSwitchToUpload} className="text-amber-700 dark:text-amber-300 font-bold hover:underline">
+            ← Back to PDF upload
+          </button>
+        </div>
       )}
     </div>
   );
@@ -704,7 +840,7 @@ function CallbackBranch({ onContinue }) {
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 3 — Projection — hits the existing scenario engine
 // ════════════════════════════════════════════════════════════════════════════
-function Step3Projection({ intent, files, estimate, onAnalysisReady, cachedResult, onBack, onNext }) {
+function Step3Projection({ intent, files, estimate, manualRows, onAnalysisReady, cachedResult, onBack, onNext, onFallbackToManual }) {
   const [loading, setLoading] = useState(!cachedResult);
   const [result, setResult] = useState(cachedResult);
   const [error, setError] = useState('');
@@ -723,6 +859,23 @@ function Step3Projection({ intent, files, estimate, onAnalysisReady, cachedResul
             headers: { 'Content-Type': 'multipart/form-data' },
             timeout: 120000,
           });
+          data = res.data;
+        } else if (intent === 'manual_table') {
+          // Door D — typed rows from the customer's spreadsheet
+          const rows = (manualRows || [])
+            .filter(r => r.days && r.kwh && r.total_nzd)
+            .map(r => ({
+              days:       Number(r.days),
+              fixed_nzd:  Number(r.fixed_nzd || 0),
+              kwh:        Number(r.kwh),
+              usage_nzd:  Number(r.usage_nzd || 0),
+              total_nzd:  Number(r.total_nzd),
+              month_year: r.month_year || null,
+            }));
+          const res = await publicApi.post('/bill-analysis/tabular', {
+            rows,
+            postcode: estimate.postcode || undefined,
+          }, { timeout: 60000 });
           data = res.data;
         } else {
           // intent === 'estimate'
@@ -755,7 +908,9 @@ function Step3Projection({ intent, files, estimate, onAnalysisReady, cachedResul
         <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md mx-auto">
           {intent === 'bills'
             ? `Parsing ${files.length} bill${files.length > 1 ? 's' : ''} · Building 25-year scenarios · Checking retailer switch options`
-            : 'Computing your annual kWh from your monthly spend · Building 25-year scenarios'}
+            : intent === 'manual_table'
+              ? `Aggregating your ${(manualRows || []).filter(r => r.days && r.kwh && r.total_nzd).length} bill rows · Building 25-year scenarios`
+              : 'Computing your annual kWh from your monthly spend · Building 25-year scenarios'}
         </p>
         <div className="text-[11px] text-gray-400 mt-4">Usually takes 5-15 seconds.</div>
       </div>
@@ -763,12 +918,29 @@ function Step3Projection({ intent, files, estimate, onAnalysisReady, cachedResul
   }
 
   if (error) {
+    // If parsing PDFs failed, offer the manual-entry fallback — most NZ retailer
+    // PDFs are image-based and pdf-parse can't read them, so this is the most
+    // common reason we end up here.
+    const offerManual = intent === 'bills' && !!onFallbackToManual;
     return (
       <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-red-200 dark:border-red-500/30 shadow-xl p-8 text-center animate-fade-in">
         <AlertTriangle size={48} className="text-red-500 mx-auto mb-4" />
-        <h1 className="text-2xl font-extrabold font-display mb-2 dark:text-gray-100">Couldn't complete the analysis</h1>
-        <p className="text-sm text-gray-600 dark:text-gray-300 max-w-md mx-auto mb-5">{error}</p>
-        <button onClick={onBack} className="px-5 py-2.5 rounded-xl bg-amber-500 text-white font-bold text-sm hover:bg-amber-400 transition">Try again</button>
+        <h1 className="text-2xl font-extrabold font-display mb-2 dark:text-gray-100">Couldn't read your bills automatically</h1>
+        <p className="text-sm text-gray-600 dark:text-gray-300 max-w-md mx-auto mb-5">
+          {offerManual
+            ? 'Many NZ retailer PDFs are image-based and our parser can\'t read them yet. Type the key numbers from your bills below — takes about 2 minutes and gives you a full 25-year projection.'
+            : error}
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          {offerManual && (
+            <button onClick={onFallbackToManual} className="px-5 py-2.5 rounded-xl bg-amber-500 text-white font-bold text-sm hover:bg-amber-400 transition shadow-md">
+              Type my numbers instead →
+            </button>
+          )}
+          <button onClick={onBack} className={`px-5 py-2.5 rounded-xl ${offerManual ? 'border border-gray-200 dark:border-white/15 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5' : 'bg-amber-500 text-white hover:bg-amber-400'} font-bold text-sm transition`}>
+            {offerManual ? 'Or try again' : 'Try again'}
+          </button>
+        </div>
       </div>
     );
   }

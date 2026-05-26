@@ -23,6 +23,53 @@
 
 import { PDFParse } from 'pdf-parse';
 
+// ╔══════════════════════════════════════════════════════════════════════╗
+// ║ OCR FALLBACK — currently OFF by default                              ║
+// ║                                                                      ║
+// ║ Why: pdf-parse bundles pdfjs-dist@5.4.296 (latest available release  ║
+// ║      of pdf-parse, 2.4.5). pdf-to-png-converter bundles 5.7.284.     ║
+// ║      Both set GlobalWorkerOptions when loaded — once pdf-parse has   ║
+// ║      run, the worker URL is pinned to 5.4.296 and any subsequent    ║
+// ║      pdf-to-png-converter call throws:                               ║
+// ║        "API version 5.7.284 does not match Worker version 5.4.296"   ║
+// ║                                                                      ║
+// ║ This is a structural lib-vs-lib conflict, not solvable with options. ║
+// ║                                                                      ║
+// ║ Unblock paths (each ~half-day):                                      ║
+// ║   (a) wait for pdf-parse to upgrade to pdfjs 5.7.x                   ║
+// ║   (b) replace pdf-parse with a 5.7-compatible text-extractor         ║
+// ║   (c) shell out to Poppler `pdftoppm` + Tesseract CLI                ║
+// ║   (d) use cloud OCR (AWS Textract / Google Document AI)              ║
+// ║                                                                      ║
+// ║ Set env var `OCR_ENABLED=true` to try the in-process path anyway     ║
+// ║ once you've taken one of the above mitigations.                      ║
+// ║                                                                      ║
+// ║ User-facing fallback when OCR is off: the wizard automatically       ║
+// ║ surfaces the manual-entry table (Door D) — customers paste from      ║
+// ║ their spreadsheet, ROI runs cleanly.                                 ║
+// ║                                                                      ║
+// ║ Local patch note: if pdf-to-png-converter is reinstalled, re-apply   ║
+// ║ the Windows-path fix at node_modules/pdf-to-png-converter/out/       ║
+// ║ normalizePath.js (replace platform sep with `/`).                    ║
+// ╚══════════════════════════════════════════════════════════════════════╝
+const OCR_ENABLED = process.env.OCR_ENABLED === 'true';
+
+let _pdfToPng = null;
+let _tesseract = null;
+async function _loadOcr() {
+  if (!_pdfToPng)  _pdfToPng  = (await import('pdf-to-png-converter')).pdfToPng;
+  if (!_tesseract) _tesseract = await import('tesseract.js');
+  return { pdfToPng: _pdfToPng, tesseract: _tesseract };
+}
+
+// Heuristic: when the text-layer extraction returns less than this many chars
+// of usable text, assume the PDF is image-only.
+const TEXT_FALLBACK_THRESHOLD = 600;
+
+// Cap pages per PDF to keep latency bounded. Most NZ retailer bills are
+// 1-3 pages; the meaningful data is on page 2.
+const MAX_OCR_PAGES = 4;
+
 // ── Public entry point ────────────────────────────────────────────────────
 
 export async function parseBillPdf(buffer, { fileName } = {}) {
@@ -30,24 +77,54 @@ export async function parseBillPdf(buffer, { fileName } = {}) {
     throw new Error('Empty PDF buffer');
   }
 
+  // ── Stage 1: text-layer extraction (fast path — works for true-text PDFs) ──
   let text;
   try {
     const parser = new PDFParse({ data: buffer });
     const result = await parser.getText();
     text = result.text || '';
   } catch (e) {
-    throw new Error('Failed to extract PDF text: ' + e.message);
+    text = '';
+  }
+
+  let parseMethod = 'text';
+
+  // ── Stage 2: OCR fallback for image-only PDFs ──
+  // Triggered when (a) text layer is empty/sparse OR (b) text exists but
+  // can't even identify the retailer (suggests it's just headers + footers
+  // while the body is image data). Gated behind OCR_ENABLED env var — see
+  // the big comment block at the top of this file for the why.
+  const trimmed = text.trim();
+  const needsOcr = trimmed.length < TEXT_FALLBACK_THRESHOLD
+                || !RETAILERS.some(r => r.match(trimmed));
+
+  if (needsOcr && OCR_ENABLED) {
+    try {
+      const ocrText = await _ocrFallback(buffer);
+      if (ocrText.length > trimmed.length * 1.5 && ocrText.length > 400) {
+        text = ocrText;
+        parseMethod = 'ocr';
+      }
+    } catch (e) {
+      // OCR is best-effort — don't crash if it fails, fall back to whatever
+      // text-layer extraction managed. The wizard surfaces the manual-entry
+      // table when the resulting confidence is low.
+      console.warn(`OCR fallback failed for ${fileName || 'PDF'}: ${e.message}`);
+    }
   }
 
   if (!text.trim()) {
     return makeEmptyBill({
       ocr_text_excerpt: '',
-      ocr_confidence: 0,
-      parse_errors: [{ field: 'all', reason: 'PDF appears to be image-based (no text). OCR fallback not yet implemented — try a different PDF or contact support.' }],
+      ocr_confidence:   0,
+      parse_method:     'failed',
+      parse_errors:     [{ field: 'all', reason: 'No text could be extracted (PDF may be empty, corrupted, or fully image-based at low resolution).' }],
+      file_name:        fileName || null,
+      file_size_bytes:  buffer.length,
     });
   }
 
-  // Detect retailer
+  // ── Stage 3: retailer detection + per-retailer parsing ──
   const retailer = RETAILERS.find(r => r.match(text)) || GENERIC;
 
   let parsed;
@@ -57,17 +134,49 @@ export async function parseBillPdf(buffer, { fileName } = {}) {
     parsed = { parse_errors: [{ field: 'all', reason: `Parser threw: ${e.message}` }] };
   }
 
-  // Normalise + add metadata
   return {
     ...makeEmptyBill(),
     ...parsed,
-    retailer: parsed.retailer || retailer.name,
+    retailer:         parsed.retailer || retailer.name,
     ocr_text_excerpt: text.slice(0, 4000),
-    ocr_confidence: estimateConfidence(parsed),
-    parse_errors: parsed.parse_errors || [],
-    file_name: fileName || null,
-    file_size_bytes: buffer.length,
+    ocr_confidence:   estimateConfidence(parsed),
+    parse_method:     parseMethod,                // 'text' | 'ocr'
+    parse_errors:     parsed.parse_errors || [],
+    file_name:        fileName || null,
+    file_size_bytes:  buffer.length,
   };
+}
+
+// ── OCR helper — render PDF pages to PNG, run Tesseract, concat text ──────
+async function _ocrFallback(buffer) {
+  const { pdfToPng, tesseract } = await _loadOcr();
+
+  // 1. Render pages to in-memory PNG buffers. viewportScale 2 (~144 DPI) is
+  //    the standard accuracy/speed sweet spot for typed-text bills.
+  const pngPages = await pdfToPng(buffer, {
+    viewportScale:   2.0,
+    disableFontFace: false,
+    useSystemFonts:  false,
+    enableXfa:       false,
+    outputFolder:    undefined,
+    pagesToProcess:  Array.from({ length: MAX_OCR_PAGES }, (_, i) => i + 1),
+  });
+
+  if (!pngPages?.length) return '';
+
+  // 2. OCR each page through one shared Tesseract worker — saves the ~1.5s
+  //    English-model warmup per page.
+  const worker = await tesseract.createWorker('eng', undefined, { logger: () => {} });
+  const parts = [];
+  try {
+    for (const page of pngPages) {
+      const { data } = await worker.recognize(page.content);
+      parts.push(data.text);
+    }
+  } finally {
+    await worker.terminate();
+  }
+  return parts.join('\n\n--- page break ---\n\n');
 }
 
 // ── Confidence heuristic — how complete is the parsed result? ─────────────
@@ -367,20 +476,51 @@ const CONTACT = {
     const errors = [];
     const out = { retailer: 'Contact Energy', plan_name: null };
 
-    // ── Scope to the electricity *detail* section (page 2), not the page-1 summary ──
-    // Contact bills can bundle broadband, mobile, and gas. The page-1 summary
-    // shows aggregate amounts only — the per-kWh detail with rates lives in
-    // the "Energy used by …" section on page 2. We slice from there to the
-    // next non-electricity detail section so the parser sees only the electricity
-    // line items it can compute against.
-    let elec = t;
-    const elecStart = t.search(/Energy\s+used\s+by/i);
-    if (elecStart >= 0) {
-      const remaining = t.slice(elecStart);
-      // Cut at the *next* "Broadband charges" / "Gas charges" header (skip
-      // the slice's own start) so we keep the electricity detail.
-      const cutMatch = remaining.slice(20).search(/Broadband\s+charges|Mobile\s+charges|Gas\s+charges|Bottled\s+gas/i);
-      elec = cutMatch >= 0 ? remaining.slice(0, cutMatch + 20) : remaining;
+    // ── Section-aware slicing ──
+    // Contact bills can bundle electricity + gas + broadband + mobile on
+    // a single statement. We find every product-section header in the bill,
+    // sort by position, and slice between the electricity header and the
+    // next section's header. The fallback handles older Contact formats
+    // that don't print a "Electricity charges - installation" header.
+    //
+    // To support a future Contact variant (e.g. EV plan with its own header)
+    // add one entry to SECTION_MARKERS.
+    const SECTION_MARKERS = [
+      { name: 'electricity', re: /Electricity\s+charges\s*[-–]?\s*installation/i },
+      { name: 'gas',         re: /Natural\s+gas\s+charges|^\s*Gas\s+charges|Bottled\s+gas/im },
+      { name: 'broadband',   re: /Broadband\s+charges/i },
+      { name: 'mobile',      re: /Mobile\s+charges/i },
+    ];
+
+    let elec;
+    const elecIdx = t.search(SECTION_MARKERS[0].re);
+    if (elecIdx >= 0) {
+      // Find the next non-electricity section marker that appears AFTER the
+      // electricity detail header. Necessary because the page-1 summary block
+      // mentions other product names ("Natural gas charges  $56.46") before
+      // the actual electricity detail — a naive sort-by-position would put
+      // gas before electricity and the slice would never close.
+      const startFrom = elecIdx + 20;
+      const tail      = t.slice(startFrom);
+      const nextIdxs  = SECTION_MARKERS
+        .slice(1)
+        .map(s => {
+          const rel = tail.search(s.re);
+          return rel >= 0 ? startFrom + rel : null;
+        })
+        .filter(x => x !== null);
+      const elecEnd = nextIdxs.length ? Math.min(...nextIdxs) : t.length;
+      elec = t.slice(elecIdx, elecEnd);
+    } else {
+      // Fallback for older Contact formats without the explicit "Electricity charges - installation" header
+      const elecStart = t.search(/Energy\s+used\s+by/i);
+      if (elecStart >= 0) {
+        const remaining = t.slice(elecStart);
+        const cutMatch = remaining.slice(20).search(/Natural\s+gas\s+charges|Gas\s+charges|Bottled\s+gas|Broadband\s+charges|Mobile\s+charges/i);
+        elec = cutMatch >= 0 ? remaining.slice(0, cutMatch + 20) : remaining;
+      } else {
+        elec = t;
+      }
     }
 
     // Plan — Contact uses "Good Nights", "Standard User", "Anytime", "Free Power"
@@ -429,25 +569,65 @@ const CONTACT = {
       else errors.push({ field: 'kwh_total', reason: 'kWh total not found in electricity section' });
     }
 
-    // ── Fixed charge — "Fixed daily charges $91.45" or "Fixed charges total $91.45" ──
-    const fixedMatch = pickFirst(t, [
+    // ── Total Electricity subtotal — bill-told-us-the-answer (preferred) ──
+    // Contact dual-fuel / bundled bills print a footer line like
+    //   "Total Electricity charges  $485.42"
+    // That's the electricity total EXCL GST — the source of truth, robust
+    // against future line-item variants.
+    const elecSubtotalMatch = elec.match(/Total\s+Electricity\s+charges[\s\S]{0,40}?\$([\d,]+\.\d{2})/i);
+    const elecSubtotalExclGst = elecSubtotalMatch ? parseNum(elecSubtotalMatch[1]) : null;
+
+    // ── Fixed charge — search the elec slice only (avoids gas "Living Smart Daily Charge") ──
+    // Priority:
+    //   1. "Fixed charges total $X" / "Fixed daily charges $X" footer (older Contact bills)
+    //   2. SUM of ALL "Daily Charge ... $X" lines (handles bills with a
+    //      mid-period rate change — Contact prints two Daily Charge rows in
+    //      that case, e.g. "4 days @ $2.738" + "24 days @ $2.985")
+    //   3. Generic last-resort Daily / Fixed first match
+    const fixedFooter = pickFirst(elec, [
       /Fixed\s+charges\s+total[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
       /Fixed\s+daily\s+charges[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
-      /(?:Daily|Fixed)\s+(?:charge|fee)[\s\S]{0,200}?\$([\d,]+\.\d{2})/i,
     ]);
-    if (fixedMatch) out.fixed_charge_nzd = parseNum(fixedMatch[1]);
+    if (fixedFooter) {
+      out.fixed_charge_nzd = parseNum(fixedFooter[1]);
+    } else {
+      let sum = 0, found = 0;
+      // matchAll with non-greedy `[\s\S]{0,150}?` picks the FIRST $X after each
+      // "Daily Charge" — and lastIndex advancement gives us the next entry on
+      // the next iteration. Robust for one OR many Daily Charge rows.
+      for (const m of elec.matchAll(/Daily\s+Charge[\s\S]{0,150}?\$([\d,]+\.\d{2})/gi)) {
+        sum += parseNum(m[1]);
+        found++;
+      }
+      if (found > 0) {
+        out.fixed_charge_nzd = +sum.toFixed(2);
+      } else {
+        const generic = elec.match(/(?:Daily|Fixed)\s+(?:charge|fee)[\s\S]{0,200}?\$([\d,]+\.\d{2})/i);
+        if (generic) out.fixed_charge_nzd = parseNum(generic[1]);
+      }
+    }
 
-    // ── Variable charge — "Variable charges $63.58" or "Variable charges total $63.58" ──
-    const variableMatch = pickFirst(t, [
+    // ── Variable charge — explicit "Variable charges" footer (older bills) ──
+    const variableMatch = pickFirst(elec, [
       /Variable\s+charges\s+total[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
       /Variable\s+charges[\s\S]{0,40}?\$([\d,]+\.\d{2})/i,
     ]);
     if (variableMatch) out.variable_charge_nzd = parseNum(variableMatch[1]);
 
-    // ── Total — prefer pure-electricity computed total over combined bill total ──
-    // Contact's "Total amount due" includes broadband. If we have fixed + variable,
-    // compute the true electricity total (incl GST). Otherwise fall back to bill total.
-    if (out.fixed_charge_nzd != null && out.variable_charge_nzd != null) {
+    // ── Totals — three sources in priority order ──
+    //   1. Bill's own "Total Electricity charges" subtotal (most reliable for dual-fuel)
+    //   2. Computed from explicit fixed + variable footers
+    //   3. Generic "Total amount due" fallback (may include gas/broadband — last resort)
+    if (elecSubtotalExclGst != null) {
+      // Derive any missing piece from the subtotal so the row is internally consistent.
+      if (out.fixed_charge_nzd != null && out.variable_charge_nzd == null) {
+        out.variable_charge_nzd = +(elecSubtotalExclGst - out.fixed_charge_nzd).toFixed(2);
+      } else if (out.variable_charge_nzd != null && out.fixed_charge_nzd == null) {
+        out.fixed_charge_nzd = +(elecSubtotalExclGst - out.variable_charge_nzd).toFixed(2);
+      }
+      out.total_nzd = +(elecSubtotalExclGst * 1.15).toFixed(2);
+      out.gst_nzd   = +(elecSubtotalExclGst * 0.15).toFixed(2);
+    } else if (out.fixed_charge_nzd != null && out.variable_charge_nzd != null) {
       const exclGst = out.fixed_charge_nzd + out.variable_charge_nzd;
       out.total_nzd = +(exclGst * 1.15).toFixed(2);
       out.gst_nzd   = +(exclGst * 0.15).toFixed(2);
