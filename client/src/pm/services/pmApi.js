@@ -67,4 +67,13 @@ export const pmAdminAPI = {
   listTerms:    () => api.get('/pm/admin/terms'),
   currentTerms: () => api.get('/pm/admin/terms/current'),
   createTerms:  (data) => api.post('/pm/admin/terms', data),
+
+  // Supplier data importer — accepts the Goldenray_Supplier_Setup.xlsx file
+  importSupplierData: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.post('/pm/admin/import/supplier-data', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
 };
