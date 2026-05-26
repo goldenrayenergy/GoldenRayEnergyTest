@@ -253,7 +253,7 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
     const { id, lane } = req.params;
     if (!LANES.includes(lane)) return res.status(400).json({ error: `Unknown lane: ${lane}` });
 
-    const { item, value, notes, fields, target_state, status, blocked_reason, owner_id } = req.body;
+    const { item, value, notes, fields, heuristic_meta, target_state, status, blocked_reason, owner_id } = req.body;
 
     // Fetch current state
     const { data: current, error: fetchErr } = await supabaseAdmin
@@ -287,6 +287,17 @@ router.patch('/:id/lanes/:lane', async (req, res) => {
       if (fields && typeof fields === 'object') {
         meta.fields = { ...(meta.fields || {}), ...fields };
         eventsToWrite.push({ event_type: 'field_edited', payload: { keys: Object.keys(fields) } });
+      }
+
+      // Patch heuristic_meta — used by the verify-toggle UI on auto-populated
+      // fields (occupants, has_heatpump, has_ev from bill-derived heuristics).
+      // Shape: { fieldKey: { verified: bool, ... } }. Patches merge per-key.
+      if (heuristic_meta && typeof heuristic_meta === 'object') {
+        meta.heuristic_meta = { ...(meta.heuristic_meta || {}) };
+        for (const k of Object.keys(heuristic_meta)) {
+          meta.heuristic_meta[k] = { ...(meta.heuristic_meta[k] || {}), ...heuristic_meta[k] };
+        }
+        eventsToWrite.push({ event_type: 'field_edited', payload: { keys: Object.keys(heuristic_meta).map(k => `heuristic:${k}`) } });
       }
 
       // Patch notes

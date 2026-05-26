@@ -273,6 +273,22 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
                 onChange={setFields}
                 onProjectChanged={onChange}
                 readOnly={isDone}
+                heuristicMeta={meta.heuristic_meta || {}}
+                onHeuristicChange={async (fieldKey, patch) => {
+                  // Persist a heuristic_meta patch (typically { verified: true|false })
+                  // immediately — these are metadata edits, not field edits, and
+                  // we don't want them blocked by the readOnly field state.
+                  try {
+                    await pmProjectsAPI.updateLane(projectId, lane, {
+                      item: itemKey,
+                      heuristic_meta: { [fieldKey]: patch },
+                    });
+                    await onChange?.();
+                    loadActivity();
+                  } catch (e) {
+                    setError(e.response?.data?.error || e.message);
+                  }
+                }}
               />
             </section>
 
@@ -355,8 +371,8 @@ export default function ItemPanel({ projectId, lane, itemDef, laneState, artifac
 }
 
 // ── Resolves specialized component by ux marker; all controlled. ──
-function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, missingFields, upstreamSuggestions, onChange, onProjectChanged, readOnly }) {
-  const common = { schema, values, currentState, missingFields, upstreamSuggestions, onChange, readOnly };
+function SpecializedOrGeneric({ ux, projectId, lane, itemKey, schema, values, currentState, artifacts, missingFields, upstreamSuggestions, onChange, onProjectChanged, readOnly, heuristicMeta, onHeuristicChange }) {
+  const common = { schema, values, currentState, missingFields, upstreamSuggestions, onChange, readOnly, heuristicMeta, onHeuristicChange };
   switch (ux) {
     case 'site_survey':
       return <SiteSurveyForm projectId={projectId} lane={lane} itemKey={itemKey} {...common} artifacts={artifacts} onProjectChanged={onProjectChanged} />;

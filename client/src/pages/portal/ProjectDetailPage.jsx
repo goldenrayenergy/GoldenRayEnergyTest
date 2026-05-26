@@ -1548,6 +1548,7 @@ export default function ProjectDetailPage() {
   const [completionModalOpen, setCompletionModalOpen] = useState(false);
   const [completionDismissed, setCompletionDismissed] = useState(false);
   const [advancingFromCompletion, setAdvancingFromCompletion] = useState(false);
+  const [syncingToPm, setSyncingToPm] = useState(false);
   const prevCompleteRef = useRef(null);
 
   const loadProject = () => {
@@ -1563,6 +1564,33 @@ export default function ProjectDetailPage() {
       .finally(() => setLoading(false));
   };
   useEffect(loadProject, [id]);
+
+  // Sales rep confirms this lead is qualified → creates the corresponding
+  // projects_v2 row. Legacy project stays untouched; both tools now see it.
+  const syncToPm = async () => {
+    if (!project) return;
+    const ok = window.confirm(
+      `Confirm this lead is qualified and sync to the new PM Tool?\n\n` +
+      `Customer: ${project.contacts?.name || '—'}\n` +
+      `Project:  ${project.code}\n\n` +
+      `A corresponding record will be created in /pm with 5 swim-lanes initialised. ` +
+      `Both tools will see this project from now on; the legacy view here stays unchanged.`
+    );
+    if (!ok) return;
+    setSyncingToPm(true);
+    try {
+      const { data } = await api.post(`/projects/${project.id}/sync-to-pm`);
+      await new Promise(r => setTimeout(r, 50));  // tiny delay so the toast feels intentional
+      loadProject();
+      // Optional: hop straight into the PM Tool for the user to verify
+      // const go = window.confirm(`Synced as ${data.pm_project_code || data.pm_project_id}. Open in PM Tool now?`);
+      // if (go) window.location.assign(`/pm/projects/${data.pm_project_id}`);
+    } catch (e) {
+      alert(`Sync failed: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setSyncingToPm(false);
+    }
+  };
 
   // Users list for the New-stage owner picker. Loaded once.
   useEffect(() => {
@@ -1701,6 +1729,28 @@ export default function ProjectDetailPage() {
           {project.sub_status && <Badge color="#ef4444">{project.sub_status}</Badge>}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {project.pm_project_id ? (
+            <Link
+              to={`/pm/projects/${project.pm_project_id}`}
+              title={`Synced to PM Tool${project.confirmed_for_pm_at ? ` on ${fmtDate(project.confirmed_for_pm_at)}` : ''} — click to open`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-700 text-xs font-bold hover:bg-emerald-100 hover:border-emerald-400 transition shadow-sm"
+            >
+              <CheckCircle2 size={13} />
+              <span className="hidden md:inline">Synced — Open in PM Tool</span>
+              <span className="md:hidden">In PM Tool</span>
+              <ArrowRight size={12} />
+            </Link>
+          ) : (
+            <button
+              onClick={syncToPm}
+              disabled={syncingToPm}
+              title="Confirm this lead is qualified and create the corresponding PM Tool record"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-bold hover:from-amber-400 hover:to-orange-400 shadow-md disabled:opacity-50 transition"
+            >
+              {syncingToPm ? <RefreshCw size={13} className="animate-spin" /> : <Send size={13} />}
+              {syncingToPm ? 'Syncing…' : 'Confirm & Sync to PM Tool'}
+            </button>
+          )}
           <StageMoveDropdown
             currentStage={project.stage}
             onMove={moveStage}

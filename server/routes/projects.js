@@ -436,6 +436,246 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// POST /:id/sync-to-pm — sales rep confirms this lead is qualified and creates
+// a corresponding projects_v2 row in the PM Tool. From this point both tools
+// coexist for the project, evolving independently.
+//
+// Idempotent: if pm_project_id is already set, returns the existing link.
+// Compensating action: if the legacy update fails after the v2 insert, the
+// v2 row is deleted so we don't leave an orphan.
+// ────────────────────────────────────────────────────────────────────────────
+router.post('/:id/sync-to-pm', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    // 1. Fetch the legacy project
+    const { data: legacy, error: fetchErr } = await supabaseAdmin
+      .from('projects')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+    if (fetchErr) {
+      if (fetchErr.code === 'PGRST116') return res.status(404).json({ error: 'Project not found.' });
+      throw fetchErr;
+    }
+
+    // 2. Idempotency — if already synced, return the existing link
+    if (legacy.pm_project_id) {
+      return res.status(200).json({
+        already_synced:    true,
+        pm_project_id:     legacy.pm_project_id,
+        confirmed_for_pm_at: legacy.confirmed_for_pm_at,
+        message:           'Project is already synced to PM Tool.',
+      });
+    }
+
+    // 3. Map legacy → projects_v2 schema. Field renames:
+    //    customer_id      → contact_id
+    //    panels           → panel_count
+    //    estimated_value  → estimated_value_nzd
+    //    owner_id         → primary_owner_id
+    //
+    // Pre-complete Sales lane tasks 1-2 (qualification_call + customer_profile).
+    // The sales rep already did this work in /portal before clicking
+    // "Confirm & Sync"; we surface the same in /pm with attribution so the
+    // audit trail is preserved and sales doesn't see them as outstanding.
+    //
+    // PM lane storage shape per server/services/pm/README.md:
+    //   lane_status.{lane}.item_meta.{key} → { state, fields, completed_at, … }
+    //   lane_status.{lane}.items.{key}     → boolean mirror, true ⇔ state === doneState
+    const nowIso  = new Date().toISOString();
+    const userId  = req.user?.id || null;
+
+    // qualification_call — marked 'done'. The sync click IS the rep's confirmation.
+    const qualFields = {
+      attempted_at: legacy.stage_entered_at || legacy.created_at || nowIso,
+      disposition:  legacy.call_outcome || null,
+      rating:       legacy.quality       || null,
+      objections:   legacy.call_notes    || null,
+      // decision_maker / budget_aligned / timeline / next_action_at — not captured in legacy, left null
+    };
+
+    // customer_profile — also 'done' so the rep doesn't see it pending.
+    // Try to enrich from the latest completed bill_analyses row for this
+    // contact: bill_analysis_id + bills_supplied are factual links; occupants,
+    // has_heatpump, has_ev are heuristic estimates the rep must verify before
+    // they should be used downstream. Heuristic-vs-factual provenance is
+    // recorded in `heuristic_meta` so the UI can show verify-toggles.
+    let billAnalysis = null;
+    if (legacy.customer_id) {
+      const { data: ba } = await supabaseAdmin
+        .from('bill_analyses')
+        .select('id, bills_uploaded, annual_kwh, patterns')
+        .eq('contact_id', legacy.customer_id)
+        .eq('status', 'completed')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      billAnalysis = ba;
+    }
+
+    const profileFields    = { bill_analysis_id: null, bills_supplied: null };
+    const profileHeuristic = {};
+
+    if (billAnalysis) {
+      // Solid (factual) — direct copy
+      profileFields.bill_analysis_id = billAnalysis.id;
+      profileFields.bills_supplied   = billAnalysis.bills_uploaded ?? null;
+
+      const kwh = Number(billAnalysis.annual_kwh) || 0;
+      const patterns = Array.isArray(billAnalysis.patterns) ? billAnalysis.patterns : [];
+
+      // Heuristic — occupants estimated from annual kWh band
+      // (rough, ±2 people — heat pumps/EVs/hot-water type skew this)
+      if (kwh > 0) {
+        let occ;
+        if      (kwh < 3000)  occ = 1;
+        else if (kwh < 5000)  occ = 2;
+        else if (kwh < 7500)  occ = 3;
+        else if (kwh < 10000) occ = 4;
+        else                  occ = 5;
+        profileFields.occupants = occ;
+        profileHeuristic.occupants = {
+          source:     'annual_kwh_band',
+          confidence: 'low',
+          verified:   false,
+          basis:      `Annual ${Math.round(kwh).toLocaleString()} kWh → ${occ} occupant${occ === 1 ? '' : 's'} band`,
+        };
+      }
+
+      // Heuristic — heat pump suggested by winter usage spike + meaningful baseline
+      const hasWinterSpike = patterns.some(p => p?.code === 'winter_spike');
+      if (hasWinterSpike && kwh > 7000) {
+        profileFields.has_heatpump = true;
+        profileHeuristic.has_heatpump = {
+          source:     'winter_spike_pattern',
+          confidence: 'medium',
+          verified:   false,
+          basis:      `Winter usage spike detected and annual kWh ${Math.round(kwh).toLocaleString()} > 7,000`,
+        };
+      }
+
+      // Heuristic — EV suggested by very high baseline (rough; no direct OCR signal)
+      if (kwh > 11000) {
+        profileFields.has_ev = true;
+        profileHeuristic.has_ev = {
+          source:     'high_annual_kwh',
+          confidence: 'low',
+          verified:   false,
+          basis:      `Annual ${Math.round(kwh).toLocaleString()} kWh exceeds 11,000 — could indicate EV home charging`,
+        };
+      }
+    }
+
+    const legacyMeta = {
+      completed_at:         nowIso,
+      completed_by:         userId,
+      completed_via_legacy: true,
+      source_project_id:    legacy.id,
+      source_project_code:  legacy.code,
+      state_history: [{
+        state: 'done',
+        at:    nowIso,
+        by:    userId,
+        note:  'Auto-completed during /portal → /pm sync (qualification already done in /portal).',
+      }],
+    };
+
+    const emptyLaneStatus = {
+      sales: {
+        status: 'in_progress',
+        item_meta: {
+          qualification_call: { state: 'done', fields: qualFields,    notes: null, ...legacyMeta },
+          customer_profile:   {
+            state: 'done',
+            fields: profileFields,
+            heuristic_meta: profileHeuristic,   // per-field provenance + verified toggles for the UI
+            notes: null,
+            ...legacyMeta,
+          },
+        },
+        items: {
+          qualification_call: true,   // mirrors state === doneState — cross-lane gates can rely on this
+          customer_profile:   true,
+        },
+      },
+      engineering: { status: 'not_started', item_meta: {}, items: {} },
+      compliance:  { status: 'not_started', item_meta: {}, items: {} },
+      operations:  { status: 'not_started', item_meta: {}, items: {} },
+      finance:     { status: 'not_started', item_meta: {}, items: {} },
+    };
+
+    const v2Row = {
+      contact_id:           legacy.customer_id || null,
+      address:              legacy.address || null,
+      suburb:               legacy.suburb || null,
+      city:                 legacy.city || null,
+      region:               legacy.region || null,
+      postcode:             legacy.postcode || null,
+      project_type:         'residential_rooftop', // default; can be edited in PM later
+      system_size_kw:       legacy.system_size_kw || null,
+      battery_kwh:          legacy.battery_kwh || null,
+      panel_count:          legacy.panels || null,
+      system_type:          legacy.system_type || 'on-grid',
+      estimated_value_nzd:  legacy.estimated_value || null,
+      primary_owner_id:     legacy.owner_id || req.user?.id || null,
+      lane_status:          emptyLaneStatus,
+      health:               'green',
+      status:               'active',
+      notes:                legacy.notes || null,
+      created_by:           req.user?.id || null,
+      legacy_project_id:    legacy.id,
+    };
+
+    const { data: v2Created, error: v2Err } = await supabaseAdmin
+      .from('projects_v2')
+      .insert(v2Row)
+      .select('id, code')
+      .single();
+    if (v2Err) throw v2Err;
+
+    // 4. Update legacy with the back-reference + audit fields
+    const { data: legacyUpdated, error: linkErr } = await supabaseAdmin
+      .from('projects')
+      .update({
+        pm_project_id:       v2Created.id,
+        confirmed_for_pm_at: new Date().toISOString(),
+        confirmed_for_pm_by: req.user?.id || null,
+      })
+      .eq('id', legacy.id)
+      .select('id, pm_project_id, confirmed_for_pm_at, confirmed_for_pm_by')
+      .single();
+
+    if (linkErr) {
+      // Compensating action — kill the orphan v2 row
+      console.error('Legacy link update failed, rolling back v2 insert:', linkErr.message);
+      await supabaseAdmin.from('projects_v2').delete().eq('id', v2Created.id);
+      throw linkErr;
+    }
+
+    // 5. Audit trail on the legacy side
+    await supabaseAdmin.from('activities').insert({
+      type:        'system',
+      description: `Confirmed for PM Tool — created PM project ${v2Created.code || v2Created.id}`,
+      project_id:  legacy.id,
+      contact_id:  legacy.customer_id,
+      user_id:     req.user?.id || null,
+      metadata:    { pm_project_id: v2Created.id, pm_project_code: v2Created.code },
+    }).then(() => {}, () => {}); // non-fatal
+
+    res.status(201).json({
+      already_synced:    false,
+      pm_project_id:     v2Created.id,
+      pm_project_code:   v2Created.code,
+      confirmed_for_pm_at: legacyUpdated.confirmed_for_pm_at,
+      confirmed_for_pm_by: legacyUpdated.confirmed_for_pm_by,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Mark site visit complete. Once set, future proposals generated for this
 // project will be 'final' mode (no preliminary watermark). Toggle off by
 // passing { done: false } — only admins should do that, surfaces in audit.
