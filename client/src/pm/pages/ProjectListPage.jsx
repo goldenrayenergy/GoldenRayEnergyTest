@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { pmProjectsAPI } from '../services/pmApi';
 import { fmtDate } from '../../utils/format';
+import { SkeletonProjectList, LoadError } from '../components/LoadingSkeletons';
 
 const TYPE_LABELS = {
   residential_rooftop: 'Residential rooftop',
@@ -95,14 +96,14 @@ export default function ProjectListPage() {
         </select>
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded mb-4 text-sm">
-          {error}
-        </div>
-      )}
-
-      {loading ? (
-        <div className="text-center py-12 text-slate-400">Loading…</div>
+      {error && !loading ? (
+        <LoadError
+          error={error}
+          onRetry={() => setFilters(f => ({ ...f }))}
+          title="Couldn't load projects"
+        />
+      ) : loading ? (
+        <SkeletonProjectList rows={8} />
       ) : projects.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-lg p-12 text-center">
           <p className="text-slate-500 mb-4">No projects yet.</p>

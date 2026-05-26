@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { pmOwnerAPI } from '../services/pmApi';
 import { fmt$, fmtDate } from '../../utils/format';
+import { SkeletonOwnerDashboard, LoadError } from '../components/LoadingSkeletons';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Owner Dashboard — 7 zones, single screen.
@@ -20,14 +21,16 @@ export default function OwnerDashboardPage() {
   const [loading, setL]     = useState(true);
   const [error, setError]   = useState('');
 
-  useEffect(() => {
+  const load = () => {
+    setL(true); setError('');
     pmOwnerAPI.dashboard()
       .then(r => { setData(r.data); setL(false); })
       .catch(e => { setError(e.response?.data?.error || e.message); setL(false); });
-  }, []);
+  };
+  useEffect(load, []);
 
-  if (loading) return <div className="text-center py-12 text-slate-400">Loading owner dashboard…</div>;
-  if (error)   return <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">{error}</div>;
+  if (loading) return <SkeletonOwnerDashboard />;
+  if (error)   return <LoadError error={error} onRetry={load} title="Couldn't load the Owner Dashboard" />;
   if (!data)   return null;
 
   return (

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { pmProjectsAPI } from '../services/pmApi';
 import { fmtDateLong } from '../../utils/format';
 import ItemPanel from '../components/ItemPanel';
+import { SkeletonProjectDetail, LoadError } from '../components/LoadingSkeletons';
 
 const LANES = ['sales', 'engineering', 'compliance', 'operations', 'finance'];
 
@@ -71,8 +72,8 @@ export default function ProjectDetailPage() {
     }
   }
 
-  if (loading && !project) return <div className="text-center py-12 text-slate-400">Loading…</div>;
-  if (!project) return <div className="text-red-600">{error || 'Project not found'}</div>;
+  if (loading && !project) return <SkeletonProjectDetail />;
+  if (!project) return <LoadError error={error || 'Project not found.'} onRetry={load} title="Couldn't load this project" />;
 
   const { lane_status: laneStatus, lane_completion: completion, checklist } = project;
 
@@ -98,6 +99,7 @@ export default function ProjectDetailPage() {
           </div>
           <div className="flex flex-col gap-2 text-right">
             <SystemCard project={project} />
+            <ProposalDownloadButtons projectId={project.id} hasBill={!!project.bill_analysis_id} />
           </div>
         </div>
       </div>
@@ -263,8 +265,29 @@ export default function ProjectDetailPage() {
       <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-500">
         <div className="bg-white border border-slate-200 rounded p-3">
           <h4 className="font-semibold text-slate-700 mb-1">Customer share link</h4>
-          <p className="break-all">/p/{project.share_token}</p>
-          <p className="mt-1 text-slate-400">Customer-facing magic link (Phase D)</p>
+          <p className="break-all text-[11px] font-mono">/p/{project.share_token}</p>
+          <div className="flex gap-1.5 mt-2">
+            <button
+              onClick={() => {
+                const url = `${window.location.origin}/p/${project.share_token}`;
+                navigator.clipboard.writeText(url).then(
+                  () => alert('Customer link copied to clipboard:\n\n' + url),
+                  () => alert('Copy failed — please select the URL above manually.')
+                );
+              }}
+              className="text-[10px] font-bold px-2 py-1 rounded bg-amber-500 hover:bg-amber-600 text-white"
+              title="Copy the full URL to your clipboard">
+              Copy full URL
+            </button>
+            <a
+              href={`/p/${project.share_token}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] font-bold px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50">
+              Preview ↗
+            </a>
+          </div>
+          <p className="mt-2 text-[10px] text-slate-400">Read-only · customer-facing · no login</p>
         </div>
         <div className="bg-white border border-slate-200 rounded p-3">
           <h4 className="font-semibold text-slate-700 mb-1">VPP-readiness</h4>
@@ -288,6 +311,68 @@ function SystemCard({ project }) {
       <div><strong>{project.system_size_kw || '—'}</strong> kW solar</div>
       {project.battery_kwh && <div><strong>{project.battery_kwh}</strong> kWh battery</div>}
       {project.panel_count && <div>{project.panel_count} panels</div>}
+    </div>
+  );
+}
+
+// B-2 — Goldenray-branded proposal PDF download. Two stages:
+//   Stage 1 = preliminary (cost ranges; pre-site-visit)
+//   Stage 2 = final (locked spec + price; post-site-visit, needs site_visit_done_at)
+// Both stages are generated server-side via Puppeteer and streamed back as
+// a file download. If no bill_analysis is linked, the proposal still renders
+// but the savings projection falls back to industry averages.
+function ProposalDownloadButtons({ projectId, hasBill }) {
+  const [downloading, setDownloading] = useState(null);   // 1 | 2 | null
+  const [error, setError] = useState('');
+
+  async function download(stage) {
+    setDownloading(stage); setError('');
+    try {
+      const token = localStorage.getItem('gr_token');
+      const res = await fetch(`/api/pm/projects/${projectId}/proposal-pdf?stage=${stage}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      // Pull filename from Content-Disposition if present
+      const cd = res.headers.get('Content-Disposition') || '';
+      const m  = cd.match(/filename="([^"]+)"/);
+      const name = m ? m[1] : `Goldenray-Proposal-Stage${stage}.pdf`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <button
+        onClick={() => download(1)}
+        disabled={downloading !== null}
+        title={hasBill ? 'Generate Stage 1 preliminary proposal' : 'Generate Stage 1 — no bill linked, savings projection uses regional averages'}
+        className="text-[11px] font-bold px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
+      >
+        {downloading === 1 ? '⏳ Generating…' : '📄 Stage 1 PDF'}
+      </button>
+      <button
+        onClick={() => download(2)}
+        disabled={downloading !== null}
+        title="Generate Stage 2 final proposal (post-site-visit)"
+        className="text-[11px] font-bold px-3 py-1.5 rounded border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
+      >
+        {downloading === 2 ? '⏳ Generating…' : '📄 Stage 2 PDF'}
+      </button>
+      {error && <div className="text-[10px] text-red-600 max-w-[200px] break-words">{error}</div>}
     </div>
   );
 }
