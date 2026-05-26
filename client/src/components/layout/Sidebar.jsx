@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
-import { LayoutDashboard, Briefcase, TrendingUp, CheckCircle, GitBranch, Megaphone, Mail, Target, Users, Building2, BarChart3, Settings, LogOut, Inbox, FolderKanban, CreditCard, ShieldAlert, Package, Boxes, ShoppingCart } from 'lucide-react';
+import { LayoutDashboard, Briefcase, TrendingUp, CheckCircle, GitBranch, Megaphone, Mail, Target, Users, Building2, BarChart3, Settings, Inbox, FolderKanban, CreditCard, ShieldAlert, Package, Boxes, ShoppingCart } from 'lucide-react';
 
 const NAV = [
   { header: 'Overview', items: [{ to: '/portal', label: 'Dashboard', icon: LayoutDashboard, end: true }] },
@@ -39,7 +39,7 @@ const BADGE_KEY_BY_PATH = {
 };
 
 export default function Sidebar() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const sections = user?.role === 'admin' ? NAV : NAV.filter(s => !s.adminOnly);
   const [counts, setCounts] = useState({ pendingOverrides: 0, atRisk: 0 });
 
@@ -100,7 +100,7 @@ export default function Sidebar() {
       </nav>
 
       <div className="p-3 border-t border-gray-100 dark:border-white/5">
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-md bg-amber-50 dark:bg-amber-500/10 flex items-center justify-center text-[10px] font-bold text-amber-600 dark:text-amber-400">
             {user?.avatar || user?.name?.split(' ').map(w => w[0]).join('').slice(0, 2)}
           </div>
@@ -109,10 +109,6 @@ export default function Sidebar() {
             <div className="text-[9px] text-gray-400 dark:text-gray-500 capitalize">{user?.role?.replace('_', ' ')}</div>
           </div>
         </div>
-        <button onClick={logout}
-          className="flex items-center gap-1.5 w-full px-2 py-1 border border-gray-200 dark:border-white/10 rounded-md bg-gray-50 dark:bg-brand-dark-2 text-gray-500 dark:text-gray-400 text-[10px] hover:bg-gray-100 dark:hover:bg-brand-dark-3 transition">
-          <LogOut size={11} /> Sign Out
-        </button>
       </div>
     </aside>
   );

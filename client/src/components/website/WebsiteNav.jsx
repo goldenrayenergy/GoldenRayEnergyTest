@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  Menu, X, Phone, Mail, ArrowRight, TrendingUp, Lock,
+  Menu, X, Phone, Mail, ArrowRight, ArrowLeft, TrendingUp, Lock,
   Zap, Package, ShoppingBag, DollarSign, Award, Users, FileText,
   HelpCircle, MapPin, MessageCircle, Calendar, Sun, Search, MessageSquare, Home,
 } from 'lucide-react';
 import FinanceModal from './FinanceModal';
+import { useAuth } from '../../context/AuthContext';
 
 // ────────────────────────────────────────────────────────────────────────────
 // WebsiteNav — shared public-website navigation (Option B design).
@@ -25,6 +26,8 @@ export default function WebsiteNav({ extras }) {
   const [drawerOpen, setDrawerOpen]   = useState(false);
   const [financeOpen, setFinanceOpen] = useState(false);
   const { pathname } = useLocation();
+  const { user } = useAuth();
+  const firstName = user?.name?.split(' ')[0] || '';
 
   // On home page, anchors stay #anchor; on other pages they need to navigate
   // back to / first then anchor.
@@ -106,6 +109,26 @@ export default function WebsiteNav({ extras }) {
             <span>Get a quote</span>
           </Link>
 
+          {/* Employee login / back-to-portal — morphs based on auth state */}
+          {user ? (
+            <Link
+              to="/portal"
+              title={`Signed in as ${user.name} — back to the CRM portal`}
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/15 border border-amber-400/40 text-amber-200 hover:text-white hover:bg-amber-500/30 text-xs md:text-sm font-semibold transition">
+              <ArrowLeft size={14} />
+              <span className="hidden md:inline">Back to Portal · {firstName}</span>
+              <span className="md:hidden">Portal</span>
+            </Link>
+          ) : (
+            <Link
+              to="/login"
+              title="Employee login"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-white/70 hover:text-amber-300 border border-white/15 hover:border-amber-400/50 text-xs md:text-sm font-semibold transition">
+              <Lock size={13} />
+              <span className="hidden md:inline">Employee Login</span>
+            </Link>
+          )}
+
           {/* Page-specific extras (e.g. shop cart button) */}
           {extras}
 
@@ -183,13 +206,23 @@ export default function WebsiteNav({ extras }) {
 
               {/* Footer of drawer */}
               <div className="p-5 border-t border-gray-100 dark:border-white/10 bg-gray-50 dark:bg-brand-dark-1 mt-auto">
-                <Link
-                  to="/login"
-                  onClick={close}
-                  className="flex items-center justify-center gap-2 text-xs text-gray-500 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 transition">
-                  <Lock size={11} />
-                  Employee Login
-                </Link>
+                {user ? (
+                  <Link
+                    to="/portal"
+                    onClick={close}
+                    className="flex items-center justify-center gap-2 text-sm font-semibold text-amber-600 dark:text-amber-300 hover:text-amber-700 dark:hover:text-amber-200 transition">
+                    <ArrowLeft size={14} />
+                    Back to Portal · {firstName}
+                  </Link>
+                ) : (
+                  <Link
+                    to="/login"
+                    onClick={close}
+                    className="flex items-center justify-center gap-2 text-xs text-gray-500 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 transition">
+                    <Lock size={11} />
+                    Employee Login
+                  </Link>
+                )}
               </div>
             </div>
           </aside>

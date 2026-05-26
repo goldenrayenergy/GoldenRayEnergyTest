@@ -1,11 +1,14 @@
 import { Link } from 'react-router-dom';
-import { Lock } from 'lucide-react';
+import { Lock, ArrowLeft } from 'lucide-react';
 import Button from '../ui/Button';
+import { useAuth } from '../../context/AuthContext';
 
 export default function WebsiteFooter({ homepage = true }) {
   // When on the homepage, anchor links scroll within the page.
   // On other public routes they must navigate to `/#anchor`.
   const anchor = (slug) => (homepage ? `#${slug}` : `/#${slug}`);
+  const { user } = useAuth();
+  const firstName = user?.name?.split(' ')[0] || '';
 
   return (
     <footer className="text-gray-300 px-4 md:px-16 py-10 md:py-12 relative overflow-hidden"
@@ -65,7 +68,13 @@ export default function WebsiteFooter({ homepage = true }) {
         <div className="flex items-center gap-4">
           <span className="text-[11px] hover:text-amber-400 cursor-pointer transition">Privacy Policy</span>
           <span className="text-[11px] hover:text-amber-400 cursor-pointer transition">Terms of Service</span>
-          <Link to="/login"><Button variant="dark" size="sm" icon={Lock}>Employee Portal</Button></Link>
+          {user ? (
+            <Link to="/portal" title={`Signed in as ${user.name}`}>
+              <Button variant="dark" size="sm" icon={ArrowLeft}>Back to Portal · {firstName}</Button>
+            </Link>
+          ) : (
+            <Link to="/login"><Button variant="dark" size="sm" icon={Lock}>Employee Portal</Button></Link>
+          )}
         </div>
       </div>
     </footer>

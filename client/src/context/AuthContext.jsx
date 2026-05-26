@@ -33,6 +33,9 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('gr_token');
     delete api.defaults.headers.common['Authorization'];
     setUser(null);
+    // Hard-navigate to the public website so any portal/pm state is fully
+    // released and the employee lands on the marketing site, not /login.
+    window.location.assign('/');
   };
 
   return (

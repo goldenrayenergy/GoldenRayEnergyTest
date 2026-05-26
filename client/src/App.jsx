@@ -15,6 +15,7 @@ import ShopPage from './pages/ShopPage';
 import ShopProductDetailPage from './pages/ShopProductDetailPage';
 import BillAnalysisPage from './pages/BillAnalysisPage';
 import GetQuotePage from './pages/GetQuotePage';
+import PublicProposalPage from './pages/PublicProposalPage';
 
 // Portal pages
 import PortalLayout from './components/layout/PortalLayout';
@@ -69,6 +70,11 @@ export default function App() {
       <Route path="/bill-analysis" element={<Navigate to="/get-quote" replace />} />
       <Route path="/bill-analysis/legacy" element={<BillAnalysisPage />} />
       <Route path="/get-quote" element={<GetQuotePage />} />
+
+      {/* B-1 — Customer-facing magic-link viewer.
+          Public (no auth), gated only by the unguessable share_token UUID
+          generated on each projects_v2 row. */}
+      <Route path="/p/:token" element={<PublicProposalPage />} />
 
       <Route
         path="/pm/*"

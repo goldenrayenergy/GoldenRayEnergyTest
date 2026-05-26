@@ -1,4 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 
 // ── Shell layout for the PM tool ──
 // Visually distinct from the portal so it's obvious which surface you're on.
@@ -31,8 +32,13 @@ export default function PmLayout() {
             </Link>
           </nav>
           <div className="flex-1" />
-          <Link to="/portal" className="text-xs text-slate-400 hover:text-white">
-            ← back to main portal
+          <Link
+            to="/portal"
+            title="Return to the main CRM portal — you stay signed in"
+            className="inline-flex items-center gap-1.5 text-sm font-bold px-3 py-1.5 rounded-md bg-amber-500/15 border border-amber-400/50 text-amber-200 hover:bg-amber-500/25 hover:text-white hover:border-amber-300 transition-colors"
+          >
+            <ArrowLeft size={15} />
+            Back to Main Portal
           </Link>
         </div>
       </header>
