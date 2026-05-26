@@ -24,7 +24,7 @@ export default function ProductsPage() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [facets, setFacets] = useState({ categories: [], brands: [], stock_statuses: [] });
+  const [facets, setFacets] = useState({ categories: [], brands: [], stock_statuses: [], website_categories: [], subcategoriesByCategory: {} });
   const [filters, setFilters] = useState({ q: '', category: '', brand: '', stock_status: '', is_active: 'true' });
   const [editing, setEditing] = useState(null);     // product object or null
   const [importOpen, setImportOpen] = useState(false);
@@ -148,11 +148,10 @@ export default function ProductsPage() {
           data={rows}
           onRowClick={p => setEditing(p)}
           columns={[
-            { label: 'SKU',     render: p => <span className="text-[11px] font-mono text-gray-500">{p.sku || <span className="text-gray-300 italic">—</span>}</span> },
             { label: 'Name',    render: p => (
               <div>
                 <div className="text-xs font-semibold truncate max-w-[260px]">{p.name}</div>
-                <div className="text-[10px] text-gray-400 truncate max-w-[260px]">{p.brand ? `${p.brand} · ` : ''}{p.category}</div>
+                <div className="text-[10px] text-gray-400 truncate max-w-[260px]">{p.brand ? `${p.brand} · ` : ''}{p.category}{p.subcategory ? ` · ${p.subcategory}` : ''}</div>
               </div>
             )},
             { label: 'Cost',    render: p => p.cost_nzd != null ? <span className="text-xs">{fmt$(p.cost_nzd)}</span> : <span className="text-gray-300">—</span> },
@@ -195,6 +194,8 @@ export default function ProductsPage() {
       {(editing || creating) && (
         <ProductEditor
           product={editing}
+          facets={facets}
+          defaultCategory={creating ? filters.category : ''}
           onClose={() => { setEditing(null); setCreating(false); }}
           onSaved={() => { setEditing(null); setCreating(false); load(); loadFacets(); }}
         />
@@ -212,10 +213,10 @@ export default function ProductsPage() {
 }
 
 // ── Product editor (slide-over panel) ─────────────────────────────────────
-function ProductEditor({ product, onClose, onSaved }) {
+function ProductEditor({ product, facets = {}, defaultCategory = '', onClose, onSaved }) {
   const isNew = !product;
   const [form, setForm] = useState(product || {
-    sku: '', category: '', subcategory: '', brand: '', name: '',
+    sku: '', category: defaultCategory || '', subcategory: '', brand: '', name: '',
     description: '', cost_nzd: '', default_margin_pct: 30,
     unit: 'EA', stock_status: 'unknown', qty_available: 0, moq: 1,
     availability_notes: '', available_from: '', website_category: '',
@@ -223,6 +224,31 @@ function ProductEditor({ product, onClose, onSaved }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  const categoryOptions = facets.categories || [];
+  const subcatMap = facets.subcategoriesByCategory || {};
+  const subcategoryOptions = form.category ? (subcatMap[form.category] || []) : [];
+
+  // If the picked Sub-category isn't valid for the current Category, clear it.
+  // Runs only when category changes — keeps existing subcategory on first render.
+  useEffect(() => {
+    if (!form.category) return;
+    const valid = subcatMap[form.category] || [];
+    if (form.subcategory && !valid.includes(form.subcategory)) {
+      setForm(f => ({ ...f, subcategory: '' }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.category]);
+
+  // For a brand-new product where defaultCategory was passed: if that category
+  // happens to have exactly one sub-category, prefill it so the user has less
+  // to type. Existing products keep whatever was already on them.
+  useEffect(() => {
+    if (!isNew || !defaultCategory) return;
+    const subs = subcatMap[defaultCategory] || [];
+    if (subs.length === 1) setForm(f => ({ ...f, subcategory: subs[0] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleChange = (e) => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
 
@@ -266,9 +292,9 @@ function ProductEditor({ product, onClose, onSaved }) {
           <div className="grid grid-cols-2 gap-2">
             <Field label="SKU" name="sku" value={form.sku || ''} onChange={handleChange} />
             <Field label="Brand" name="brand" value={form.brand || ''} onChange={handleChange} />
-            <Field label="Category" name="category" value={form.category || ''} onChange={handleChange} />
-            <Field label="Sub-category" name="subcategory" value={form.subcategory || ''} onChange={handleChange} />
-            <Field label="Website category" name="website_category" value={form.website_category || ''} onChange={handleChange} />
+            <SelectOrAdd label="Category" name="category" value={form.category || ''} options={categoryOptions} onChange={handleChange} />
+            <SelectOrAdd label="Sub-category" name="subcategory" value={form.subcategory || ''} options={subcategoryOptions} onChange={handleChange} disabled={!form.category} disabledHint={!form.category ? 'Pick a category first' : undefined} />
+            <SelectOrAdd label="Website category" name="website_category" value={form.website_category || ''} options={facets.website_categories || []} onChange={handleChange} />
             <Field label="Unit" name="unit" value={form.unit || 'EA'} onChange={handleChange} />
           </div>
 
@@ -338,6 +364,71 @@ function Field({ label, name, value, onChange, type = 'text', step, required }) 
       <input name={name} value={value} onChange={onChange} type={type} step={step} required={required}
         className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-xs bg-white dark:bg-brand-dark"
       />
+    </div>
+  );
+}
+
+// Dropdown of existing values with a "+ Add new…" escape hatch. Emits the
+// same { target: { name, value } } shape as Field so the parent's handleChange
+// works unchanged.
+function SelectOrAdd({ label, name, value, options = [], onChange, disabled = false, disabledHint }) {
+  // If the current value isn't in the options list (e.g. a newly-typed value
+  // or one missing from the active-only facets), or there are no options at
+  // all (e.g. a category that has no existing sub-categories), drop into
+  // typing mode so the user can add one.
+  const valueIsCustom = !!value && !options.includes(value);
+  const noOptions = !disabled && options.length === 0;
+  const [adding, setAdding] = useState(valueIsCustom || noOptions);
+
+  useEffect(() => {
+    setAdding((!!value && !options.includes(value)) || (!disabled && options.length === 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.length, disabled]);
+
+  const emit = (v) => onChange({ target: { name, value: v } });
+
+  return (
+    <div>
+      <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide flex items-center justify-between">
+        <span>{label}</span>
+        {!disabled && !adding && options.length > 0 && (
+          <button type="button"
+            onClick={() => { setAdding(true); emit(''); }}
+            className="text-[9px] font-bold text-amber-600 hover:text-amber-700 normal-case tracking-normal"
+            title="Type a new value instead of picking">
+            + Add new
+          </button>
+        )}
+        {!disabled && adding && (
+          <button type="button"
+            onClick={() => { setAdding(false); emit(''); }}
+            className="text-[9px] font-bold text-gray-400 hover:text-gray-600 normal-case tracking-normal"
+            title="Back to the dropdown">
+            ← Pick existing
+          </button>
+        )}
+      </label>
+      {adding ? (
+        <input
+          name={name}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          placeholder={disabled ? (disabledHint || '') : 'Type new value…'}
+          className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-xs bg-white dark:bg-brand-dark disabled:bg-gray-50 disabled:text-gray-400"
+        />
+      ) : (
+        <select
+          name={name}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-white/10 text-xs bg-white dark:bg-brand-dark disabled:bg-gray-50 disabled:text-gray-400"
+        >
+          <option value="">{disabled ? (disabledHint || '—') : 'Select…'}</option>
+          {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+        </select>
+      )}
     </div>
   );
 }

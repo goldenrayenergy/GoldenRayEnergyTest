@@ -72,19 +72,35 @@ router.get('/', async (req, res) => {
 });
 
 // ── Distinct categories + brands for filter dropdowns ───────────────────────
+// Also returns subcategoriesByCategory so the editor can cascade Sub-category
+// options off the picked Category.
 router.get('/facets', async (req, res) => {
   try {
     if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
     const { data, error } = await supabaseAdmin
       .from('products')
-      .select('category, brand, stock_status')
+      .select('category, subcategory, brand, stock_status, website_category')
       .eq('is_active', true);
     if (error) throw error;
 
-    const categories = [...new Set(data.map(r => r.category).filter(Boolean))].sort();
-    const brands     = [...new Set(data.map(r => r.brand).filter(Boolean))].sort();
-    const statuses   = [...new Set(data.map(r => r.stock_status).filter(Boolean))].sort();
-    res.json({ categories, brands, stock_statuses: statuses });
+    const categories          = [...new Set(data.map(r => r.category).filter(Boolean))].sort();
+    const brands              = [...new Set(data.map(r => r.brand).filter(Boolean))].sort();
+    const statuses            = [...new Set(data.map(r => r.stock_status).filter(Boolean))].sort();
+    // Public Trade Shop buckets — used in the /shop filter dropdown.
+    const website_categories  = [...new Set(data.map(r => r.website_category).filter(Boolean))].sort();
+
+    // { "Solar Panels": ["Mono", "Poly"], "Inverters": ["String", "Hybrid"], ... }
+    const subcategoriesByCategory = {};
+    for (const r of data) {
+      if (!r.category || !r.subcategory) continue;
+      if (!subcategoriesByCategory[r.category]) subcategoriesByCategory[r.category] = new Set();
+      subcategoriesByCategory[r.category].add(r.subcategory);
+    }
+    for (const k of Object.keys(subcategoriesByCategory)) {
+      subcategoriesByCategory[k] = [...subcategoriesByCategory[k]].sort();
+    }
+
+    res.json({ categories, brands, stock_statuses: statuses, website_categories, subcategoriesByCategory });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

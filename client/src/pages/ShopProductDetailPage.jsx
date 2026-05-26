@@ -67,8 +67,13 @@ export default function ShopProductDetailPage() {
 
       <section className="pt-24 md:pt-28 pb-12 px-6 md:px-10 bg-gradient-to-br from-amber-50 via-white to-emerald-50">
         <div className="max-w-6xl mx-auto">
-          <Link to="/shop" className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-semibold mb-4 hover:text-amber-700">
-            <ArrowLeft size={11} /> Back to shop
+          <Link
+            to="/shop"
+            title="Return to the Trade Shop product list"
+            className="inline-flex items-center gap-2 mb-6 px-4 py-2 rounded-lg bg-white border-2 border-amber-300 text-amber-700 font-bold text-sm shadow-sm hover:bg-amber-50 hover:border-amber-400 hover:shadow transition"
+          >
+            <ArrowLeft size={16} />
+            Back to Trade Shop
           </Link>
 
           <div className="grid md:grid-cols-2 gap-8">
