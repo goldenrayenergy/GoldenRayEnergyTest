@@ -13,3 +13,6 @@ mockups/
 
 # Tesseract OCR language data — large binary, fetched on-demand when OCR_ENABLED=true
 server/eng.traineddata
+
+# QR-code generator output — regenerable from server/scripts/generate-qr-files.js
+qr-output/
