@@ -4,6 +4,8 @@
   "outputDirectory": "client/dist",
   "framework": null,
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/qr/:slug",      "destination": "https://goldenray-api.onrender.com/qr/:slug" },
+    { "source": "/qr/:slug/:rest*", "destination": "https://goldenray-api.onrender.com/qr/:slug/:rest*" },
+    { "source": "/(.*)",          "destination": "/index.html" }
   ]
 }
