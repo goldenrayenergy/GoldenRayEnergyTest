@@ -30,6 +30,7 @@ import tradeRequestRoutes from './routes/tradeRequests.js';
 import billAnalysisRoutes from './routes/billAnalysis.js';
 import pmRoutes from './routes/pm/index.js';
 import publicProjectRoutes from './routes/public-projects.js';
+import qrRoutes from './routes/qr.js';
 
 dotenv.config({ path: '../.env' });
 
@@ -104,6 +105,7 @@ app.use('/api/trade-requests', tradeRequestRoutes);
 app.use('/api/bill-analysis', billAnalysisRoutes);
 app.use('/api/pm', pmRoutes);  // PM tool (Phase A) — parallel project model, no overlap with /api/projects
 app.use('/api/public', publicProjectRoutes);  // Customer-facing project viewer (B-1) — no auth, gated by unguessable share_token
+app.use('/qr', qrRoutes);                     // QR-code redirect endpoint (Phase D) — no auth, logs scan + 302 to destination with UTM params
 
 // ── Health Check ──
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));

@@ -117,6 +117,17 @@ router.post('/submit', async (req, res) => {
     if (calculation?.totalCost)            score += 10;
     const leadScore = Math.min(score, 100);
 
+    // ── 0. Pull UTM + QR-scan attribution from the form body ───────────────
+    // These are echoed by the /get-quote frontend from URL params set by the
+    // /qr/:slug redirect. Empty/undefined when the visitor came in directly
+    // (no QR scan, no campaign URL).
+    const utmSource   = form.utm_source   ? String(form.utm_source).slice(0, 50)   : null;
+    const utmMedium   = form.utm_medium   ? String(form.utm_medium).slice(0, 50)   : null;
+    const utmCampaign = form.utm_campaign ? String(form.utm_campaign).slice(0, 80) : null;
+    // qr_scan_id is a UUID; validate loosely to avoid SQL errors on garbage values.
+    const qrScanId = (form.qr_scan_id && /^[0-9a-f-]{36}$/i.test(form.qr_scan_id))
+      ? form.qr_scan_id : null;
+
     // ── 1. Save full form data to website_enquiries ──────────────────────────
     const { data: enquiry, error: enqError } = await supabaseAdmin
       .from('website_enquiries')
@@ -152,6 +163,10 @@ router.post('/submit', async (req, res) => {
         battery_kwh:            calculation?.batteryKwh    || null,
         lead_score: leadScore,
         status:     'new',
+        utm_source:   utmSource,
+        utm_medium:   utmMedium,
+        utm_campaign: utmCampaign,
+        qr_scan_id:   qrScanId,
       })
       .select('id')
       .single();
@@ -183,7 +198,9 @@ router.post('/submit', async (req, res) => {
         system_type:     contactSystemType,
         monthly_bill:    form.monthlyBill ? parseFloat(form.monthlyBill)       : null,
         stage:           'new',
-        source:          form.leadSource || 'website',
+        // If the lead came from a QR campaign, source = utm_source (e.g. "card"/"flyer"/"show");
+        // otherwise fall back to the form-supplied leadSource or generic "website".
+        source:          utmSource || form.leadSource || 'website',
         lead_source:        form.leadSource       || null,
         lead_source_other:  form.leadSourceOther  || null,
         referrer_name:      form.referrerName     || null,
@@ -197,10 +214,27 @@ router.post('/submit', async (req, res) => {
         lead_score:      leadScore,
         last_activity:   'Website enquiry submitted',
         notes,
+        utm_source:   utmSource,
+        utm_medium:   utmMedium,
+        utm_campaign: utmCampaign,
+        qr_scan_id:   qrScanId,
       })
       .select('id')
       .single();
     if (contactError) throw contactError;
+
+    // ── 2b. Back-link the scan event to the lead it generated ──────────────
+    // Best-effort — failure here doesn't block the lead flow.
+    if (qrScanId) {
+      try {
+        await supabaseAdmin
+          .from('qr_scans')
+          .update({ lead_enquiry_id: enquiry.id, lead_contact_id: contact.id })
+          .eq('id', qrScanId);
+      } catch (e) {
+        console.warn('qr_scans back-link failed (non-fatal):', e.message);
+      }
+    }
 
     // NOTE: We deliberately do NOT create a project here. Projects are
     // operational records for confirmed customers. Sales reps qualify the

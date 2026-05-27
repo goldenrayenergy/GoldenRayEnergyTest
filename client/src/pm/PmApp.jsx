@@ -7,6 +7,7 @@ import ProjectListPage from './pages/ProjectListPage';
 import ProjectNewPage from './pages/ProjectNewPage';
 import ProjectDetailPage from './pages/ProjectDetailPage';
 import AdminPage from './pages/AdminPage';
+import QrCodesPage from './pages/QrCodesPage';
 
 function PmProtected({ children }) {
   const { user, loading } = useAuth();
@@ -27,6 +28,7 @@ export default function PmApp() {
         <Route path="projects/new" element={<ProjectNewPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="admin" element={<AdminPage />} />
+        <Route path="admin/qr-codes" element={<QrCodesPage />} />
       </Route>
     </Routes>
   );

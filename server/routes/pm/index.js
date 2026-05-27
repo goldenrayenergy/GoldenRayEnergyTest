@@ -12,6 +12,7 @@ import ownerRoutes from './owner.js';
 import adminRoutes from './admin.js';
 import adminImportRoutes from './admin-import.js';
 import proposalRoutes from './proposals.js';
+import qrCodesRoutes from './qr-codes.js';
 
 const router = Router();
 
@@ -32,6 +33,9 @@ router.use('/admin', adminRoutes);
 // Admin data import — supplier setup workbook (writes suppliers/products/
 // compatibility/region_defaults/cost_defaults from a single xlsx upload).
 router.use('/admin', adminImportRoutes);
+
+// QR-code campaign management — list / create / patch + PNG/SVG downloads
+router.use('/admin/qr-codes', qrCodesRoutes);
 
 router.get('/health', (req, res) => res.json({ status: 'ok', tool: 'pm', phase: 'A.4' }));
 

@@ -32,6 +32,16 @@ export default function GetQuotePage() {
   const [searchParams] = useSearchParams();
   const prefilledPackage = searchParams.get('package');
 
+  // QR-campaign attribution — captured from URL params set by /qr/:slug redirect.
+  // Echoed back to the server on form-submit so the lead can be tied to its
+  // marketing source (van wrap, business card, trade show, flyer, etc.).
+  const utm = {
+    utm_source:   searchParams.get('utm_source')   || null,
+    utm_medium:   searchParams.get('utm_medium')   || null,
+    utm_campaign: searchParams.get('utm_campaign') || null,
+    qr_scan_id:   searchParams.get('qr_scan_id')   || null,
+  };
+
   const [step, setStep] = useState(1);
   const [customerType, setCustomerType] = useState('residential');   // Phase 7.1 segmentation
   const [intent, setIntent] = useState(null);                // 'bills' | 'estimate' | 'callback' | 'manual_table'
@@ -215,6 +225,14 @@ export default function GetQuotePage() {
                       // Wizard provenance — surface in CRM
                       wizardIntent:   intent,
                       analysisId:    analysisId,
+                      // QR-campaign attribution (Phase D) — passes through to
+                      // website_enquiries + contacts so we know which marketing
+                      // surface produced this lead. All null when visitor came
+                      // in directly without a QR scan.
+                      utm_source:   utm.utm_source,
+                      utm_medium:   utm.utm_medium,
+                      utm_campaign: utm.utm_campaign,
+                      qr_scan_id:   utm.qr_scan_id,
                       // Phase 7.2 — type-specific estimate fields ride along
                       // (server logs them in task description; column persistence
                       // is a separate schema change)

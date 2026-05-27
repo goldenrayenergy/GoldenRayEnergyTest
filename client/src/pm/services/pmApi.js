@@ -77,3 +77,27 @@ export const pmAdminAPI = {
     });
   },
 };
+
+// QR-code campaign management (Phase D)
+export const pmQrCodesAPI = {
+  list:    () => api.get('/pm/admin/qr-codes'),
+  create:  (data)       => api.post('/pm/admin/qr-codes', data),
+  update:  (id, patch)  => api.patch(`/pm/admin/qr-codes/${id}`, patch),
+
+  // Download QR as PNG or SVG. Uses axios (auth token attaches) + blob, then
+  // triggers a client-side download. baseUrl is what the QR will encode —
+  // omit to use the server's QR_BASE_URL env (or its own host as fallback).
+  download: async (slug, format = 'png', baseUrl = null) => {
+    const params = baseUrl ? { baseUrl } : {};
+    const r = await api.get(`/pm/admin/qr-codes/${slug}/${format}`, { params, responseType: 'blob' });
+    const blob = new Blob([r.data], { type: format === 'png' ? 'image/png' : 'image/svg+xml' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `goldenray-qr-${slug}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
+};
