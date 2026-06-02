@@ -41,8 +41,17 @@ export default function GetQuotePage() {
     utm_campaign: searchParams.get('utm_campaign') || null,
     qr_scan_id:   searchParams.get('qr_scan_id')   || null,
   };
+  // QR visitors get a "Step 0" upfront capture before the wizard, so we have a
+  // contactable lead even if they bail mid-wizard. Detect via UTM presence.
+  const isQrVisitor = !!(utm.utm_source || utm.qr_scan_id);
 
-  const [step, setStep] = useState(1);
+  // Holds the enquiry/contact ids returned by /quote/submit-partial — these
+  // get echoed back on the final wizard submit so the backend UPDATEs the
+  // same row instead of creating a duplicate.
+  const [qrCapture, setQrCapture] = useState({ enquiry_id: null, contact_id: null, done: false });
+
+  // QR visitors start at step 0 (the upfront capture); everyone else starts at step 1.
+  const [step, setStep] = useState(isQrVisitor ? 0 : 1);
   const [customerType, setCustomerType] = useState('residential');   // Phase 7.1 segmentation
   const [intent, setIntent] = useState(null);                // 'bills' | 'estimate' | 'callback' | 'manual_table'
 
@@ -106,6 +115,7 @@ export default function GetQuotePage() {
   const skipProjection = intent === 'callback' || customerType !== 'residential';
 
   function next() {
+    if (step === 0) return setStep(1);
     if (step === 1) return setStep(2);
     if (step === 2) return setStep(skipProjection ? 4 : 3);
     if (step === 3) return setStep(4);
@@ -116,6 +126,7 @@ export default function GetQuotePage() {
     if (step === 4) return setStep(skipProjection ? 2 : 3);
     if (step === 3) return setStep(2);
     if (step === 2) return setStep(1);
+    if (step === 1 && isQrVisitor) return setStep(0);
   }
 
   function pickIntent(newIntent) {
@@ -164,9 +175,29 @@ export default function GetQuotePage() {
           )}
 
           {/* Progress bar */}
-          <ProgressBar step={step} />
+          <ProgressBar step={step} isQrVisitor={isQrVisitor} />
 
           {/* Step content */}
+          {step === 0 && (
+            <Step0QrCapture
+              utm={utm}
+              onCaptured={(ids) => {
+                setQrCapture({ ...ids, done: true });
+                // Pre-fill the wizard's contact form so the visitor doesn't retype
+                setContact(c => ({
+                  ...c,
+                  firstName:              ids.firstName              || c.firstName,
+                  lastName:               ids.lastName               || c.lastName,
+                  email:                  ids.email                  || c.email,
+                  phone:                  ids.phone                  || c.phone,
+                  address:                ids.address                || c.address,
+                  installation_timeframe: ids.installationTimeframe  || c.installation_timeframe,
+                }));
+                setEstimate(e => ({ ...e, monthly_spend: ids.monthlyBill || e.monthly_spend }));
+                setStep(1);
+              }}
+            />
+          )}
           {step === 1 && <Step1IntentPicker customerType={customerType} setCustomerType={setCustomerType} onPick={pickIntent} />}
           {step === 2 && (
             <Step2Container
@@ -225,6 +256,10 @@ export default function GetQuotePage() {
                       // Wizard provenance — surface in CRM
                       wizardIntent:   intent,
                       analysisId:    analysisId,
+                      // If this visitor came in via QR Step 0, send the partial
+                      // row's ids back so the backend UPDATEs (not duplicates).
+                      enquiry_id:   qrCapture.enquiry_id,
+                      contact_id:   qrCapture.contact_id,
                       // QR-campaign attribution (Phase D) — passes through to
                       // website_enquiries + contacts so we know which marketing
                       // surface produced this lead. All null when visitor came
@@ -287,26 +322,155 @@ function subtitleForIntent(intent, customerType) {
 // ════════════════════════════════════════════════════════════════════════════
 // Progress bar — top of every step
 // ════════════════════════════════════════════════════════════════════════════
-function ProgressBar({ step }) {
-  const labels = ['How can we help?', 'Your home', 'Your savings', 'Contact details'];
+function ProgressBar({ step, isQrVisitor }) {
+  // QR visitors see an extra "Quick contact" step at the start (Step 0)
+  const labels = isQrVisitor
+    ? ['Quick contact', 'How can we help?', 'Your home', 'Your savings', 'Contact details']
+    : ['How can we help?', 'Your home', 'Your savings', 'Contact details'];
+  const totalSteps = labels.length;
+  // Step value 0..4 maps to index in QR mode; 1..4 maps to index-1 in normal mode
+  const currentIdx = isQrVisitor ? step : step - 1;
   return (
     <div className="mb-6">
       <div className="flex justify-between mb-2 text-[10px] font-bold tracking-widest uppercase">
         {labels.map((label, i) => {
-          const stepNum = i + 1;
-          const cls = stepNum === step  ? 'text-amber-700 dark:text-amber-300'
-                    : stepNum < step    ? 'text-emerald-700 dark:text-emerald-400'
+          const cls = i === currentIdx  ? 'text-amber-700 dark:text-amber-300'
+                    : i <  currentIdx   ? 'text-emerald-700 dark:text-emerald-400'
                                         : 'text-gray-400 dark:text-gray-600';
           return (
             <span key={i} className={cls}>
-              <span className="hidden sm:inline">{stepNum} · </span>{label}
+              <span className="hidden sm:inline">{i + 1} · </span>{label}
             </span>
           );
         })}
       </div>
       <div className="h-1.5 rounded-full bg-gray-200 dark:bg-white/10 overflow-hidden">
         <div className="h-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all duration-300"
-             style={{ width: `${Math.min(100, (step / 4) * 100)}%` }} />
+             style={{ width: `${Math.min(100, ((currentIdx + 1) / totalSteps) * 100)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// STEP 0 — QR-visitor upfront contact capture
+//
+// Shown ONLY for visitors who arrived via a QR scan (utm_source / qr_scan_id
+// present in URL). Captures the minimum we need to follow up by phone/email
+// even if they bail mid-wizard. Submits to /api/quote/submit-partial which
+// creates a website_enquiries row with status='partial'. The wizard's final
+// submit later promotes that same row to status='new' via the ids returned.
+// ════════════════════════════════════════════════════════════════════════════
+function Step0QrCapture({ utm, onCaptured }) {
+  const [v, setV] = useState({
+    firstName: '', lastName: '', email: '', phone: '', address: '', monthlyBill: '',
+    installationTimeframe: '',
+  });
+  const [state, setState] = useState({ loading: false, error: '' });
+  const set = (k, val) => setV(s => ({ ...s, [k]: val }));
+
+  const ready = v.firstName && v.lastName && v.email && v.phone && v.address && v.monthlyBill && v.installationTimeframe;
+
+  const TIMEFRAME_OPTIONS = [
+    { value: 'within_1_month',  label: 'Within 1 month',  sub: 'ASAP'    },
+    { value: '1_to_3_months',   label: '1–3 months',      sub: 'Soon'    },
+    { value: '3_to_6_months',   label: '3–6 months',      sub: 'Planning'},
+    { value: 'exploring',       label: 'Just exploring',  sub: 'No rush' },
+  ];
+
+  const submit = async () => {
+    if (!ready || state.loading) return;
+    setState({ loading: true, error: '' });
+    try {
+      const { data } = await publicApi.post('/quote/submit-partial', {
+        form: {
+          ...v,
+          monthlyBill: parseFloat(v.monthlyBill),
+          utm_source:   utm.utm_source,
+          utm_medium:   utm.utm_medium,
+          utm_campaign: utm.utm_campaign,
+          qr_scan_id:   utm.qr_scan_id,
+        },
+      });
+      // Hand the ids + entered values back to the parent so the wizard can
+      // pre-fill Step 4 and the final submit can UPDATE this same row.
+      onCaptured({
+        enquiry_id:            data.enquiry_id,
+        contact_id:            data.contact_id,
+        firstName:             v.firstName,
+        lastName:              v.lastName,
+        email:                 v.email,
+        phone:                 v.phone,
+        address:               v.address,
+        monthlyBill:           parseFloat(v.monthlyBill),
+        installationTimeframe: v.installationTimeframe,
+      });
+    } catch (e) {
+      setState({ loading: false, error: e.response?.data?.error || 'Something went wrong — please try again.' });
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
+      <div className="text-center mb-6">
+        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">QUICK CONTACT · 30 SECONDS</div>
+        <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">Get your tailored solar proposal</h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Thanks for scanning! Give us your details so we can follow up — then we'll personalise your quote.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="First name *" value={v.firstName} onChange={x => set('firstName', x)} placeholder="John" />
+          <Field label="Last name *"  value={v.lastName}  onChange={x => set('lastName', x)}  placeholder="Smith" />
+        </div>
+        <Field label="Email *" type="email" value={v.email} onChange={x => set('email', x)} placeholder="john@example.com" />
+        <Field label="Phone *" type="tel"   value={v.phone} onChange={x => set('phone', x)} placeholder="+64 21 …" />
+        <Field label="Address *" value={v.address} onChange={x => set('address', x)} placeholder="123 Example St, Auckland" />
+        <Field label="Approx. monthly power bill (NZD) *" type="number" value={v.monthlyBill} onChange={x => set('monthlyBill', x)} placeholder="250" />
+
+        <div>
+          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 block">
+            When do you want this installed? *
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {TIMEFRAME_OPTIONS.map(opt => {
+              const active = v.installationTimeframe === opt.value;
+              return (
+                <button key={opt.value} type="button" onClick={() => set('installationTimeframe', opt.value)}
+                  className={`px-3 py-2.5 rounded-xl border-2 text-left transition
+                    ${active
+                      ? 'border-amber-400 bg-amber-50 dark:bg-amber-500/10 ring-1 ring-amber-300'
+                      : 'border-gray-200 dark:border-white/10 bg-white dark:bg-brand-dark-1 hover:border-amber-300'}`}>
+                  <div className={`text-sm font-bold ${active ? 'text-amber-700 dark:text-amber-200' : 'dark:text-gray-200'}`}>{opt.label}</div>
+                  <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{opt.sub}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {state.error && (
+          <div className="p-3 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+            <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+            <span>{state.error}</span>
+          </div>
+        )}
+
+        <button onClick={submit} disabled={!ready || state.loading}
+          className={`w-full px-5 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition
+            ${ready && !state.loading
+              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg hover:shadow-xl'
+              : 'bg-gray-200 dark:bg-white/10 text-gray-400 cursor-not-allowed'}`}>
+          {state.loading
+            ? (<><Loader2 size={14} className="animate-spin" /> Saving…</>)
+            : (<>Continue to personalised quote <ArrowRight size={14} /></>)}
+        </button>
+
+        <p className="text-[10px] text-gray-400 dark:text-gray-500 text-center">
+          We'll never share your details. You can stop after this step if you prefer — we'll still follow up.
+        </p>
       </div>
     </div>
   );

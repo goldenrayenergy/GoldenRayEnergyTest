@@ -76,12 +76,24 @@ const deriveSystemType = (form) => {
   return form.batteryOption === 'with-battery' ? 'hybrid' : 'on-grid';
 };
 
-// Public endpoint — saves to website_enquiries + contacts (CRM) + activities (dashboard feed)
+// Public endpoint — saves to website_enquiries + contacts (CRM) + activities (dashboard feed).
+//
+// Two modes:
+//   (1) New lead  — no enquiry_id in form → INSERT path (original behaviour).
+//   (2) Wizard completion of a QR partial — form.enquiry_id + form.contact_id
+//       present → UPDATE the existing 'partial' row to 'new' and enrich with
+//       full wizard data, then create the follow-up cadence. Skips the team
+//       notification email (it was already sent when the partial was captured).
 router.post('/submit', async (req, res) => {
   try {
     const { form } = req.body;
     if (!form) return res.status(400).json({ error: 'Form data is required.' });
     if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    // UPDATE path is taken when the wizard was preceded by /submit-partial
+    // (QR visitor) and we're now enriching the existing row rather than
+    // creating a duplicate.
+    const isUpdate = !!(form.enquiry_id && form.contact_id);
 
     // Centralised validation (migration 020) — friendly messages BEFORE the
     // DB rejects with a CHECK constraint violation. Covers email/phone format,
@@ -129,48 +141,65 @@ router.post('/submit', async (req, res) => {
       ? form.qr_scan_id : null;
 
     // ── 1. Save full form data to website_enquiries ──────────────────────────
-    const { data: enquiry, error: enqError } = await supabaseAdmin
-      .from('website_enquiries')
-      .insert({
-        first_name:             form.firstName             || null,
-        last_name:              form.lastName              || null,
-        email:                  form.email                 || null,
-        phone:                  form.phone                 || null,
-        address:                form.address               || null,
-        owns_home:              form.ownsHome              || null,
-        floors:                 form.floors ? parseInt(form.floors) : null,
-        roof_type:              form.roofType              || null,
-        installation_type:      form.installationType      || null,
-        battery_option:         form.batteryOption         || null,
-        lead_source:            form.leadSource            || null,
-        lead_source_other:      form.leadSourceOther       || null,
-        referrer_name:          form.referrerName          || null,
-        referrer_phone:         form.referrerPhone         || null,
-        street:                 form.addressStreet         || null,
-        suburb:                 form.addressSuburb         || null,
-        city:                   form.addressCity           || null,
-        postcode:               form.addressPostcode       || null,
-        call_to_discuss:        form.callToDiscuss         || null,
-        installation_timeframe: form.installationTimeframe || null,
-        monthly_bill:           form.monthlyBill ? parseFloat(form.monthlyBill) : null,
-        system_size_kw:         calculation?.systemSize    || null,
-        total_cost:             calculation?.totalCost     || null,
-        monthly_savings:        calculation?.monthlySavings || null,
-        annual_savings:         calculation?.annualSavings || null,
-        payback_years:          calculation?.paybackYears  || null,
-        roi_percent:            calculation?.roi           || null,
-        panels:                 calculation?.panels        || null,
-        battery_kwh:            calculation?.batteryKwh    || null,
-        lead_score: leadScore,
-        status:     'new',
-        utm_source:   utmSource,
-        utm_medium:   utmMedium,
-        utm_campaign: utmCampaign,
-        qr_scan_id:   qrScanId,
-      })
-      .select('id')
-      .single();
-    if (enqError) throw enqError;
+    // INSERT for fresh leads; UPDATE when this completes a previously-captured
+    // QR partial (promotes status 'partial' → 'new', enriches with full data).
+    const enquiryFields = {
+      first_name:             form.firstName             || null,
+      last_name:              form.lastName              || null,
+      email:                  form.email                 || null,
+      phone:                  form.phone                 || null,
+      address:                form.address               || null,
+      owns_home:              form.ownsHome              || null,
+      floors:                 form.floors ? parseInt(form.floors) : null,
+      roof_type:              form.roofType              || null,
+      installation_type:      form.installationType      || null,
+      battery_option:         form.batteryOption         || null,
+      lead_source:            form.leadSource            || null,
+      lead_source_other:      form.leadSourceOther       || null,
+      referrer_name:          form.referrerName          || null,
+      referrer_phone:         form.referrerPhone         || null,
+      street:                 form.addressStreet         || null,
+      suburb:                 form.addressSuburb         || null,
+      city:                   form.addressCity           || null,
+      postcode:               form.addressPostcode       || null,
+      call_to_discuss:        form.callToDiscuss         || null,
+      installation_timeframe: form.installationTimeframe || null,
+      monthly_bill:           form.monthlyBill ? parseFloat(form.monthlyBill) : null,
+      system_size_kw:         calculation?.systemSize    || null,
+      total_cost:             calculation?.totalCost     || null,
+      monthly_savings:        calculation?.monthlySavings || null,
+      annual_savings:         calculation?.annualSavings || null,
+      payback_years:          calculation?.paybackYears  || null,
+      roi_percent:            calculation?.roi           || null,
+      panels:                 calculation?.panels        || null,
+      battery_kwh:            calculation?.batteryKwh    || null,
+      lead_score: leadScore,
+      status:     'new',
+      utm_source:   utmSource,
+      utm_medium:   utmMedium,
+      utm_campaign: utmCampaign,
+      qr_scan_id:   qrScanId,
+    };
+
+    let enquiry;
+    if (isUpdate) {
+      const { data, error: updError } = await supabaseAdmin
+        .from('website_enquiries')
+        .update(enquiryFields)
+        .eq('id', form.enquiry_id)
+        .select('id')
+        .single();
+      if (updError) throw updError;
+      enquiry = data;
+    } else {
+      const { data, error: enqError } = await supabaseAdmin
+        .from('website_enquiries')
+        .insert(enquiryFields)
+        .select('id')
+        .single();
+      if (enqError) throw enqError;
+      enquiry = data;
+    }
 
     // ── 2. Create CRM contact so lead appears in employee portal ─────────────
     const name = [form.firstName, form.lastName].filter(Boolean).join(' ').trim() || 'Website Enquiry';
@@ -187,41 +216,56 @@ router.post('/submit', async (req, res) => {
       form.installationTimeframe && `Timeframe: ${form.installationTimeframe}`,
     ].filter(Boolean).join(' | ') || null;
 
-    const { data: contact, error: contactError } = await supabaseAdmin
-      .from('contacts')
-      .insert({
-        name,
-        email:           form.email                                            || null,
-        phone:           form.phone                                            || null,
-        location:        form.address                                          || null,
-        type:            form.installationType === 'commercial' ? 'commercial' : 'residential',
-        system_type:     contactSystemType,
-        monthly_bill:    form.monthlyBill ? parseFloat(form.monthlyBill)       : null,
-        stage:           'new',
-        // If the lead came from a QR campaign, source = utm_source (e.g. "card"/"flyer"/"show");
-        // otherwise fall back to the form-supplied leadSource or generic "website".
-        source:          utmSource || form.leadSource || 'website',
-        lead_source:        form.leadSource       || null,
-        lead_source_other:  form.leadSourceOther  || null,
-        referrer_name:      form.referrerName     || null,
-        referrer_phone:     form.referrerPhone    || null,
-        street:             form.addressStreet    || null,
-        suburb:             form.addressSuburb    || null,
-        city:               form.addressCity      || null,
-        postcode:           form.addressPostcode  || null,
-        lifecycle:       'subscriber',
-        estimated_value: calculation?.totalCost                                || null,
-        lead_score:      leadScore,
-        last_activity:   'Website enquiry submitted',
-        notes,
-        utm_source:   utmSource,
-        utm_medium:   utmMedium,
-        utm_campaign: utmCampaign,
-        qr_scan_id:   qrScanId,
-      })
-      .select('id')
-      .single();
-    if (contactError) throw contactError;
+    const contactFields = {
+      name,
+      email:           form.email                                            || null,
+      phone:           form.phone                                            || null,
+      location:        form.address                                          || null,
+      type:            form.installationType === 'commercial' ? 'commercial' : 'residential',
+      system_type:     contactSystemType,
+      monthly_bill:    form.monthlyBill ? parseFloat(form.monthlyBill)       : null,
+      stage:           'new',
+      // If the lead came from a QR campaign, source = utm_source (e.g. "card"/"flyer"/"show");
+      // otherwise fall back to the form-supplied leadSource or generic "website".
+      source:          utmSource || form.leadSource || 'website',
+      lead_source:        form.leadSource       || null,
+      lead_source_other:  form.leadSourceOther  || null,
+      referrer_name:      form.referrerName     || null,
+      referrer_phone:     form.referrerPhone    || null,
+      street:             form.addressStreet    || null,
+      suburb:             form.addressSuburb    || null,
+      city:               form.addressCity      || null,
+      postcode:           form.addressPostcode  || null,
+      lifecycle:       'subscriber',
+      estimated_value: calculation?.totalCost                                || null,
+      lead_score:      leadScore,
+      last_activity:   isUpdate ? 'Wizard completed (QR partial promoted)' : 'Website enquiry submitted',
+      notes,
+      utm_source:   utmSource,
+      utm_medium:   utmMedium,
+      utm_campaign: utmCampaign,
+      qr_scan_id:   qrScanId,
+    };
+
+    let contact;
+    if (isUpdate) {
+      const { data, error: cUpdError } = await supabaseAdmin
+        .from('contacts')
+        .update(contactFields)
+        .eq('id', form.contact_id)
+        .select('id')
+        .single();
+      if (cUpdError) throw cUpdError;
+      contact = data;
+    } else {
+      const { data, error: contactError } = await supabaseAdmin
+        .from('contacts')
+        .insert(contactFields)
+        .select('id')
+        .single();
+      if (contactError) throw contactError;
+      contact = data;
+    }
 
     // ── 2b. Back-link the scan event to the lead it generated ──────────────
     // Best-effort — failure here doesn't block the lead flow.
@@ -297,8 +341,10 @@ router.post('/submit', async (req, res) => {
 
     // ── 5. Notify the team + send customer acknowledgment in parallel.
     //      Both non-fatal — we never block the API response on email problems.
+    //      Skip the team email on UPDATE path (it was sent at /submit-partial).
     Promise.all([
       (async () => {
+        if (isUpdate) return;   // team already notified during partial capture
         try {
           const { data: admins } = await supabaseAdmin
             .from('users')
@@ -319,6 +365,160 @@ router.post('/submit', async (req, res) => {
     res.status(201).json({ success: true, id: enquiry.id, contact_id: contact.id });
   } catch (e) {
     console.error('Submit enquiry error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── QR partial capture ────────────────────────────────────────────────────
+// Public endpoint hit by Step 0 of the wizard when a visitor arrives via a
+// QR scan (utm_source / qr_scan_id present in URL). Captures the minimum
+// contact details we need to follow up by phone/email even if the visitor
+// bails before completing the full wizard.
+//
+// Creates rows with status='partial' so the portal can distinguish them
+// from completed enquiries; the wizard's final /submit then PATCHes the
+// same rows to status='new' via the enquiry_id / contact_id we return here.
+//
+// Skips the auto follow-up cadence (created on full submit) but DOES create
+// one urgent task + a 'partial capture' activity entry, and notifies admins.
+router.post('/submit-partial', async (req, res) => {
+  try {
+    const { form } = req.body;
+    if (!form) return res.status(400).json({ error: 'Form data is required.' });
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    // Required fields for QR partial capture (per user spec)
+    const required = ['firstName', 'lastName', 'email', 'phone', 'address', 'monthlyBill', 'installationTimeframe'];
+    const missing  = required.filter(k => !form[k]);
+    if (missing.length) {
+      return res.status(400).json({ error: `Required fields missing: ${missing.join(', ')}` });
+    }
+
+    // QR-campaign attribution (same logic as full submit)
+    const utmSource   = form.utm_source   ? String(form.utm_source).slice(0, 50)   : null;
+    const utmMedium   = form.utm_medium   ? String(form.utm_medium).slice(0, 50)   : null;
+    const utmCampaign = form.utm_campaign ? String(form.utm_campaign).slice(0, 80) : null;
+    const qrScanId = (form.qr_scan_id && /^[0-9a-f-]{36}$/i.test(form.qr_scan_id))
+      ? form.qr_scan_id : null;
+
+    // Modest lead score — they only gave us minimum info; full submit will rescore.
+    const partialScore = 50;
+
+    // ── 1. Insert partial website_enquiries row ──
+    // lead_source is NULL — its CHECK constraint (migration 008) only allows a
+    // small enum of self-reported sources. QR attribution is carried by
+    // utm_source / utm_medium / utm_campaign / qr_scan_id instead.
+    const { data: enquiry, error: enqError } = await supabaseAdmin
+      .from('website_enquiries')
+      .insert({
+        first_name:             form.firstName,
+        last_name:              form.lastName,
+        email:                  form.email,
+        phone:                  form.phone,
+        address:                form.address,
+        monthly_bill:           parseFloat(form.monthlyBill),
+        installation_timeframe: form.installationTimeframe,
+        lead_score:             partialScore,
+        status:                 'partial',
+        utm_source:             utmSource,
+        utm_medium:             utmMedium,
+        utm_campaign:           utmCampaign,
+        qr_scan_id:             qrScanId,
+      })
+      .select('id')
+      .single();
+    if (enqError) throw enqError;
+
+    // ── 2. Insert partial contact (CRM mirror) ──
+    const name = `${form.firstName} ${form.lastName}`.trim();
+    const { data: contact, error: contactError } = await supabaseAdmin
+      .from('contacts')
+      .insert({
+        name,
+        email:        form.email,
+        phone:        form.phone,
+        location:     form.address,
+        monthly_bill: parseFloat(form.monthlyBill),
+        type:         'residential',
+        system_type:  'on-grid',
+        stage:        'new',
+        source:       utmSource || 'qr_scan',
+        lifecycle:    'lead',
+        lead_score:   partialScore,
+        last_activity: 'QR scan — partial capture (wizard pending)',
+        utm_source:   utmSource,
+        utm_medium:   utmMedium,
+        utm_campaign: utmCampaign,
+        qr_scan_id:   qrScanId,
+      })
+      .select('id')
+      .single();
+    if (contactError) throw contactError;
+
+    // ── 3. Back-link the scan event to the lead ──
+    if (qrScanId) {
+      try {
+        await supabaseAdmin
+          .from('qr_scans')
+          .update({ lead_enquiry_id: enquiry.id, lead_contact_id: contact.id })
+          .eq('id', qrScanId);
+      } catch (e) { console.warn('qr_scans back-link failed (non-fatal):', e.message); }
+    }
+
+    // ── 4. One urgent task so sales doesn't wait for wizard completion ──
+    try {
+      await supabaseAdmin.from('tasks').insert({
+        title:       `QR partial lead — call within 1 hour — ${name}`,
+        description: `[Sales] Hot QR lead captured from ${utmSource || 'QR scan'}. Wizard not yet completed — call to qualify. Bill ~$${parseFloat(form.monthlyBill)}/mo.`,
+        contact_id:  contact.id,
+        due_date:    new Date().toISOString().slice(0, 10),
+        priority:    'high',
+        status:      'todo',
+        task_type:   'call',
+        assignee_id: null,
+      });
+    } catch (e) { console.warn('partial-capture task creation failed (non-fatal):', e.message); }
+
+    // ── 5. Activity feed entry ──
+    try {
+      await supabaseAdmin.from('activities').insert({
+        type:        'system',
+        description: `QR partial capture: ${name} — $${parseFloat(form.monthlyBill)}/mo bill — wizard pending`,
+        contact_id:  contact.id,
+        metadata: {
+          enquiry_id:   enquiry.id,
+          source:       'qr_partial',
+          utm_source:   utmSource,
+          utm_campaign: utmCampaign,
+        },
+      });
+    } catch (e) { console.warn('partial-capture activity failed (non-fatal):', e.message); }
+
+    // ── 6. Notify team (non-blocking) ──
+    (async () => {
+      try {
+        const { data: admins } = await supabaseAdmin
+          .from('users')
+          .select('email')
+          .eq('role', 'admin')
+          .eq('is_active', true);
+        const recipients = (admins || []).map(u => u.email).filter(Boolean);
+        await sendTeamNewLeadEmail({
+          form: { ...form, _partial: true },
+          calculation: null,
+          leadScore: partialScore,
+          recipients,
+        });
+      } catch (e) { console.error('Partial team email failed (non-fatal):', e.message); }
+    })();
+
+    return res.status(201).json({
+      success:     true,
+      enquiry_id:  enquiry.id,
+      contact_id:  contact.id,
+    });
+  } catch (e) {
+    console.error('Submit partial enquiry error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
