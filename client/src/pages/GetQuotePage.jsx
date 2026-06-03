@@ -1,15 +1,17 @@
 // /get-quote — Option 6 Buyer path wizard.
 //
-// Phase 6.2 (this file): Steps 1 (intent picker) + 2 (branches per intent)
-//   fully functional. Step 3 (projection) and Step 4 (contact form) are
-//   functional placeholders — they show the layout + Next buttons but
-//   don't yet call the scenario engine or submit to the backend.
-//   Phase 6.3 wires those in.
+// Step map (post-Pattern B unification — same flow for QR + direct visitors):
+//   1  Intent picker    — bills / estimate / callback / manual
+//   2  Branch           — upload bills / answer questions / type rows / "callback please"
+//   3  Capture          — name + email + phone (required, soft framing) — creates partial enquiry
+//   4  Projection       — runs bill analysis, shows 25-yr savings or review_required screen
+//                          (skipped for callback intent and non-residential)
+//   5  Final details    — address + property + (callback only) OTP — promotes partial → 'new'
+//   6  Confirmation
 //
-// The wizard state lives entirely in this component. When the customer
-// reaches Step 4 and submits, all three branches converge on a single
-// canonical submission (handled in Phase 6.3) — same lead in CRM regardless
-// of which intent they started with.
+// Partial capture at Step 3 means every visitor who fills the form becomes a
+// reachable lead even if they bail at projection — the 24h bail-out job
+// follows them up. Step 5 enriches the same row (UPDATE) rather than insert.
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -35,23 +37,20 @@ export default function GetQuotePage() {
   // QR-campaign attribution — captured from URL params set by /qr/:slug redirect.
   // Echoed back to the server on form-submit so the lead can be tied to its
   // marketing source (van wrap, business card, trade show, flyer, etc.).
+  // Pattern B: no separate Step 0 for QR — same flow as direct visitors; UTM
+  // just rides along to /submit-partial + /submit so attribution is preserved.
   const utm = {
     utm_source:   searchParams.get('utm_source')   || null,
     utm_medium:   searchParams.get('utm_medium')   || null,
     utm_campaign: searchParams.get('utm_campaign') || null,
     qr_scan_id:   searchParams.get('qr_scan_id')   || null,
   };
-  // QR visitors get a "Step 0" upfront capture before the wizard, so we have a
-  // contactable lead even if they bail mid-wizard. Detect via UTM presence.
-  const isQrVisitor = !!(utm.utm_source || utm.qr_scan_id);
 
-  // Holds the enquiry/contact ids returned by /quote/submit-partial — these
-  // get echoed back on the final wizard submit so the backend UPDATEs the
-  // same row instead of creating a duplicate.
-  const [qrCapture, setQrCapture] = useState({ enquiry_id: null, contact_id: null, done: false });
+  // Holds the enquiry/contact ids returned by /quote/submit-partial at Step 3.
+  // Echoed back on the final wizard submit so the backend UPDATEs that row.
+  const [partial, setPartial] = useState({ enquiry_id: null, contact_id: null, done: false });
 
-  // QR visitors start at step 0 (the upfront capture); everyone else starts at step 1.
-  const [step, setStep] = useState(isQrVisitor ? 0 : 1);
+  const [step, setStep] = useState(1);
   const [customerType, setCustomerType] = useState('residential');   // Phase 7.1 segmentation
   const [intent, setIntent] = useState(null);                // 'bills' | 'estimate' | 'callback' | 'manual_table'
 
@@ -107,7 +106,7 @@ export default function GetQuotePage() {
   const [submitState, setSubmitState] = useState({ loading: false, error: '', done: false });
 
   // ── Navigation ──
-  // Step 3 (projection) is only shown for RESIDENTIAL customers on bills or
+  // Step 4 (projection) is only shown for RESIDENTIAL customers on bills or
   // estimate intent. Non-residential customers and callback intent skip it.
   // Reasoning: the 25-yr scenario engine is residential-calibrated; running
   // it for commercial / off-grid / PPA produces misleading numbers, and
@@ -115,18 +114,18 @@ export default function GetQuotePage() {
   const skipProjection = intent === 'callback' || customerType !== 'residential';
 
   function next() {
-    if (step === 0) return setStep(1);
     if (step === 1) return setStep(2);
-    if (step === 2) return setStep(skipProjection ? 4 : 3);
-    if (step === 3) return setStep(4);
+    if (step === 2) return setStep(3);                            // → capture
+    if (step === 3) return setStep(skipProjection ? 5 : 4);       // capture → projection (or final)
     if (step === 4) return setStep(5);
+    if (step === 5) return setStep(6);
   }
 
   function back() {
-    if (step === 4) return setStep(skipProjection ? 2 : 3);
+    if (step === 5) return setStep(skipProjection ? 3 : 4);
+    if (step === 4) return setStep(3);
     if (step === 3) return setStep(2);
     if (step === 2) return setStep(1);
-    if (step === 1 && isQrVisitor) return setStep(0);
   }
 
   function pickIntent(newIntent) {
@@ -181,29 +180,9 @@ export default function GetQuotePage() {
           )}
 
           {/* Progress bar */}
-          <ProgressBar step={step} isQrVisitor={isQrVisitor} />
+          <ProgressBar step={step} skipProjection={skipProjection} />
 
           {/* Step content */}
-          {step === 0 && (
-            <Step0QrCapture
-              utm={utm}
-              onCaptured={(ids) => {
-                setQrCapture({ ...ids, done: true });
-                // Pre-fill the wizard's contact form so the visitor doesn't retype
-                setContact(c => ({
-                  ...c,
-                  firstName:              ids.firstName              || c.firstName,
-                  lastName:               ids.lastName               || c.lastName,
-                  email:                  ids.email                  || c.email,
-                  phone:                  ids.phone                  || c.phone,
-                  address:                ids.address                || c.address,
-                  installation_timeframe: ids.installationTimeframe  || c.installation_timeframe,
-                }));
-                setEstimate(e => ({ ...e, monthly_spend: ids.monthlyBill || e.monthly_spend }));
-                setStep(1);
-              }}
-            />
-          )}
           {step === 1 && <Step1IntentPicker customerType={customerType} setCustomerType={setCustomerType} onPick={pickIntent} />}
           {step === 2 && (
             <Step2Container
@@ -217,11 +196,29 @@ export default function GetQuotePage() {
             </Step2Container>
           )}
           {step === 3 && (
+            <Step3Capture
+              intent={intent}
+              customerType={customerType}
+              estimate={estimate}
+              utm={utm}
+              contact={contact}
+              setContact={setContact}
+              partial={partial}
+              onBack={back}
+              skipProjection={skipProjection}
+              onCaptured={(ids) => {
+                setPartial({ enquiry_id: ids.enquiry_id, contact_id: ids.contact_id, done: true });
+                setStep(skipProjection ? 5 : 4);
+              }}
+            />
+          )}
+          {step === 4 && (
             <Step3Projection
               intent={intent}
               files={files}
               estimate={estimate}
               manualRows={manualRows}
+              partial={partial}
               onAnalysisReady={(data) => { setAnalysisResult(data); setAnalysisId(data?.id || null); }}
               cachedResult={analysisResult}
               onBack={back}
@@ -229,7 +226,7 @@ export default function GetQuotePage() {
               onFallbackToManual={() => { setIntent('manual_table'); setStep(2); setAnalysisResult(null); }}
             />
           )}
-          {step === 4 && (
+          {step === 5 && (
             <Step4ContactForm
               intent={intent}
               customerType={customerType}
@@ -262,10 +259,10 @@ export default function GetQuotePage() {
                       // Wizard provenance — surface in CRM
                       wizardIntent:   intent,
                       analysisId:    analysisId,
-                      // If this visitor came in via QR Step 0, send the partial
-                      // row's ids back so the backend UPDATEs (not duplicates).
-                      enquiry_id:   qrCapture.enquiry_id,
-                      contact_id:   qrCapture.contact_id,
+                      // Step 3 captured the partial — ids tell backend to UPDATE
+                      // that row to 'new' status rather than insert a duplicate.
+                      enquiry_id:   partial.enquiry_id,
+                      contact_id:   partial.contact_id,
                       // QR-campaign attribution (Phase D) — passes through to
                       // website_enquiries + contacts so we know which marketing
                       // surface produced this lead. All null when visitor came
@@ -290,14 +287,14 @@ export default function GetQuotePage() {
                     },
                   });
                   setSubmitState({ loading: false, error: '', done: true });
-                  setStep(5);
+                  setStep(6);
                 } catch (e) {
                   setSubmitState({ loading: false, error: e.response?.data?.error || e.message, done: false });
                 }
               }}
             />
           )}
-          {step === 5 && <Step5Confirmation contact={contact} customerType={customerType} />}
+          {step === 6 && <Step5Confirmation contact={contact} customerType={customerType} />}
 
         </div>
       </main>
@@ -328,14 +325,24 @@ function subtitleForIntent(intent, customerType) {
 // ════════════════════════════════════════════════════════════════════════════
 // Progress bar — top of every step
 // ════════════════════════════════════════════════════════════════════════════
-function ProgressBar({ step, isQrVisitor }) {
-  // QR visitors see an extra "Quick contact" step at the start (Step 0)
-  const labels = isQrVisitor
-    ? ['Quick contact', 'How can we help?', 'Your home', 'Your savings', 'Contact details']
-    : ['How can we help?', 'Your home', 'Your savings', 'Contact details'];
+function ProgressBar({ step, skipProjection }) {
+  // Labels follow the actual flow:
+  //   1=intent  2=branch  3=capture  4=projection(opt)  5=final  6=confirm
+  // Step 6 (confirmation) is post-submit, never shown in the bar — we cap
+  // currentIdx at the last visible label.
+  const labels = skipProjection
+    ? ['How can we help?', 'Your home', 'Your details', 'Final details']
+    : ['How can we help?', 'Your home', 'Your details', 'Your savings', 'Final details'];
   const totalSteps = labels.length;
-  // Step value 0..4 maps to index in QR mode; 1..4 maps to index-1 in normal mode
-  const currentIdx = isQrVisitor ? step : step - 1;
+  // step state values → bar index
+  //                   step=1 → 0   step=2 → 1   step=3 → 2
+  //   if skipProjection: step=5 → 3
+  //   else:              step=4 → 3, step=5 → 4
+  let currentIdx;
+  if (step <= 3)       currentIdx = step - 1;
+  else if (step === 4) currentIdx = skipProjection ? 3 : 3;
+  else if (step === 5) currentIdx = skipProjection ? 3 : 4;
+  else                 currentIdx = totalSteps - 1;
   return (
     <div className="mb-6">
       <div className="flex justify-between mb-2 text-[10px] font-bold tracking-widest uppercase">
@@ -359,103 +366,112 @@ function ProgressBar({ step, isQrVisitor }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// STEP 0 — QR-visitor upfront contact capture
+// STEP 3 — Unified mid-flow contact capture
 //
-// Shown ONLY for visitors who arrived via a QR scan (utm_source / qr_scan_id
-// present in URL). Captures the minimum we need to follow up by phone/email
-// even if they bail mid-wizard. Submits to /api/quote/submit-partial which
-// creates a website_enquiries row with status='partial'. The wizard's final
-// submit later promotes that same row to status='new' via the ids returned.
+// Replaces the old QR-only Step 0 (Pattern B in design notes). Shown to EVERY
+// visitor regardless of door — bills/estimate/manual/callback — after they've
+// expressed intent but before the heavy work (analysis or final form).
+//
+// Why this exists: customers who bail at the projection screen, the OTP step,
+// or the address block leave us with nothing. By capturing name+email+phone
+// here we guarantee a reachable lead for the 24-hour bail-out follow-up.
+//
+// Required: name, email, phone. Soft framing ("so we can send the analysis")
+// rather than pressure. No skip — but no other hoops either. Submits to
+// /api/quote/submit-partial which creates a status='partial' row; the final
+// /api/quote/submit promotes it to 'new' using the ids we hand back.
 // ════════════════════════════════════════════════════════════════════════════
-function Step0QrCapture({ utm, onCaptured }) {
+function Step3Capture({ intent, customerType, estimate, utm, contact, setContact, partial, onBack, onCaptured, skipProjection }) {
+  // Read first/last name as a single field for friction reduction, then split.
+  const initialName = [contact.firstName, contact.lastName].filter(Boolean).join(' ');
   const [v, setV] = useState({
-    firstName: '', lastName: '', email: '', phone: '', address: '', monthlyBill: '',
-    installationTimeframe: '',
+    fullName: initialName,
+    email:    contact.email || '',
+    phone:    contact.phone || '',
   });
   const [state, setState] = useState({ loading: false, error: '' });
   const set = (k, val) => setV(s => ({ ...s, [k]: val }));
 
-  const ready = v.firstName && v.lastName && v.email && v.phone && v.address && v.monthlyBill && v.installationTimeframe;
+  // Soft validation — required but tolerant
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim());
+  const phoneValid = /^[\d+\s\-()]{8,}$/.test(v.phone.trim());
+  const nameValid  = v.fullName.trim().split(/\s+/).filter(Boolean).length >= 1;
+  const ready = nameValid && emailValid && phoneValid;
 
-  const TIMEFRAME_OPTIONS = [
-    { value: 'within_1_month',  label: 'Within 1 month',  sub: 'ASAP'    },
-    { value: '1_to_3_months',   label: '1–3 months',      sub: 'Soon'    },
-    { value: '3_to_6_months',   label: '3–6 months',      sub: 'Planning'},
-    { value: 'exploring',       label: 'Just exploring',  sub: 'No rush' },
-  ];
+  const splitName = (full) => {
+    const parts = full.trim().split(/\s+/).filter(Boolean);
+    return { firstName: parts[0] || '', lastName: parts.slice(1).join(' ') || '' };
+  };
+
+  // Subtitle copy varies by intent — keeps the framing soft and contextual
+  // rather than a generic "give us your details".
+  const subtitle = (() => {
+    if (intent === 'callback')     return "We'll call you back — just need to know who to reach.";
+    if (intent === 'bills')        return "We'll email your analysis here. No spam — your specialist may follow up if there's anything to discuss.";
+    if (intent === 'manual_table') return "We'll email your projection here. Your specialist may call to walk through the numbers.";
+    return "We'll email your estimate here. Your specialist may follow up to refine the numbers.";
+  })();
 
   const submit = async () => {
     if (!ready || state.loading) return;
     setState({ loading: true, error: '' });
     try {
+      const { firstName, lastName } = splitName(v.fullName);
+      // Persist to the wizard contact state so subsequent steps can show
+      // "we already have your details" without re-asking.
+      setContact(c => ({ ...c, firstName, lastName, email: v.email.trim(), phone: v.phone.trim() }));
+
+      const installationType =
+        customerType === 'off-grid'   ? 'off-grid' :
+        customerType === 'commercial' ? 'commercial' :
+        customerType === 'ppa'        ? 'ppa' :
+                                        'residential';
+
       const { data } = await publicApi.post('/quote/submit-partial', {
         form: {
-          ...v,
-          monthlyBill: parseFloat(v.monthlyBill),
+          firstName, lastName,
+          email:    v.email.trim(),
+          phone:    v.phone.trim(),
+          monthlyBill: estimate.monthly_spend,
+          installationType,
+          customerType,
+          wizardIntent:   intent,
+          // Idempotency hint: if we've already created a partial row in this
+          // session (e.g. customer hit Back from Step 4 and resubmitted Step 3),
+          // pass the existing ids so the server UPDATEs that row instead of
+          // creating a duplicate.
+          enquiry_id:   partial?.enquiry_id || null,
+          contact_id:   partial?.contact_id || null,
           utm_source:   utm.utm_source,
           utm_medium:   utm.utm_medium,
           utm_campaign: utm.utm_campaign,
           qr_scan_id:   utm.qr_scan_id,
         },
       });
-      // Hand the ids + entered values back to the parent so the wizard can
-      // pre-fill Step 4 and the final submit can UPDATE this same row.
-      onCaptured({
-        enquiry_id:            data.enquiry_id,
-        contact_id:            data.contact_id,
-        firstName:             v.firstName,
-        lastName:              v.lastName,
-        email:                 v.email,
-        phone:                 v.phone,
-        address:               v.address,
-        monthlyBill:           parseFloat(v.monthlyBill),
-        installationTimeframe: v.installationTimeframe,
-      });
+      onCaptured({ enquiry_id: data.enquiry_id, contact_id: data.contact_id });
     } catch (e) {
       setState({ loading: false, error: e.response?.data?.error || 'Something went wrong — please try again.' });
     }
   };
 
+  // Continue-button label depends on what comes next so the customer knows
+  // what they're actually unlocking with this step.
+  const nextLabel = intent === 'callback' || skipProjection
+    ? 'Continue'
+    : 'See my savings';
+
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
       <div className="text-center mb-6">
-        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">QUICK CONTACT · 30 SECONDS</div>
-        <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">Get your tailored solar proposal</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Thanks for scanning! Give us your details so we can follow up — then we'll personalise your quote.
-        </p>
+        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 3 OF {skipProjection ? 4 : 5}</div>
+        <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">Where should we send this?</h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md mx-auto">{subtitle}</p>
       </div>
 
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="First name *" value={v.firstName} onChange={x => set('firstName', x)} placeholder="John" />
-          <Field label="Last name *"  value={v.lastName}  onChange={x => set('lastName', x)}  placeholder="Smith" />
-        </div>
+      <div className="space-y-4 max-w-md mx-auto">
+        <Field label="Your name *" value={v.fullName} onChange={x => set('fullName', x)} placeholder="John Smith" />
         <Field label="Email *" type="email" value={v.email} onChange={x => set('email', x)} placeholder="john@example.com" />
-        <Field label="Phone *" type="tel"   value={v.phone} onChange={x => set('phone', x)} placeholder="+64 21 …" />
-        <Field label="Address *" value={v.address} onChange={x => set('address', x)} placeholder="123 Example St, Auckland" />
-        <Field label="Approx. monthly power bill (NZD) *" type="number" value={v.monthlyBill} onChange={x => set('monthlyBill', x)} placeholder="250" />
-
-        <div>
-          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 block">
-            When do you want this installed? *
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            {TIMEFRAME_OPTIONS.map(opt => {
-              const active = v.installationTimeframe === opt.value;
-              return (
-                <button key={opt.value} type="button" onClick={() => set('installationTimeframe', opt.value)}
-                  className={`px-3 py-2.5 rounded-xl border-2 text-left transition
-                    ${active
-                      ? 'border-amber-400 bg-amber-50 dark:bg-amber-500/10 ring-1 ring-amber-300'
-                      : 'border-gray-200 dark:border-white/10 bg-white dark:bg-brand-dark-1 hover:border-amber-300'}`}>
-                  <div className={`text-sm font-bold ${active ? 'text-amber-700 dark:text-amber-200' : 'dark:text-gray-200'}`}>{opt.label}</div>
-                  <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{opt.sub}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <Field label="Mobile *" type="tel" value={v.phone} onChange={x => set('phone', x)} placeholder="+64 21 …" />
 
         {state.error && (
           <div className="p-3 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
@@ -471,12 +487,17 @@ function Step0QrCapture({ utm, onCaptured }) {
               : 'bg-gray-200 dark:bg-white/10 text-gray-400 cursor-not-allowed'}`}>
           {state.loading
             ? (<><Loader2 size={14} className="animate-spin" /> Saving…</>)
-            : (<>Continue to personalised quote <ArrowRight size={14} /></>)}
+            : (<>{nextLabel} <ArrowRight size={14} /></>)}
         </button>
 
-        <p className="text-[10px] text-gray-400 dark:text-gray-500 text-center">
-          We'll never share your details. You can stop after this step if you prefer — we'll still follow up.
+        <p className="text-[10px] text-gray-400 dark:text-gray-500 text-center leading-relaxed">
+          We never share your details. We may email or call you about your solar enquiry — nothing else.
         </p>
+      </div>
+
+      <div className="flex items-center justify-between mt-6 pt-5 border-t border-gray-100 dark:border-white/10">
+        <button onClick={onBack} className="text-xs font-bold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">← Back</button>
+        <div className="text-[10px] text-gray-400">Required to continue · no skip</div>
       </div>
     </div>
   );
@@ -490,7 +511,7 @@ function Step1IntentPicker({ customerType, setCustomerType, onPick }) {
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
       <div className="text-center mb-6">
-        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 1 OF 4</div>
+        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 1</div>
         <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-3 dark:text-gray-100">How can we help?</h1>
         <p className="text-sm text-gray-500 dark:text-gray-400">Tell us about your installation, then how you'd like to engage.</p>
       </div>
@@ -607,7 +628,7 @@ function Step2Container({ subtitle, onBack, onNext, nextEnabled, skipProjection,
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
       <div className="text-center mb-6">
-        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 2 OF 4</div>
+        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 2</div>
         <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">Your home</h1>
         <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
       </div>
@@ -620,7 +641,7 @@ function Step2Container({ subtitle, onBack, onNext, nextEnabled, skipProjection,
           onClick={onNext}
           disabled={!nextEnabled}
           className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2">
-          {skipProjection ? 'Continue to contact details' : 'See my savings'} <ArrowRight size={14} />
+          Continue <ArrowRight size={14} />
         </button>
       </div>
     </div>
@@ -1051,9 +1072,11 @@ function CallbackBranch({ onContinue }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// STEP 3 — Projection — hits the existing scenario engine
+// STEP 4 — Projection — hits the existing scenario engine
+// (Receives the Step-3 partial ids so the analyzer can link the analysis to
+// the lead AND escalate to a team email if review_required fires mid-flow.)
 // ════════════════════════════════════════════════════════════════════════════
-function Step3Projection({ intent, files, estimate, manualRows, onAnalysisReady, cachedResult, onBack, onNext, onFallbackToManual }) {
+function Step3Projection({ intent, files, estimate, manualRows, partial, onAnalysisReady, cachedResult, onBack, onNext, onFallbackToManual }) {
   const [loading, setLoading] = useState(!cachedResult);
   const [result, setResult] = useState(cachedResult);
   const [error, setError] = useState('');
@@ -1064,10 +1087,18 @@ function Step3Projection({ intent, files, estimate, manualRows, onAnalysisReady,
     (async () => {
       try {
         let data;
+        // Step-3 partial ids (when present) ride along so the backend can link
+        // the analysis to the lead and escalate review_required cases.
+        const partialIds = {
+          enquiry_id: partial?.enquiry_id || '',
+          contact_id: partial?.contact_id || '',
+        };
         if (intent === 'bills') {
           const fd = new FormData();
           for (const f of files) fd.append('files', f);
           if (estimate.postcode) fd.append('postcode', estimate.postcode);
+          if (partialIds.enquiry_id) fd.append('enquiry_id', partialIds.enquiry_id);
+          if (partialIds.contact_id) fd.append('contact_id', partialIds.contact_id);
           const res = await publicApi.post('/bill-analysis', fd, {
             headers: { 'Content-Type': 'multipart/form-data' },
             timeout: 120000,
@@ -1088,6 +1119,7 @@ function Step3Projection({ intent, files, estimate, manualRows, onAnalysisReady,
           const res = await publicApi.post('/bill-analysis/tabular', {
             rows,
             postcode: estimate.postcode || undefined,
+            ...partialIds,
           }, { timeout: 60000 });
           data = res.data;
         } else {
@@ -1097,6 +1129,7 @@ function Step3Projection({ intent, files, estimate, manualRows, onAnalysisReady,
             retailer_id:   estimate.retailer,
             postcode:      estimate.postcode || undefined,
             household_size: estimate.household,
+            ...partialIds,
           }, { timeout: 60000 });
           data = res.data;
         }
@@ -1178,7 +1211,7 @@ function Step3Projection({ intent, files, estimate, manualRows, onAnalysisReady,
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
       <div className="text-center mb-6">
-        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 3 OF 4</div>
+        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 4 OF 5</div>
         <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">Your projected savings</h1>
         <p className="text-sm text-gray-500 dark:text-gray-400">
           Based on your {intent === 'bills' ? `${files.length} bill${files.length > 1 ? 's' : ''}` : 'inputs'} · {a.region || 'Auckland'} · 25-year horizon
@@ -1300,7 +1333,7 @@ function Step3ReviewRequired({ analysis, onBack, onNext }) {
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
       <div className="text-center mb-6">
-        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 3 OF 4</div>
+        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 4 OF 5</div>
         <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">We're verifying your bills</h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 max-w-2xl mx-auto">
           Thanks — we've received your bills. Our analysis found a few things worth verifying
@@ -1623,11 +1656,18 @@ function StatPill({ label, value }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// STEP 4 — Contact form — submits to existing /api/quote/submit
+// STEP 5 — Final details — address + property + (callback) OTP — submits to /api/quote/submit
+//
+// At this point Step 3 has already captured name/email/phone into a partial
+// website_enquiries row. This step enriches that row (via enquiry_id passed
+// back in form) with the address + property details and promotes status
+// 'partial' → 'new'. We show captured contact details as a summary banner;
+// the customer can still tap "edit" to fix typos.
 // ════════════════════════════════════════════════════════════════════════════
 function Step4ContactForm({ intent, customerType, estimate, analysisId, analysisResult, contact, setContact, otp, setOtp, submitState, onBack, onSubmit }) {
   const set = (k, v) => setContact(c => ({ ...c, [k]: v }));
-  // Customer-type-aware subtitle
+  const [editContact, setEditContact] = useState(false);
+
   const teamLabel =
     customerType === 'commercial' ? 'Our commercial team'
     : customerType === 'off-grid'  ? 'Our off-grid specialist'
@@ -1636,10 +1676,10 @@ function Step4ContactForm({ intent, customerType, estimate, analysisId, analysis
   const responseWindow = customerType === 'residential' ? 'within 24 hours' : 'within 2 business days';
 
   const subtitle = intent === 'callback'
-    ? `We'll need a few more details so ${teamLabel.toLowerCase()} can call ${responseWindow}.`
+    ? `Almost done — these last few details help ${teamLabel.toLowerCase()} make a useful call ${responseWindow}.`
     : analysisResult
-      ? `${teamLabel} will call ${responseWindow} to walk you through your projection.`
-      : `${teamLabel} will call ${responseWindow} to talk things through.`;
+      ? `One more step — confirm your address so ${teamLabel.toLowerCase()} can call ${responseWindow} to walk through your projection.`
+      : `One more step — confirm your address so ${teamLabel.toLowerCase()} can call ${responseWindow}.`;
 
   // OTP is REQUIRED for callback-only intent (no bills, no projection — we
   // need extra signal the customer is genuine). For bills/estimate intents,
@@ -1647,18 +1687,22 @@ function Step4ContactForm({ intent, customerType, estimate, analysisId, analysis
   const otpRequired = intent === 'callback';
   const phoneVerifiedOk = !otpRequired || otp.verified;
 
-  // For callback intent the optional fields are promoted to REQUIRED — the
-  // sales rep needs enough context to make the call worthwhile.
+  // Address + property fields are ALWAYS required at the final step now —
+  // sales can't quote or schedule a survey without an address regardless of
+  // intent. Roof/owns_home are optional for bills/estimate (specialist can
+  // ask on the call) but required for callback (no other context to work from).
   const detailsRequired = intent === 'callback';
 
+  const addressOk = !!contact.address;
   const detailsOk = !detailsRequired || (
-    contact.address && contact.owns_home && contact.roof_type && contact.installation_timeframe
+    contact.owns_home && contact.roof_type && contact.installation_timeframe
   );
 
-  const requiredOk = contact.firstName && contact.lastName
-    && (contact.email || contact.phone)   // at minimum, give us a way to reach you
-    && phoneVerifiedOk
-    && detailsOk;
+  // Captured-at-Step-3 fields are guaranteed populated when we land here.
+  // We still defensively check in case the customer somehow short-circuited.
+  const captureOk = contact.firstName && contact.email && contact.phone;
+
+  const requiredOk = captureOk && addressOk && phoneVerifiedOk && detailsOk;
 
   const sendOtp = async () => {
     if (!contact.phone) return;
@@ -1684,82 +1728,91 @@ function Step4ContactForm({ intent, customerType, estimate, analysisId, analysis
   return (
     <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
       <div className="text-center mb-6">
-        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 4 OF 4</div>
-        <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">Get your tailored proposal</h1>
+        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP {intent === 'callback' || customerType !== 'residential' ? '4 OF 4' : '5 OF 5'}</div>
+        <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">Final details</h1>
         <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
       </div>
 
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="First name *" value={contact.firstName} onChange={v => set('firstName', v)} placeholder="John" />
-          <Field label="Last name *"  value={contact.lastName}  onChange={v => set('lastName', v)}  placeholder="Smith" />
-        </div>
-        <Field label="Email" value={contact.email} onChange={v => set('email', v)} placeholder="john@example.com" type="email" />
+        {/* Captured contact summary — name/email/phone collected at Step 3 */}
+        {!editContact ? (
+          <div className="rounded-xl border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/40 dark:bg-emerald-500/5 p-3 flex items-center gap-3">
+            <CheckCircle size={16} className="text-emerald-500 flex-shrink-0" />
+            <div className="flex-1 min-w-0 text-xs">
+              <div className="font-bold text-gray-800 dark:text-gray-100 truncate">
+                {[contact.firstName, contact.lastName].filter(Boolean).join(' ') || '—'}
+              </div>
+              <div className="text-gray-500 dark:text-gray-400 truncate">
+                {contact.email} · {contact.phone}
+              </div>
+            </div>
+            <button type="button" onClick={() => setEditContact(true)}
+              className="text-[10px] font-bold text-amber-700 dark:text-amber-300 hover:underline whitespace-nowrap">Edit</button>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-gray-200 dark:border-white/10 p-3 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="First name *" value={contact.firstName} onChange={v => set('firstName', v)} placeholder="John" />
+              <Field label="Last name *"  value={contact.lastName}  onChange={v => set('lastName', v)}  placeholder="Smith" />
+            </div>
+            <Field label="Email *" value={contact.email} onChange={v => set('email', v)} placeholder="john@example.com" type="email" />
+            <div className="text-right">
+              <button type="button" onClick={() => setEditContact(false)}
+                className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline">Done editing</button>
+            </div>
+          </div>
+        )}
 
-        {/* Phone + OTP verification — required for callback-only intent */}
-        <div>
-          <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-1.5">
-            Phone {otpRequired && <span className="text-red-500">*</span>}
-            {otp.verified && <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-300 normal-case font-semibold ml-1"><CheckCircle size={11} /> Verified</span>}
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="tel"
-              value={contact.phone}
-              onChange={e => {
-                set('phone', e.target.value);
-                // If they change the phone after verifying, reset
-                if (otp.verified || otp.sent) setOtp({ sent: false, value: '', verified: false, loading: false, error: '', demoCode: '' });
-              }}
-              disabled={otp.verified}
-              placeholder="+64 21 …"
-              className={`flex-1 px-3 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 transition
-                ${otp.verified
-                  ? 'border-emerald-400 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200'
-                  : 'border-gray-200 dark:border-white/10 bg-white dark:bg-brand-dark dark:text-gray-200'}`}
-            />
-            {!otp.verified && (
-              <button onClick={sendOtp} disabled={!contact.phone || otp.loading}
-                className="px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold transition disabled:opacity-50 whitespace-nowrap flex items-center gap-1">
-                {otp.loading && !otp.sent ? <Loader2 size={13} className="animate-spin" /> : null}
-                {otp.sent ? 'Resend' : 'Send OTP'}
-              </button>
+        {/* Phone OTP verification — callback intent only. Verifies the phone
+            number captured at Step 3 (we don't re-collect it here). */}
+        {otpRequired && (
+          <div className="rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/40 dark:bg-amber-500/5 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5">
+                Verify {contact.phone || 'your phone'} <span className="text-red-500">*</span>
+                {otp.verified && <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-300 normal-case font-semibold ml-1"><CheckCircle size={11} /> Verified</span>}
+              </label>
+              {!otp.verified && (
+                <button onClick={sendOtp} disabled={!contact.phone || otp.loading}
+                  className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold transition disabled:opacity-50 whitespace-nowrap flex items-center gap-1">
+                  {otp.loading && !otp.sent ? <Loader2 size={13} className="animate-spin" /> : null}
+                  {otp.sent ? 'Resend' : 'Send OTP'}
+                </button>
+              )}
+            </div>
+
+            {otp.demoCode && (
+              <div className="mt-2 px-3 py-2 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded-lg flex items-center justify-between">
+                <span className="text-[10px] text-blue-600 dark:text-blue-300 font-semibold">Demo OTP (no SMS key set):</span>
+                <span className="text-sm font-extrabold text-blue-700 dark:text-blue-200 tracking-[0.25em]">{otp.demoCode}</span>
+              </div>
+            )}
+
+            {otp.sent && !otp.verified && (
+              <div className="mt-2 space-y-1.5">
+                <div className="flex gap-2">
+                  <input type="text" inputMode="numeric" maxLength={6} placeholder="Enter 6-digit code"
+                    value={otp.value}
+                    onChange={e => setOtp(s => ({ ...s, value: e.target.value.replace(/\D/g, ''), error: '' }))}
+                    className="flex-1 px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 transition text-center font-bold tracking-[0.3em]" />
+                  <button onClick={verifyOtp} disabled={otp.value.length !== 6 || otp.loading}
+                    className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold transition disabled:opacity-50 flex items-center gap-1">
+                    {otp.loading ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                    Verify
+                  </button>
+                </div>
+                {otp.error && <p className="text-[10px] text-red-500 font-medium">{otp.error}</p>}
+                <p className="text-[9px] text-gray-400 dark:text-gray-500">Code expires in 5 minutes.</p>
+              </div>
+            )}
+
+            {!otp.verified && !otp.sent && (
+              <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-1 flex items-center gap-1">
+                <Info size={10} /> We verify callback numbers so our sales team isn't chasing wrong numbers.
+              </p>
             )}
           </div>
-
-          {/* Demo-mode display of the OTP (when SMS provider isn't configured server-side) */}
-          {otp.demoCode && (
-            <div className="mt-2 px-3 py-2 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded-lg flex items-center justify-between">
-              <span className="text-[10px] text-blue-600 dark:text-blue-300 font-semibold">Demo OTP (no SMS key set):</span>
-              <span className="text-sm font-extrabold text-blue-700 dark:text-blue-200 tracking-[0.25em]">{otp.demoCode}</span>
-            </div>
-          )}
-
-          {/* OTP code input + Verify button */}
-          {otp.sent && !otp.verified && (
-            <div className="mt-2 space-y-1.5">
-              <div className="flex gap-2">
-                <input type="text" inputMode="numeric" maxLength={6} placeholder="Enter 6-digit code"
-                  value={otp.value}
-                  onChange={e => setOtp(s => ({ ...s, value: e.target.value.replace(/\D/g, ''), error: '' }))}
-                  className="flex-1 px-3 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 text-sm bg-white dark:bg-brand-dark dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 transition text-center font-bold tracking-[0.3em]" />
-                <button onClick={verifyOtp} disabled={otp.value.length !== 6 || otp.loading}
-                  className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold transition disabled:opacity-50 flex items-center gap-1">
-                  {otp.loading ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
-                  Verify
-                </button>
-              </div>
-              {otp.error && <p className="text-[10px] text-red-500 font-medium">{otp.error}</p>}
-              <p className="text-[9px] text-gray-400 dark:text-gray-500">Code expires in 5 minutes.</p>
-            </div>
-          )}
-
-          {otpRequired && !otp.verified && !otp.sent && contact.phone && (
-            <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-1.5 flex items-center gap-1">
-              <Info size={10} /> We verify phone numbers for callback-only enquiries so our sales team isn't chasing wrong numbers.
-            </p>
-          )}
-        </div>
+        )}
 
         {/* Open notes — anything else the customer wants the sales rep to know */}
         <div>
@@ -1815,11 +1868,13 @@ function Step4ContactForm({ intent, customerType, estimate, analysisId, analysis
   );
 }
 
-// Property details — collapsible (optional) for bills/estimate intent,
-// open + required for callback intent. Always uses the NZ AddressAutocomplete
-// for the address field so postcode + suburb get auto-filled on selection.
+// Property details. Address is ALWAYS required at the final step (sales needs
+// it to schedule a survey regardless of intent). owns_home / roof_type /
+// installation_timeframe are required for callback intent only — for
+// bills/estimate intent they're optional, the specialist can confirm on the
+// call. Always uses NZ AddressAutocomplete so postcode + suburb get auto-filled.
 function DetailsSection({ required, intent, contact, set }) {
-  const [open, setOpen] = useState(required);  // open by default when required
+  const [open, setOpen] = useState(true);  // always open — address is required even when other fields aren't
 
   const handleAddressSelect = (parsed) => {
     set('address',         parsed.formatted);
@@ -1831,10 +1886,10 @@ function DetailsSection({ required, intent, contact, set }) {
 
   const Body = (
     <div className={`p-4 space-y-3 ${required ? '' : 'border-t border-gray-100 dark:border-white/10'}`}>
-      {/* Address with NZ autocomplete */}
+      {/* Address with NZ autocomplete — required at final step regardless of intent */}
       <div>
         <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-1">
-          Address {required && <span className="text-red-500">*</span>}
+          Address <span className="text-red-500">*</span>
         </label>
         <AddressAutocomplete
           value={contact.address}
@@ -1891,15 +1946,13 @@ function DetailsSection({ required, intent, contact, set }) {
     );
   }
 
-  // Optional collapsible (legacy behaviour for bills / estimate intent)
+  // Bills / estimate / manual intent — address required, rest optional
   return (
     <div className="bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/10">
-      <button onClick={() => setOpen(o => !o)} type="button"
-        className="w-full px-4 py-3 cursor-pointer text-xs font-bold text-gray-700 dark:text-gray-200 select-none flex items-center justify-between">
-        <span>Optional but helpful — speeds up your quote</span>
-        <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && Body}
+      <div className="px-4 py-3 text-xs font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2">
+        <Home size={12} /> Address + property details
+      </div>
+      {Body}
     </div>
   );
 }

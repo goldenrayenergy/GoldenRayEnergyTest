@@ -312,17 +312,34 @@ router.post('/submit', async (req, res) => {
       calculation?.systemSize && `Est. system: ${calculation.systemSize} kW, $${Math.round(calculation.totalCost).toLocaleString()}.`,
     ].filter(Boolean).join(' ');
 
+    // Track 2 urgency tagging: every full submit is 'high' priority on Day 0
+    // (customer completed the wizard — they're serious enough to pursue).
+    // For UPDATE path (partial → new), we also clear the medium-priority
+    // bail-out task that was created at Step 3 so sales doesn't see stale work.
     const cadenceTasks = cadence.map(step => ({
       title:       `${step.title} — ${name}`,
       description: baseDescription,
       contact_id:  contact.id,
       due_date:    new Date(Date.now() + step.offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      priority:    form.callToDiscuss === 'yes' && step.offsetDays === 0 ? 'high' : step.priority,
+      priority:    step.offsetDays === 0 ? 'high' : step.priority,
       status:      'todo',
       task_type:   step.task_type,
       assignee_id: null,
     }));
     await supabaseAdmin.from('tasks').insert(cadenceTasks);
+
+    // Promote the partial bail-out task to 'done' if this is the UPDATE path —
+    // sales doesn't need to chase someone who just completed the wizard.
+    if (isUpdate) {
+      try {
+        await supabaseAdmin
+          .from('tasks')
+          .update({ status: 'done', description: 'Auto-completed: customer finished the wizard.' })
+          .eq('contact_id', contact.id)
+          .like('title', 'Mid-flow partial — bail-out follow-up%')
+          .eq('status', 'todo');
+      } catch (e) { console.warn('partial-task cleanup failed (non-fatal):', e.message); }
+    }
 
     // ── 4. Log activity so it appears in dashboard Recent Activity feed ─────
     await supabaseAdmin.from('activities').insert({
@@ -352,6 +369,7 @@ router.post('/submit', async (req, res) => {
         if (analysisRow?.review_required) {
           reviewFlag = {
             analysis_id:     analysisRow.id,
+            enquiry_id:      enquiry.id,
             review_required: true,
             review_reasons:  analysisRow.review_reasons || [],
           };
@@ -389,93 +407,143 @@ router.post('/submit', async (req, res) => {
   }
 });
 
-// ── QR partial capture ────────────────────────────────────────────────────
-// Public endpoint hit by Step 0 of the wizard when a visitor arrives via a
-// QR scan (utm_source / qr_scan_id present in URL). Captures the minimum
-// contact details we need to follow up by phone/email even if the visitor
-// bails before completing the full wizard.
+// ── Pattern B unified mid-flow capture ─────────────────────────────────────
+// Public endpoint hit by Step 3 of the wizard for EVERY visitor (QR + direct,
+// every intent). Captures name + email + phone — the minimum we need to keep
+// the lead reachable if they bail at projection / OTP / address. The wizard's
+// final /submit then promotes status 'partial' → 'new' via the ids we return.
 //
-// Creates rows with status='partial' so the portal can distinguish them
-// from completed enquiries; the wizard's final /submit then PATCHes the
-// same rows to status='new' via the enquiry_id / contact_id we return here.
+// Behaviour:
+//   • Required: firstName, email, phone. Everything else is optional.
+//   • Idempotent on echoed enquiry_id+contact_id (back-and-forward Step 3).
+//   • Priority='medium' partial follow-up task; callback intent gets 'high'.
+//   • Team email is SILENT by default — review_required from the analyzer
+//     and the 24h bail-out job handle notifications. Exception: callback
+//     intent fires the team email immediately because the customer has
+//     explicitly asked for a call.
 //
-// Skips the auto follow-up cadence (created on full submit) but DOES create
-// one urgent task + a 'partial capture' activity entry, and notifies admins.
+// Sets status='partial' so the portal can distinguish in-progress leads from
+// completed enquiries and the 24h bail-out job can target them.
 router.post('/submit-partial', async (req, res) => {
   try {
     const { form } = req.body;
     if (!form) return res.status(400).json({ error: 'Form data is required.' });
     if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
 
-    // Required fields for QR partial capture (per user spec)
-    const required = ['firstName', 'lastName', 'email', 'phone', 'address', 'monthlyBill', 'installationTimeframe'];
+    // Minimum fields — name/email/phone. Pattern B keeps the ask short.
+    const required = ['firstName', 'email', 'phone'];
     const missing  = required.filter(k => !form[k]);
     if (missing.length) {
       return res.status(400).json({ error: `Required fields missing: ${missing.join(', ')}` });
     }
 
-    // QR-campaign attribution (same logic as full submit)
+    // Idempotency: if the Step-3 caller already has ids from an earlier
+    // submission this session (e.g. customer hit Back from Step 4), reuse
+    // them — UPDATE the existing rows instead of inserting duplicates.
+    const reuseEnquiryId = form.enquiry_id || null;
+    const reuseContactId = form.contact_id || null;
+
+    // QR-campaign attribution rides through unchanged.
     const utmSource   = form.utm_source   ? String(form.utm_source).slice(0, 50)   : null;
     const utmMedium   = form.utm_medium   ? String(form.utm_medium).slice(0, 50)   : null;
     const utmCampaign = form.utm_campaign ? String(form.utm_campaign).slice(0, 80) : null;
     const qrScanId = (form.qr_scan_id && /^[0-9a-f-]{36}$/i.test(form.qr_scan_id))
       ? form.qr_scan_id : null;
 
-    // Modest lead score — they only gave us minimum info; full submit will rescore.
+    // Modest lead score on partial — full submit rescores.
     const partialScore = 50;
+    const wizardIntent = form.wizardIntent || null;
+    const customerType = form.customerType || form.installationType || 'residential';
+    const isCallback   = wizardIntent === 'callback';
 
-    // ── 1. Insert partial website_enquiries row ──
-    // lead_source is NULL — its CHECK constraint (migration 008) only allows a
-    // small enum of self-reported sources. QR attribution is carried by
-    // utm_source / utm_medium / utm_campaign / qr_scan_id instead.
-    const { data: enquiry, error: enqError } = await supabaseAdmin
-      .from('website_enquiries')
-      .insert({
-        first_name:             form.firstName,
-        last_name:              form.lastName,
-        email:                  form.email,
-        phone:                  form.phone,
-        address:                form.address,
-        monthly_bill:           parseFloat(form.monthlyBill),
-        installation_timeframe: form.installationTimeframe,
-        lead_score:             partialScore,
-        status:                 'partial',
-        utm_source:             utmSource,
-        utm_medium:             utmMedium,
-        utm_campaign:           utmCampaign,
-        qr_scan_id:             qrScanId,
-      })
-      .select('id')
-      .single();
-    if (enqError) throw enqError;
+    const enquiryFields = {
+      first_name:             form.firstName,
+      last_name:              form.lastName || null,
+      email:                  form.email,
+      phone:                  form.phone,
+      address:                form.address || null,
+      monthly_bill:           form.monthlyBill ? parseFloat(form.monthlyBill) : null,
+      installation_timeframe: form.installationTimeframe || null,
+      installation_type:      form.installationType || null,
+      lead_score:             partialScore,
+      status:                 'partial',
+      utm_source:             utmSource,
+      utm_medium:             utmMedium,
+      utm_campaign:           utmCampaign,
+      qr_scan_id:             qrScanId,
+    };
 
-    // ── 2. Insert partial contact (CRM mirror) ──
-    const name = `${form.firstName} ${form.lastName}`.trim();
-    const { data: contact, error: contactError } = await supabaseAdmin
-      .from('contacts')
-      .insert({
-        name,
-        email:        form.email,
-        phone:        form.phone,
-        location:     form.address,
-        monthly_bill: parseFloat(form.monthlyBill),
-        type:         'residential',
-        system_type:  'on-grid',
-        stage:        'new',
-        source:       utmSource || 'qr_scan',
-        lifecycle:    'lead',
-        lead_score:   partialScore,
-        last_activity: 'QR scan — partial capture (wizard pending)',
-        utm_source:   utmSource,
-        utm_medium:   utmMedium,
-        utm_campaign: utmCampaign,
-        qr_scan_id:   qrScanId,
-      })
-      .select('id')
-      .single();
-    if (contactError) throw contactError;
+    // ── 1. INSERT or UPDATE website_enquiries ──
+    let enquiry;
+    if (reuseEnquiryId) {
+      const { data, error } = await supabaseAdmin
+        .from('website_enquiries')
+        .update(enquiryFields)
+        .eq('id', reuseEnquiryId)
+        .select('id')
+        .single();
+      if (error) throw error;
+      enquiry = data;
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from('website_enquiries')
+        .insert(enquiryFields)
+        .select('id')
+        .single();
+      if (error) throw error;
+      enquiry = data;
+    }
 
-    // ── 3. Back-link the scan event to the lead ──
+    // ── 2. INSERT or UPDATE contact (CRM mirror) ──
+    const name = [form.firstName, form.lastName].filter(Boolean).join(' ').trim();
+    // contacts.system_type CHECK only allows on-grid/off-grid/hybrid
+    const contactSystemType =
+      customerType === 'off-grid'   ? 'off-grid' :
+      customerType === 'commercial' ? 'on-grid'  :
+      customerType === 'ppa'        ? 'on-grid'  :
+                                      'on-grid';
+    const contactType = customerType === 'commercial' || customerType === 'ppa' ? 'commercial' : 'residential';
+
+    const contactFields = {
+      name,
+      email:        form.email,
+      phone:        form.phone,
+      location:     form.address || null,
+      monthly_bill: form.monthlyBill ? parseFloat(form.monthlyBill) : null,
+      type:         contactType,
+      system_type:  contactSystemType,
+      stage:        'new',
+      source:       utmSource || (wizardIntent ? `wizard_${wizardIntent}` : 'website'),
+      lifecycle:    'lead',
+      lead_score:   partialScore,
+      last_activity: `Wizard Step 3 partial capture${wizardIntent ? ` (${wizardIntent})` : ''}`,
+      utm_source:   utmSource,
+      utm_medium:   utmMedium,
+      utm_campaign: utmCampaign,
+      qr_scan_id:   qrScanId,
+    };
+
+    let contact;
+    if (reuseContactId) {
+      const { data, error } = await supabaseAdmin
+        .from('contacts')
+        .update(contactFields)
+        .eq('id', reuseContactId)
+        .select('id')
+        .single();
+      if (error) throw error;
+      contact = data;
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from('contacts')
+        .insert(contactFields)
+        .select('id')
+        .single();
+      if (error) throw error;
+      contact = data;
+    }
+
+    // ── 3. Back-link the scan event to the lead (QR visitors only) ──
     if (qrScanId) {
       try {
         await supabaseAdmin
@@ -485,52 +553,65 @@ router.post('/submit-partial', async (req, res) => {
       } catch (e) { console.warn('qr_scans back-link failed (non-fatal):', e.message); }
     }
 
-    // ── 4. One urgent task so sales doesn't wait for wizard completion ──
-    try {
-      await supabaseAdmin.from('tasks').insert({
-        title:       `QR partial lead — call within 1 hour — ${name}`,
-        description: `[Sales] Hot QR lead captured from ${utmSource || 'QR scan'}. Wizard not yet completed — call to qualify. Bill ~$${parseFloat(form.monthlyBill)}/mo.`,
-        contact_id:  contact.id,
-        due_date:    new Date().toISOString().slice(0, 10),
-        priority:    'high',
-        status:      'todo',
-        task_type:   'call',
-        assignee_id: null,
-      });
-    } catch (e) { console.warn('partial-capture task creation failed (non-fatal):', e.message); }
+    // ── 4. Follow-up task — only created on first INSERT, not re-updates ──
+    // Priority: 'high' for callback intent (customer explicitly asked for a
+    // call); 'medium' for everyone else (still in the wizard — let the 24h
+    // job catch them if they bail).
+    if (!reuseContactId) {
+      try {
+        await supabaseAdmin.from('tasks').insert({
+          title:       `${isCallback ? 'Callback request — call within 1 hour' : 'Mid-flow partial — bail-out follow-up'} — ${name}`,
+          description: `[Sales] ${isCallback ? 'Customer requested a callback' : 'Customer started the wizard'} (intent: ${wizardIntent || 'unknown'}). ${form.monthlyBill ? `Bill ~$${parseFloat(form.monthlyBill)}/mo. ` : ''}${utmSource ? `Source: ${utmSource}. ` : ''}Wizard not yet completed.`,
+          contact_id:  contact.id,
+          due_date:    new Date().toISOString().slice(0, 10),
+          priority:    isCallback ? 'high' : 'medium',
+          status:      'todo',
+          task_type:   'call',
+          assignee_id: null,
+        });
+      } catch (e) { console.warn('partial-capture task creation failed (non-fatal):', e.message); }
+    }
 
     // ── 5. Activity feed entry ──
-    try {
-      await supabaseAdmin.from('activities').insert({
-        type:        'system',
-        description: `QR partial capture: ${name} — $${parseFloat(form.monthlyBill)}/mo bill — wizard pending`,
-        contact_id:  contact.id,
-        metadata: {
-          enquiry_id:   enquiry.id,
-          source:       'qr_partial',
-          utm_source:   utmSource,
-          utm_campaign: utmCampaign,
-        },
-      });
-    } catch (e) { console.warn('partial-capture activity failed (non-fatal):', e.message); }
-
-    // ── 6. Notify team (non-blocking) ──
-    (async () => {
+    if (!reuseContactId) {
       try {
-        const { data: admins } = await supabaseAdmin
-          .from('users')
-          .select('email')
-          .eq('role', 'admin')
-          .eq('is_active', true);
-        const recipients = (admins || []).map(u => u.email).filter(Boolean);
-        await sendTeamNewLeadEmail({
-          form: { ...form, _partial: true },
-          calculation: null,
-          leadScore: partialScore,
-          recipients,
+        await supabaseAdmin.from('activities').insert({
+          type:        'system',
+          description: `Partial capture: ${name} — ${wizardIntent || 'wizard'}${form.monthlyBill ? ` — $${parseFloat(form.monthlyBill)}/mo` : ''}`,
+          contact_id:  contact.id,
+          metadata: {
+            enquiry_id:    enquiry.id,
+            source:        'partial_capture',
+            wizard_intent: wizardIntent,
+            utm_source:    utmSource,
+            utm_campaign:  utmCampaign,
+          },
         });
-      } catch (e) { console.error('Partial team email failed (non-fatal):', e.message); }
-    })();
+      } catch (e) { console.warn('partial-capture activity failed (non-fatal):', e.message); }
+    }
+
+    // ── 6. Notify team — ONLY for callback intent (high-priority, customer
+    //      explicitly asked for a call). For other intents the team email is
+    //      silent at partial-capture time; it'll fire when the bill analyzer
+    //      flags review_required OR when the final /submit completes.
+    if (isCallback && !reuseContactId) {
+      (async () => {
+        try {
+          const { data: admins } = await supabaseAdmin
+            .from('users')
+            .select('email')
+            .eq('role', 'admin')
+            .eq('is_active', true);
+          const recipients = (admins || []).map(u => u.email).filter(Boolean);
+          await sendTeamNewLeadEmail({
+            form: { ...form, _partial: true, _callbackRequested: true },
+            calculation: null,
+            leadScore: partialScore,
+            recipients,
+          });
+        } catch (e) { console.error('Partial team email failed (non-fatal):', e.message); }
+      })();
+    }
 
     return res.status(201).json({
       success:     true,

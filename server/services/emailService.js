@@ -146,15 +146,23 @@ export async function sendTeamNewLeadEmail({ form, calculation, leadScore, recip
   // (parse_suspect, multi-address, low field confidence, etc.). Sales
   // walks into the "first call within 1 hour" task already knowing what
   // to verify with the customer instead of quoting blindly.
+  // Portal base URL for deep-links. Honors PORTAL_BASE_URL env so the email
+  // works in prod (Vercel) AND local dev (vite at localhost:5173).
+  const portalBase = process.env.PORTAL_BASE_URL || 'https://www.goldenrayenergy.co.nz';
+  const enquiryDeepLink = reviewFlag?.enquiry_id
+    ? `${portalBase}/portal/enquiries/${reviewFlag.enquiry_id}?tab=bills`
+    : null;
+
   const reviewBlock = reviewFlag?.review_required ? `
     <div style="background:#fef2f2;border-left:4px solid #ef4444;border-radius:6px;padding:14px 16px;margin:0 0 18px 0">
       <div style="font-size:13px;font-weight:800;color:#991b1b;margin-bottom:6px">🚨 REVIEW REQUIRED — verify bills before quoting</div>
       <div style="font-size:12px;color:#7f1d1d;margin-bottom:8px">The bill analysis engine flagged this customer's upload. The customer was told a specialist would call within 24 hours <strong>instead of</strong> seeing an auto-generated savings projection — so they have no specific number in their head yet. Use this call to verify and quote honestly.</div>
       <div style="font-size:12px;font-weight:700;color:#7f1d1d;margin-bottom:4px">What to verify:</div>
       <ul style="font-size:12px;color:#7f1d1d;margin:0;padding-left:18px;line-height:1.55">
-        ${(reviewFlag.review_reasons || []).map(r => `<li><strong>[${r.severity}]</strong> ${r.message}</li>`).join('')}
+        ${(reviewFlag.review_reasons || []).map(r => `<li><strong>[${r.severity || 'warn'}]</strong> ${r.code || ''}${r.message ? ` — ${r.message}` : (r.reason ? ` — ${r.reason}` : '')}</li>`).join('')}
       </ul>
-      ${reviewFlag.analysis_id ? `<div style="font-size:11px;color:#7f1d1d;margin-top:8px">Original bill PDFs: open Bill Analysis <code style="background:#fee2e2;padding:1px 5px;border-radius:3px">${reviewFlag.analysis_id}</code> in the portal to download.</div>` : ''}
+      ${enquiryDeepLink ? `<div style="margin-top:10px"><a href="${enquiryDeepLink}" style="display:inline-block;background:#ef4444;color:#fff;text-decoration:none;font-weight:700;font-size:12px;padding:8px 14px;border-radius:6px">Open Bills + Analysis →</a></div>` : ''}
+      ${reviewFlag.analysis_id && !enquiryDeepLink ? `<div style="font-size:11px;color:#7f1d1d;margin-top:8px">Bill Analysis ID: <code style="background:#fee2e2;padding:1px 5px;border-radius:3px">${reviewFlag.analysis_id}</code></div>` : ''}
     </div>
   ` : '';
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useSearchParams, Link } from 'react-router-dom';
 import api from '../../services/api';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
@@ -7,6 +7,7 @@ import { fmt$, fmtDateTime } from '../../utils/format';
 import {
   ArrowLeft, Sun, Zap, Leaf, DollarSign, TrendingUp, Battery,
   Mail, Phone, MapPin, Home, Calendar, User as UserIcon,
+  FileText, AlertTriangle, CheckCircle, ExternalLink, Loader2, Eye,
 } from 'lucide-react';
 
 const STATUS_OPTIONS = [
@@ -44,11 +45,19 @@ function InfoRow({ icon: Icon, label, value }) {
 
 export default function EnquiryDetailPage() {
   const { id } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') === 'bills' ? 'bills' : 'overview';
+  const [tab, setTab] = useState(initialTab);
   const [enquiry, setEnquiry] = useState(null);
   const [calc, setCalc] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [statusSaving, setStatusSaving] = useState(false);
+
+  // Bills + Analysis tab data (lazy-loaded on first tab switch)
+  const [billsData, setBillsData] = useState(null);
+  const [billsLoading, setBillsLoading] = useState(false);
+  const [billsError, setBillsError] = useState('');
 
   useEffect(() => {
     api.get(`/enquiries/${id}`)
@@ -56,6 +65,43 @@ export default function EnquiryDetailPage() {
       .catch(e => setError(e.response?.data?.error || 'Failed to load enquiry'))
       .finally(() => setLoading(false));
   }, [id]);
+
+  // Fetch bills/analysis data the first time the tab is opened
+  useEffect(() => {
+    if (tab !== 'bills' || billsData || billsLoading) return;
+    setBillsLoading(true);
+    api.get(`/enquiries/${id}/bills-analysis`)
+      .then(r => setBillsData(r.data))
+      .catch(e => setBillsError(e.response?.data?.error || 'Failed to load bill analysis'))
+      .finally(() => setBillsLoading(false));
+  }, [tab, id, billsData, billsLoading]);
+
+  const switchTab = (next) => {
+    setTab(next);
+    if (next === 'bills') setSearchParams({ tab: 'bills' });
+    else setSearchParams({});
+  };
+
+  const markVerified = async (analysisId) => {
+    if (!confirm('Mark this analysis as sales-verified? The customer will see the precise recommendation on their next visit.')) return;
+    try {
+      await api.patch(`/enquiries/bill-analyses/${analysisId}/verify`);
+      // Refetch so the badge clears
+      const r = await api.get(`/enquiries/${id}/bills-analysis`);
+      setBillsData(r.data);
+    } catch (e) {
+      alert(e.response?.data?.error || 'Failed to mark verified');
+    }
+  };
+
+  const viewPdf = async (uploadId) => {
+    try {
+      const { data } = await api.get(`/enquiries/bill-uploads/${uploadId}/signed-url`);
+      window.open(data.url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      alert(e.response?.data?.error || 'Could not fetch signed URL');
+    }
+  };
 
   const updateStatus = async (status) => {
     setStatusSaving(true);
@@ -113,6 +159,34 @@ export default function EnquiryDetailPage() {
         </div>
       </div>
 
+      {/* Tab switcher — Overview (default) | Bills + Analysis */}
+      <div className="flex gap-1 border-b border-gray-200">
+        <button onClick={() => switchTab('overview')}
+          className={`px-4 py-2 text-xs font-bold border-b-2 transition flex items-center gap-1.5
+            ${tab === 'overview' ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+          <UserIcon size={12} /> Overview
+        </button>
+        <button onClick={() => switchTab('bills')}
+          className={`px-4 py-2 text-xs font-bold border-b-2 transition flex items-center gap-1.5
+            ${tab === 'bills' ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+          <FileText size={12} /> Bills + Analysis
+          {billsData?.analyses?.some(a => a.review_required) && (
+            <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 text-[9px] font-extrabold">
+              <AlertTriangle size={9} /> REVIEW
+            </span>
+          )}
+        </button>
+      </div>
+
+      {tab === 'bills' ? (
+        <BillsAnalysisTab
+          loading={billsLoading}
+          error={billsError}
+          data={billsData}
+          onMarkVerified={markVerified}
+          onViewPdf={viewPdf}
+        />
+      ) : (
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* LEFT — Contact + Installation */}
         <div className="lg:col-span-2 space-y-4">
@@ -256,6 +330,200 @@ export default function EnquiryDetailPage() {
           )}
         </div>
       </div>
+      )}
+    </div>
+  );
+}
+
+// ── Bills + Analysis tab ────────────────────────────────────────────────────
+// What sales sees when they need to verify a flagged bill analysis or just
+// understand what the customer uploaded. Shows the latest analysis (annual
+// kWh, recommendation, scenarios) plus the list of underlying bill_uploads
+// with View PDF buttons (signed URLs, 15min TTL). For review_required cases
+// surfaces the reasons up top + a "Mark verified" button to release the
+// recommendation to the customer.
+function BillsAnalysisTab({ loading, error, data, onMarkVerified, onViewPdf }) {
+  if (loading) {
+    return <Card className="flex flex-col items-center justify-center py-16"><Loader2 size={28} className="animate-spin text-amber-500" /><div className="text-xs text-gray-400 mt-3">Loading bill analysis…</div></Card>;
+  }
+  if (error) {
+    return <Card className="p-6 text-center text-xs text-red-600">{error}</Card>;
+  }
+  if (!data || data.analyses.length === 0) {
+    return (
+      <Card className="flex flex-col items-center justify-center py-16 text-center">
+        <FileText size={32} className="text-gray-300 mb-3" />
+        <div className="text-sm font-bold text-gray-600">No bill analysis on file</div>
+        <div className="text-[11px] text-gray-400 mt-1 max-w-xs">
+          This customer didn't upload bills, or the wizard step 4 hasn't completed yet.
+        </div>
+      </Card>
+    );
+  }
+
+  const analysis = data.analyses[0];   // latest first
+  const uploads  = data.bill_uploads.filter(u => u.analysis_id === analysis.id);
+  const reasons  = Array.isArray(analysis.review_reasons) ? analysis.review_reasons : [];
+
+  return (
+    <div className="space-y-4">
+      {/* Review banner — only when flagged */}
+      {analysis.review_required && (
+        <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4">
+          <div className="flex items-start gap-3 mb-3">
+            <AlertTriangle size={20} className="text-red-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-sm font-extrabold text-red-700 mb-1">REVIEW REQUIRED — recommendation withheld from customer</div>
+              <div className="text-xs text-red-600">
+                The analyzer flagged this analysis. Customer is seeing the "we're verifying your bills" screen
+                with package specs only (no $-amounts). Call to confirm the numbers, fix anything wrong, then
+                mark verified below to release the precise recommendation.
+              </div>
+            </div>
+            <button onClick={() => onMarkVerified(analysis.id)}
+              className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold transition flex items-center gap-1 whitespace-nowrap">
+              <CheckCircle size={12} /> Mark verified
+            </button>
+          </div>
+          {reasons.length > 0 && (
+            <div className="bg-white border border-red-200 rounded-lg p-3">
+              <div className="text-[10px] font-bold text-red-700 uppercase mb-1.5">Reasons flagged</div>
+              <ul className="text-xs text-gray-700 space-y-1">
+                {reasons.map((r, i) => (
+                  <li key={i} className="flex items-start gap-1.5">
+                    <span className="font-mono text-[10px] px-1.5 rounded bg-red-100 text-red-700 font-bold flex-shrink-0">{r.severity || 'warn'}</span>
+                    <span><strong>{r.code}</strong>{r.reason ? `: ${r.reason}` : ''}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Aggregate + recommendation summary */}
+      <Card title="Analysis summary" subtitle={`${analysis.bills_uploaded || uploads.length} bills · ${analysis.months_covered || '?'} months · ${analysis.region || '—'}`}>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Stat label="Annual usage"   value={`${(analysis.annual_kwh || 0).toLocaleString()} kWh`} />
+          <Stat label="Annual spend"   value={fmt$(analysis.annual_spend_nzd)} />
+          <Stat label="Effective rate" value={`${((analysis.effective_rate_nzd || 0) * 100).toFixed(1)}c/kWh`} />
+          <Stat label="Retailer"       value={analysis.retailer || '—'} sub={analysis.plan_name} />
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center">
+            <div className="text-[10px] font-bold text-amber-700 uppercase">Recommended system</div>
+            <div className="text-xl font-extrabold text-amber-700">{analysis.recommended_system_kw} kW</div>
+            {analysis.recommended_battery_kwh > 0 && <div className="text-[10px] text-amber-600">+ {analysis.recommended_battery_kwh} kWh battery</div>}
+          </div>
+          {analysis.switch_recommended && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+              <div className="text-[10px] font-bold text-blue-700 uppercase">Switch retailer first</div>
+              <div className="text-sm font-bold text-blue-700 mt-1">{analysis.switch_to_retailer}</div>
+              <div className="text-[10px] text-blue-600">Save {fmt$(analysis.switch_annual_saving)}/yr</div>
+            </div>
+          )}
+          {analysis.recommended_package_slug && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
+              <div className="text-[10px] font-bold text-emerald-700 uppercase">Suggested package</div>
+              <a href={`/solar-packages/${analysis.recommended_package_slug}`} target="_blank" rel="noopener noreferrer"
+                className="text-sm font-bold text-emerald-700 hover:underline mt-1 inline-flex items-center gap-1">
+                {analysis.recommended_package_slug} <ExternalLink size={10} />
+              </a>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Bills table — one row per uploaded bill */}
+      <Card title="Uploaded bills" subtitle={`${uploads.length} bill${uploads.length === 1 ? '' : 's'} parsed`}>
+        {uploads.length === 0 ? (
+          <div className="text-center py-6 text-xs text-gray-400">No bill uploads stored (estimate intent, or storage upload failed)</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className="text-left px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">File</th>
+                  <th className="text-left px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Period</th>
+                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Days</th>
+                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">kWh</th>
+                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Total NZ$</th>
+                  <th className="text-left px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Address</th>
+                  <th className="text-right px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {uploads.map(u => (
+                  <tr key={u.id}>
+                    <td className="px-3 py-2 text-gray-700">
+                      <div className="font-medium truncate max-w-[180px]">{u.file_name || '—'}</div>
+                      <div className="text-[10px] text-gray-400">{u.retailer || 'unknown'}{u.parse_method ? ` · ${u.parse_method}` : ''}</div>
+                    </td>
+                    <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{u.period_start} → {u.period_end}</td>
+                    <td className="px-3 py-2 text-right">{u.days_in_period || '—'}</td>
+                    <td className="px-3 py-2 text-right">{u.kwh_total != null ? u.kwh_total.toLocaleString() : '—'}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{u.total_nzd != null ? fmt$(u.total_nzd) : '—'}</td>
+                    <td className="px-3 py-2 text-gray-500 text-[11px] truncate max-w-[160px]">{u.service_address || '—'}</td>
+                    <td className="px-3 py-2 text-right">
+                      {u.file_storage_path ? (
+                        <button onClick={() => onViewPdf(u.id)}
+                          className="text-amber-700 hover:text-amber-600 text-[10px] font-bold inline-flex items-center gap-1">
+                          <Eye size={11} /> View
+                        </button>
+                      ) : <span className="text-[9px] text-gray-300">not stored</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {/* Scenarios — same numbers customer would see */}
+      {Array.isArray(analysis.scenarios) && analysis.scenarios.length > 0 && (
+        <Card title="25-year scenarios" subtitle="What the customer's projection screen showed">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className="text-left px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Scenario</th>
+                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Upfront</th>
+                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Yr 1 cost</th>
+                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Yr 25 cost</th>
+                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Payback</th>
+                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">25-yr net</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {analysis.scenarios.map(s => (
+                  <tr key={s.id}>
+                    <td className="px-3 py-2 font-medium">{s.label}</td>
+                    <td className="px-3 py-2 text-right">{s.upfront_cost === 0 ? '—' : fmt$(s.upfront_cost)}</td>
+                    <td className="px-3 py-2 text-right">{fmt$(s.year_1_cost)}</td>
+                    <td className="px-3 py-2 text-right">{fmt$(s.year_25_cost)}</td>
+                    <td className="px-3 py-2 text-right">{s.payback_years === null ? 'never' : s.payback_years === 0 ? '—' : `${s.payback_years} yr`}</td>
+                    <td className={`px-3 py-2 text-right font-bold ${s.net_25yr > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                      {s.net_25yr > 0 ? '+' : ''}{fmt$(s.net_25yr)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub }) {
+  return (
+    <div className="bg-white border border-gray-100 rounded-lg p-3 text-center">
+      <div className="text-[9px] text-gray-400 uppercase tracking-wide font-bold">{label}</div>
+      <div className="text-base font-extrabold text-gray-900 mt-1 truncate">{value}</div>
+      {sub && <div className="text-[9px] text-gray-400 mt-0.5 truncate">{sub}</div>}
     </div>
   );
 }
