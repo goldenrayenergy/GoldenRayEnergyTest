@@ -361,3 +361,124 @@ export async function cancelScheduledEmails(emailIds = []) {
   console.log(`📭 Cancelled ${cancelled}/${emailIds.length} scheduled emails (${failed} failed)`);
   return { cancelled, failed };
 }
+
+// ── Bail-out follow-up (Track 4 / Deploy #2) ──────────────────────────────
+// Sent ~24h after a Pattern-B partial enquiry was captured at Step 3 and
+// the visitor never returned to finish the wizard. Dispatched by the
+// standalone server/scripts/send-bail-followups.js job; idempotency is
+// guarded by website_enquiries.bail_followup_sent_at (migration 027).
+//
+// Three content variants based on what we learned about the visitor:
+//   • analysis present + clean         — share the real findings
+//   • analysis present + review_flag   — soft "we're still verifying" tone
+//   • no analysis (bailed before run)  — generic "easy to pick up" prompt
+//
+// Tone is intentionally low-pressure. The customer chose to leave; nudging
+// hard burns goodwill. The CTA is "see what we found" not "buy now".
+export async function sendBailFollowupEmail({ enquiry, analysis, resumeUrl }) {
+  if (!enquiry?.email) {
+    console.log('Bail-followup: no email on enquiry, skipping');
+    return null;
+  }
+
+  const firstName = (enquiry.first_name || '').trim() || 'there';
+  const fullName  = [enquiry.first_name, enquiry.last_name].filter(Boolean).join(' ').trim() || 'there';
+
+  // CTA destination — prefers a resume URL with enquiry context, else falls
+  // back to a fresh /get-quote start.
+  const cta = resumeUrl || 'https://www.goldenrayenergy.co.nz/get-quote';
+
+  // ── Choose body variant ──
+  let intro, findingsBlock, subject;
+
+  if (analysis && !analysis.review_required) {
+    // CLEAN ANALYSIS — share the real numbers (but no precise install $)
+    const a   = analysis;
+    const sys = a.recommended_system_kw ? `${a.recommended_system_kw} kW solar` : 'a solar system';
+    const bat = a.recommended_battery_kwh && a.recommended_battery_kwh > 0
+      ? ` with a ${a.recommended_battery_kwh} kWh battery`
+      : '';
+    const annualKwh   = a.annual_kwh ? a.annual_kwh.toLocaleString('en-NZ') : null;
+    const annualSpend = a.annual_spend_nzd ? fmt$(a.annual_spend_nzd) : null;
+
+    subject = `Hi ${firstName} — your solar analysis is ready 🌞`;
+    intro = `<p style="font-size:14px">Hi ${firstName},</p>
+      <p style="font-size:14px;color:#374151;line-height:1.6">
+        You started a solar quote with us yesterday and didn't quite finish — no worries,
+        the analysis we ran on your bills is saved and ready when you are.
+      </p>`;
+    findingsBlock = `
+      <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:6px;padding:16px 18px;margin:18px 0">
+        <p style="font-size:12px;font-weight:800;color:#92400e;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:0.5px">What we found from your bills</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;color:#1f2937">
+          ${annualKwh   ? `<tr><td style="padding:4px 0;color:#6b7280">Your annual usage</td><td style="padding:4px 0;text-align:right;font-weight:700">${annualKwh} kWh</td></tr>` : ''}
+          ${annualSpend ? `<tr><td style="padding:4px 0;color:#6b7280">Your annual power bill</td><td style="padding:4px 0;text-align:right;font-weight:700">${annualSpend}</td></tr>` : ''}
+          <tr><td style="padding:4px 0;color:#6b7280">Recommended system</td><td style="padding:4px 0;text-align:right;font-weight:700">${sys}${bat}</td></tr>
+        </table>
+      </div>
+      <p style="font-size:13px;color:#374151;line-height:1.55">
+        Want the full picture — 25-year savings, payback period, panel layout, and three system options?
+        It's one more step.
+      </p>`;
+  } else if (analysis && analysis.review_required) {
+    // REVIEW REQUIRED — soft tone, specialist will help
+    subject = `Hi ${firstName} — let's pick up where you left off`;
+    intro = `<p style="font-size:14px">Hi ${firstName},</p>
+      <p style="font-size:14px;color:#374151;line-height:1.6">
+        You started a solar quote with us yesterday. We received your bills and our analysis
+        spotted a couple of things we'd like to verify with you in person before we put a
+        recommendation in writing.
+      </p>`;
+    findingsBlock = `
+      <div style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:6px;padding:16px 18px;margin:18px 0">
+        <p style="font-size:13px;color:#92400e;margin:0;line-height:1.55">
+          When you're ready, finish the form and a specialist will call within 24 hours to
+          walk through your bills and quote honestly — no auto-generated savings number that
+          could be off by thousands.
+        </p>
+      </div>`;
+  } else {
+    // NO ANALYSIS — visitor bailed before/during projection
+    subject = `Hi ${firstName} — finish your solar quote in 60 seconds`;
+    intro = `<p style="font-size:14px">Hi ${firstName},</p>
+      <p style="font-size:14px;color:#374151;line-height:1.6">
+        You started a solar quote with us yesterday and didn't quite finish. It only takes
+        about a minute to pick up where you left off, and we'll have a tailored quote ready
+        within 24 hours.
+      </p>`;
+    findingsBlock = `
+      <div style="background:#f1f5f9;border-left:4px solid #64748b;border-radius:6px;padding:14px 18px;margin:18px 0">
+        <p style="font-size:12px;font-weight:700;color:#475569;margin:0 0 6px 0">Why bother?</p>
+        <ul style="font-size:13px;color:#1f2937;margin:0;padding-left:18px;line-height:1.6">
+          <li>Most NZ homes with solar save <strong>$1,500–$3,500</strong> per year</li>
+          <li>Payback is typically <strong>6–8 years</strong>, and panels last 25+</li>
+          <li>Power prices are up 23% over the last 5 years — solar locks in your rate</li>
+        </ul>
+      </div>`;
+  }
+
+  const ctaBlock = `
+    <div style="text-align:center;margin:22px 0">
+      <a href="${cta}" style="display:inline-block;background:linear-gradient(135deg,#f59e0b 0%,#d97706 100%);color:#fff;text-decoration:none;font-weight:800;font-size:14px;padding:14px 28px;border-radius:8px;box-shadow:0 4px 12px rgba(245,158,11,0.3)">
+        ${analysis && !analysis.review_required ? 'See my full savings →' : 'Finish my quote →'}
+      </a>
+    </div>`;
+
+  const closing = `
+    <p style="font-size:13px;color:#374151;line-height:1.55">
+      Not interested anymore? No problem — just ignore this email and we won't follow up again.
+    </p>
+    <p style="font-size:13px;color:#374151;margin-top:18px">
+      Ngā mihi,<br>
+      <strong>Eric and the GoldenRay team</strong><br>
+      <span style="color:#9ca3af;font-size:11px">${COMPANY.phone} · ${COMPANY.email}</span>
+    </p>`;
+
+  const body = intro + findingsBlock + ctaBlock + closing;
+
+  return send({
+    to:      enquiry.email,
+    subject,
+    html:    wrap({ title: 'Your solar quote — picking up where you left off', body }),
+  });
+}

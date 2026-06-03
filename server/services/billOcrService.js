@@ -439,6 +439,10 @@ function extractServiceAddress(text) {
   // Mercury / Contact / Genesis sometimes use "for the period ... at <address>"
   const periodAtStyle = text.match(/for\s+the\s+period[\s\S]{0,80}?at[\s:]+\s*([^\n]{8,200})/i);
   if (periodAtStyle) return periodAtStyle[1].trim().replace(/\s+/g, ' ').slice(0, 300);
+  // Ecotricity format: "Energy Used and Charges for\n75 MAHIA ROAD, AUCKLAND\nICP …"
+  // Address is on the line BETWEEN the "for" header and the "ICP" line.
+  const ecotStyle = text.match(/Energy\s+Used\s+and\s+Charges\s+for\s*\n([^\n]{8,200})\s*\n\s*ICP\b/i);
+  if (ecotStyle) return ecotStyle[1].trim().replace(/\s+/g, ' ').slice(0, 300);
   // Fallback: a line that looks like a NZ postal address (ends with 4-digit postcode)
   const generic = text.match(/^([0-9A-Za-z\/].{8,150}?,\s*[A-Za-z][A-Za-z\s]+(?:,\s*[A-Za-z][A-Za-z\s]+)?\s+\d{4})\s*$/m);
   if (generic) return generic[1].trim().replace(/\s+/g, ' ').slice(0, 300);
@@ -843,12 +847,44 @@ const MERCURY = {
     // "x N cents" — both formats put the line total at the same anchor point.
     //   single-rate: "Anytime 1940 kWh x 28.9 cents $560.66"
     //   multi-rate:  "Anytime 85 kWh x 19.90c $16.92" + "Anytime 593 kWh x 20.96c $124.29"
-    const variableLines = [...elec.matchAll(/(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+[\d,]+(?:\.\d+)?\s*kWh\s+x\s+[\d.]+\s*cents\s+\$([\d,]+\.\d{2})/gi)];
+    //
+    // Also includes "Electricity Authority Levy" — Mercury prints this as a
+    // separate per-kWh charge ("589 kWh x 0.11 cents $0.65") that consumers
+    // never see broken out elsewhere, but it IS part of variable spend. The
+    // kwh_total regex above deliberately omits EA Levy because it references
+    // the SAME kWh (would double-count if included there).
+    const variableLines = [...elec.matchAll(/(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night|Electricity\s+Authority\s+Levy|EA\s+Levy)\s+[\d,]+(?:\.\d+)?\s*kWh\s+x\s+[\d.]+\s*cents\s+\$([\d,]+\.\d{2})/gi)];
     if (variableLines.length) {
       out.variable_charge_nzd = +variableLines.reduce((sum, m) => sum + parseNum(m[1]), 0).toFixed(2);
     } else {
       const fallback = elec.match(/(?:Energy|Variable|Electricity)\s+charges?[\s\S]{0,200}?\$([\d,]+\.\d{2})/i);
       if (fallback) out.variable_charge_nzd = parseNum(fallback[1]);
+    }
+
+    // ── Promotional credits — Mercury runs several loyalty programmes that
+    //    print as "$ X.XX credit" lines, included in the printed Subtotal but
+    //    NOT in any line-item bucket we capture above. Without subtracting
+    //    them, fixed+variable+gst overshoots the bill total and the
+    //    line_items_dont_sum validator (correctly) fires.
+    //
+    //    Known programmes (enumerate rather than blanket-match "$X credit"
+    //    to avoid false-capture of "Account credit balance" header lines):
+    //      • Free Power Day for DD MMM YYYY  $19.95 credit   ← 1 free day/mo
+    //      • 2% EASY PAY DISCOUNT             $4.20 credit   ← direct-debit %
+    //      • Online / Loyalty / Welcome / Referral / Promo  — anticipated
+    //
+    //    Multiple credits possible on one bill (Free Day + EASY PAY).
+    const creditLines = [...elec.matchAll(
+      /(?:Free\s+Power|EASY\s+PAY|Online\s+Discount|Loyalty|Welcome|Referral|Promo|Sign[- ]?up)[^\n]{0,80}?\$([\d,]+\.\d{2})\s*credit/gi
+    )];
+    if (creditLines.length && out.variable_charge_nzd != null) {
+      const creditTotal = creditLines.reduce((s, m) => s + parseNum(m[1]), 0);
+      out.variable_charge_nzd = +(out.variable_charge_nzd - creditTotal).toFixed(2);
+      out.raw_extracted_fields = {
+        ...(out.raw_extracted_fields || {}),
+        mercury_promo_credits_nzd:  +creditTotal.toFixed(2),
+        mercury_promo_credit_count: creditLines.length,
+      };
     }
 
     // ── Bill type detection ──
@@ -994,6 +1030,11 @@ const GENESIS = {
       if (fallback) out.variable_charge_nzd = parseNum(fallback[1]);
     }
 
+    // Genesis promotional discounts (Capricorn fleet bills) are applied at
+    // the end of this parse() below, AFTER GST extraction — moved there so we
+    // can adjust gst_nzd alongside variable_charge_nzd in one place. Search
+    // for "genesis_discounts" below.
+
     // ── Subtotal (excl GST) ──
     const subtotalMatch = elec.match(/Sub\s*Total[\s\S]{0,40}?([\d,]+\.\d{2})/i);
     if (subtotalMatch) out.subtotal_nzd = parseNum(subtotalMatch[1]);
@@ -1002,6 +1043,39 @@ const GENESIS = {
     const gstMatch = elec.match(/^\s*GST[\s\S]{0,40}?([\d,]+\.\d{2})/im)
                   || elec.match(/GST(?:\s*\(15%\))?[\s\S]{0,40}?\$?\s*([\d,]+\.\d{2})/i);
     if (gstMatch) out.gst_nzd = parseNum(gstMatch[1]);
+
+    // ── Genesis promotional discounts (genesis_discounts) ──
+    //    Capricorn (commercial fleet) bills print one or more discount lines
+    //    (eBill 1%, Dual Fuel 5%, Fixed Term 3%) that reduce the FINAL "TOTAL
+    //    CURRENT ELECTRICITY CHARGES (INCL GST & DISCOUNTS)" but are NOT
+    //    reflected in our fixed+variable+GST sum. The "Total Discounts …
+    //    (incl GST of X.XX cr) Y.YY cr" line aggregates them — we use it to
+    //    adjust both variable_charge_nzd AND gst_nzd so the line-item sum
+    //    AND the 15%-of-pretax GST check both pass.
+    //
+    //    Residential Genesis customers usually have no discounts (no-op).
+    //    Applied AFTER GST extraction so the GST regex doesn't overwrite our
+    //    adjustment.
+    const discountLine = elec.match(/Total\s+Discounts[^\n]{0,120}/i);
+    if (discountLine && out.variable_charge_nzd != null) {
+      const amounts = [...discountLine[0].matchAll(/([\d,]+\.\d{2})\s*cr/gi)].map(m => parseNum(m[1]));
+      const discountTotal = amounts.length ? amounts[amounts.length - 1] : 0;
+      const gstHint = discountLine[0].match(/incl\s+GST\s+of\s+([\d,]+\.\d{2})\s*cr/i);
+      const discountGstPortion = gstHint ? parseNum(gstHint[1]) : 0;
+      const discountExclGst    = +(discountTotal - discountGstPortion).toFixed(2);
+      if (discountTotal > 0) {
+        out.variable_charge_nzd = +(out.variable_charge_nzd - discountExclGst).toFixed(2);
+        if (out.gst_nzd != null && discountGstPortion > 0) {
+          out.gst_nzd = +(out.gst_nzd - discountGstPortion).toFixed(2);
+        }
+        out.raw_extracted_fields = {
+          ...(out.raw_extracted_fields || {}),
+          genesis_discounts_total_nzd:    discountTotal,
+          genesis_discounts_excl_gst_nzd: discountExclGst,
+          genesis_discounts_gst_nzd:      discountGstPortion,
+        };
+      }
+    }
 
     if (out.period_start && out.period_end) {
       out.days_in_period = daysBetween(out.period_start, out.period_end);
@@ -1358,6 +1432,207 @@ const PULSE = {
   },
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Ecotricity Limited Partnership — climate-positive certified retailer.
+//
+// Bill structure (Feb 2025 – Mar 2026 sample set, 12 bills):
+//   ╔═ HEADER ═══════════════════════════════════════════════════════════╗
+//   ║ "Tax Invoice Statement" + GST NUMBER 118-644-530                   ║
+//   ║ "bring.change@ecotricity.co.nz" / "www.ecotricity.co.nz"           ║
+//   ║ "Summary Statement/Invoice No: NNNNNNNN  Issue Date: DD MMM YYYY"  ║
+//   ║ Opening Balance / Payment Received / Balance Before This Period    ║
+//   ║ "Total Amount Due  $X.XX"  ← INCLUDES opening balance — DO NOT USE ║
+//   ║ "Electricity charges                $82.43"   ← excl GST           ║
+//   ║ "GST on this Period's Charges       $12.36"                        ║
+//   ║ "Total Charges for this Period      $94.79"   ← THIS PERIOD INCL GST║
+//   ║ "Late Payment Fee if paid after …   $14.22"   ← conditional, IGNORE║
+//   ╚════════════════════════════════════════════════════════════════════╝
+//   ╔═ DETAIL PAGE 2 ════════════════════════════════════════════════════╗
+//   ║ "Energy Used and Charges for                                       ║
+//   ║  75 MAHIA ROAD, AUCKLAND                                           ║
+//   ║  ICP 0405452683LC6F6 from 01 Feb 2025 to 28 Feb 2025               ║
+//   ║  Price Plan: VECT_ANY_LOW_LSSO_240401_T1"                          ║
+//   ║                                                                    ║
+//   ║ Network Charges [Vector]                                           ║
+//   ║   Peak Usage          NN kWh  0.0378 $/kWh   $1.96                 ║
+//   ║   Off Peak Usage     NN kWh  0.0378 $/kWh   $5.71                  ║
+//   ║   VECT + Daily       28 days @ 0.6 $/day    $16.80   ← fixed       ║
+//   ║   Transmission       NN kWh  0.0235 $/kWh   $4.76                  ║
+//   ║   Total Network Charges                     $29.23                 ║
+//   ║                                                                    ║
+//   ║ Energy Charges                                                     ║
+//   ║   Low ecoANYTIME    NN kWh   0.1781 $/kWh   $36.10                 ║
+//   ║   Total Energy Charges                      $36.10                 ║
+//   ║                                                                    ║
+//   ║ Other Charges                                                      ║
+//   ║   ELEC AUTH Levy    NN kWh   0.0015 $/kWh   $0.30   ← variable     ║
+//   ║   Metering          28 days @ 0.3 $/day     $8.40   ← fixed        ║
+//   ║   Admin & climate   28 days @ 0.3 $/day     $8.40   ← fixed        ║
+//   ║   Total Other Charges                       $17.10                 ║
+//   ║                                                                    ║
+//   ║ Total Charges                               $82.43   (excl GST)    ║
+//   ╚════════════════════════════════════════════════════════════════════╝
+//
+// Pitfalls (Pulse-style bugs we explicitly avoid):
+//   • "Total Amount Due" is NET of opening balance + late fee — DO NOT use as
+//     total_nzd. Use "Total Charges for this Period" instead (this-period gross).
+//   • Late payment fee ("Late Payment Fee if paid after…") is conditional —
+//     it's NOT actually charged unless the customer is late, so exclude it.
+//   • Three separate daily-charge rows (VECT Daily, Metering, Admin) must all
+//     be summed for fixed_charge_nzd, OR sales will get an inflated payback.
+//   • Five separate per-kWh rows (Peak, Off-Peak, Transmission, ecoANYTIME,
+//     EA Levy) all contribute to variable_charge_nzd.
+//   • Distributor name appears in brackets after "Network Charges" — e.g.
+//     "Network Charges [Vector]" or "Network Charges [Counties Energy]".
+// ═══════════════════════════════════════════════════════════════════════════
+const ECOTRICITY = {
+  name: 'Ecotricity',
+  match: (t) => /\becotricity\b/i.test(t)
+             || /\becotricity\.co\.nz\b/i.test(t)
+             || /\bbring\.change@ecotricity\b/i.test(t)
+             || /Ecotricity\s+Limited\s+Partnership/i.test(t),
+  parse: (t) => {
+    const errors = [];
+    const out = { retailer: 'Ecotricity', plan_name: null };
+
+    // ── Plan name — Ecotricity uses the energy-line label as the plan ──
+    // Examples: "Low ecoANYTIME", "Standard ecoANYTIME", "ecoSAVER"
+    const planMatch = t.match(/(Low|Standard|High)\s+(eco[A-Z][A-Za-z]+)/)
+                  || t.match(/(eco[A-Z][A-Za-z]+)/);
+    if (planMatch) out.plan_name = planMatch[0].trim();
+
+    // ── Billing period — "ICP 0405452683LC6F6 from 01 Feb 2025 to 28 Feb 2025" ──
+    // The "ICP … from … to …" pattern is the most reliable anchor; the bill
+    // also has an "Analysis Period:" line we use as fallback.
+    const periodMatch = pickFirst(t, [
+      /ICP\s+[A-Z0-9]+\s+from\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i,
+      /Analysis\s+Period:?\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i,
+      /(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/,
+    ]);
+    if (periodMatch) {
+      out.period_start = parseDate(periodMatch[1]);
+      out.period_end   = parseDate(periodMatch[2]);
+    } else errors.push({ field: 'period', reason: 'Could not find billing period dates' });
+
+    // ── Total kWh — "Electricity delivered this period 684.074 kWh" ──
+    // This is the most reliable single figure; the per-row kWh values (Peak +
+    // Off-Peak) sum to the same number but we use this line for simplicity.
+    const kwhMatch = pickFirst(t, [
+      /Electricity\s+delivered\s+this\s+period\s+([\d,]+(?:\.\d+)?)\s*kWh/i,
+      /([\d,]+(?:\.\d+)?)\s*kWh\s+delivered/i,
+    ]);
+    if (kwhMatch) {
+      out.kwh_total = parseNum(kwhMatch[1]);
+    } else errors.push({ field: 'kwh_total', reason: 'kWh total not found' });
+
+    // ── Peak / Off-peak split — useful for TOU validation ──
+    const peakMatch    = t.match(/Peak\s+Usage\s+([\d,]+(?:\.\d+)?)\s*kWh/i);
+    const offPeakMatch = t.match(/Off\s+Peak\s+Usage\s+([\d,]+(?:\.\d+)?)\s*kWh/i);
+    if (peakMatch)    out.kwh_peak     = parseNum(peakMatch[1]);
+    if (offPeakMatch) out.kwh_off_peak = parseNum(offPeakMatch[1]);
+
+    // ── Variable charge — sum ALL per-kWh rows (Peak + Off-Peak +
+    //    Transmission + Energy + EA Levy). Recognised by the "N kWh  R $/kWh
+    //    $X.XX" three-column layout. Constrain each match to a single line
+    //    so adjacent rows can't conflate.
+    const variableRows = [
+      /Peak\s+Usage[^\n]*?\$([\d,]+\.\d{2})/i,
+      /Off\s+Peak\s+Usage[^\n]*?\$([\d,]+\.\d{2})/i,
+      /Transmission\s+Charges[^\n]*?\$([\d,]+\.\d{2})/i,
+      /(?:Low|Standard|High)?\s*eco[A-Za-z]+[^\n]*?[\d,]+\s*kWh[^\n]*?\$([\d,]+\.\d{2})/i,
+      /ELECTRICITY\s+AUTHORITY\s+Levy[^\n]*?\$([\d,]+\.\d{2})/i,
+    ];
+    let variableTotal = 0;
+    for (const re of variableRows) {
+      const m = t.match(re);
+      if (m) variableTotal += parseNum(m[1]) || 0;
+    }
+    if (variableTotal > 0) out.variable_charge_nzd = +variableTotal.toFixed(2);
+
+    // ── Fixed charge — sum of "N days @ R $ per day $X.XX" rows.
+    //    Three such rows on every Ecotricity bill: VECT Daily, Metering daily,
+    //    Admin & climate positive certification.
+    const dayRows = [...t.matchAll(/\d+\s+days?\s+@\s+[\d.]+\s+\$\s+per\s+day\s+\$([\d,]+\.\d{2})/gi)];
+    if (dayRows.length) {
+      out.fixed_charge_nzd = +dayRows.reduce((s, m) => s + parseNum(m[1]), 0).toFixed(2);
+    }
+
+    // ── Total + GST — positional extraction from the summary block ──
+    // CRITICAL: do NOT use "Total Amount Due" — that's net of opening balance
+    // + payment received, and can be wildly different from the actual period
+    // charge (often negative when the customer paid early).
+    //
+    // Ecotricity's header section lays out labels and amounts in TWO separate
+    // column blocks (PDF column ordering, then flattened to text). The three
+    // labels appear consecutively followed by the three amounts in the same
+    // order:
+    //   "Electricity charges"          → first  $   = subtotal (excl GST)
+    //   "GST on this Period's Charges" → second $   = gst_nzd
+    //   "Total Charges for this Period"→ third  $   = total_nzd (incl GST)
+    //
+    // We anchor the block start at "Electricity charges" (or the alternative
+    // "Total Amount Due" header above it) and end it at "Due Date" — gives
+    // us a bounded window inside which the THREE $-amounts must appear.
+    const summaryBlock = pickFirst(t, [
+      /Electricity\s+charges[\s\S]*?Total\s+Charges\s+for\s+this\s+Period([\s\S]{0,200}?)Due\s+Date/i,
+      /Total\s+Charges\s+for\s+this\s+Period([\s\S]{0,200}?)Due\s+Date/i,
+    ]);
+    if (summaryBlock) {
+      const amounts = [...summaryBlock[1].matchAll(/\$([\d,]+\.\d{2})/g)].map(m => parseNum(m[1]));
+      // The block sits AFTER all 3 labels, so we capture only amounts
+      // that follow. Expected: [subtotal, gst, total]
+      if (amounts.length >= 3) {
+        out.total_nzd = amounts[2];
+        out.gst_nzd   = amounts[1];
+        out.raw_extracted_fields = {
+          ...(out.raw_extracted_fields || {}),
+          electricity_charges_excl_gst_header_nzd: amounts[0],
+        };
+      } else if (amounts.length === 2) {
+        // Some bills have GST + total but no separate electricity-charges line
+        out.total_nzd = amounts[1];
+        out.gst_nzd   = amounts[0];
+      } else if (amounts.length === 1) {
+        out.total_nzd = amounts[0];
+      }
+    }
+    // Fallback when the positional approach finds nothing — try a same-line
+    // pattern in case some bills DO inline the amounts with their labels.
+    if (out.total_nzd == null) {
+      const inlineTotal = t.match(/Total\s+Charges\s+for\s+this\s+Period[^\n$]*?\$([\d,]+\.\d{2})/i);
+      if (inlineTotal) out.total_nzd = parseNum(inlineTotal[1]);
+    }
+    if (out.gst_nzd == null) {
+      const inlineGst = t.match(/GST\s+on\s+this\s+Period[^\n$]*?\$([\d,]+\.\d{2})/i);
+      if (inlineGst) out.gst_nzd = parseNum(inlineGst[1]);
+    }
+    if (out.total_nzd == null) {
+      errors.push({ field: 'total_nzd', reason: 'Total this-period amount not found' });
+    }
+
+    // ── Pre-GST subtotal — "Total Charges $82.43" (rare placement: end of
+    //    breakdown table, after Total Other Charges). Helps the validator
+    //    cross-check (subtotal + GST should equal total this period).
+    const subtotalMatch = t.match(/Total\s+Charges\s+\$([\d,]+\.\d{2})(?!\s+for\s+this\s+Period)/i);
+    if (subtotalMatch) {
+      const subtotal = parseNum(subtotalMatch[1]);
+      out.raw_extracted_fields = {
+        ...(out.raw_extracted_fields || {}),
+        ecotricity_subtotal_excl_gst_nzd: subtotal,
+      };
+    }
+
+    // ── Days in period — derive from dates (Ecotricity confirms in its
+    //    "N days @" rows but we use the date math as the source of truth).
+    if (out.period_start && out.period_end) {
+      out.days_in_period = daysBetween(out.period_start, out.period_end);
+    }
+
+    out.parse_errors = errors;
+    return out;
+  },
+};
+
 const POWERSHOP = {
   name: 'Powershop',
   match: (t) => /\bpowershop\b/i.test(t),
@@ -1426,7 +1701,7 @@ const GENERIC = {
   },
 };
 
-const RETAILERS = [MERCURY, GENESIS, CONTACT, PULSE, MERIDIAN, POWERSHOP];
+const RETAILERS = [MERCURY, GENESIS, CONTACT, PULSE, ECOTRICITY, MERIDIAN, POWERSHOP];
 
 // Also export a function to parse from already-extracted text (useful for
 // testing without real PDFs and for systems where text extraction happens
