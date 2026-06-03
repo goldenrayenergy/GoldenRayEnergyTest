@@ -70,6 +70,117 @@ const TEXT_FALLBACK_THRESHOLD = 600;
 // 1-3 pages; the meaningful data is on page 2.
 const MAX_OCR_PAGES = 4;
 
+// ── Public entry point: image OCR (for camera-captured bill photos) ──────
+//
+// Mobile camera capture flow: customer snaps a photo of their bill, we OCR
+// the image directly with Tesseract.js, then feed the extracted text into
+// the same retailer-detection + parsing pipeline as PDF bills.
+//
+// NOTE: this path does NOT trigger the pdfjs version conflict that disables
+// the pdf-to-png OCR fallback — we feed raw image bytes straight to Tesseract,
+// no pdfjs involvement. So image OCR works regardless of OCR_ENABLED.
+export async function parseBillImage(buffer, { fileName, mimeType } = {}) {
+  if (!buffer || buffer.length === 0) {
+    throw new Error('Empty image buffer');
+  }
+
+  // Sanity-check the bytes actually look like an image before invoking Tesseract.
+  // Tesseract throws an UNCATCHABLE worker-thread error if you feed it a PDF
+  // (or other non-image bytes), which crashes the Node process on Windows.
+  // Cheap guard: check magic bytes for the formats we accept.
+  const isImage = (
+    (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF)            ||  // JPEG
+    (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) || // PNG
+    (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) || // RIFF/WebP
+    (buffer.slice(4, 12).toString() === 'ftypheic' || buffer.slice(4, 12).toString() === 'ftypheix')   // HEIC
+  );
+  if (!isImage) {
+    return makeEmptyBill({
+      ocr_text_excerpt: '',
+      ocr_confidence:   0,
+      parse_method:     'failed',
+      parse_errors:     [{ field: 'all', reason: `File does not appear to be an image (magic bytes: ${buffer.slice(0, 4).toString('hex')}). Only JPEG/PNG/WebP/HEIC are supported.` }],
+      file_name:        fileName || null,
+      file_size_bytes:  buffer.length,
+    });
+  }
+
+  // Run Tesseract on the image bytes directly
+  let text = '';
+  let tessConfidence = 0;
+  try {
+    const tesseract = await import('tesseract.js');
+    const worker = await tesseract.createWorker('eng', undefined, { logger: () => {} });
+    try {
+      const { data } = await worker.recognize(buffer);
+      text = data.text || '';
+      tessConfidence = (data.confidence || 0) / 100;   // tesseract reports 0-100
+    } finally {
+      await worker.terminate();
+    }
+  } catch (e) {
+    return makeEmptyBill({
+      ocr_text_excerpt: '',
+      ocr_confidence:   0,
+      parse_method:     'failed',
+      parse_errors:     [{ field: 'all', reason: `Image OCR failed: ${e.message}` }],
+      file_name:        fileName || null,
+      file_size_bytes:  buffer.length,
+    });
+  }
+
+  if (!text.trim()) {
+    return makeEmptyBill({
+      ocr_text_excerpt: '',
+      ocr_confidence:   0,
+      parse_method:     'failed',
+      parse_errors:     [{ field: 'all', reason: 'Image OCR returned no text. Photo may be blurry, low-resolution, or poorly lit.' }],
+      file_name:        fileName || null,
+      file_size_bytes:  buffer.length,
+    });
+  }
+
+  // Re-use the same retailer detection + parsing as PDFs
+  const retailer = RETAILERS.find(r => r.match(text)) || GENERIC;
+  let parsed;
+  try {
+    parsed = retailer.parse(text);
+  } catch (e) {
+    parsed = { parse_errors: [{ field: 'all', reason: `Parser threw: ${e.message}` }] };
+  }
+
+  // Cross-retailer extraction + validators — same path as parseBillPdf
+  const enriched = enrichWithCrossRetailerFields(parsed, text);
+  const parse_warnings = runCrossFieldValidators(enriched);
+
+  // Lower-bound confidence by Tesseract's own confidence so the review gate
+  // catches blurry/dark photos. A "100% complete" parse from a 30%-confidence
+  // OCR is still suspect.
+  const completenessConf = estimateConfidence(enriched);
+  const combinedConfidence = Math.min(completenessConf, tessConfidence);
+
+  return {
+    ...makeEmptyBill(),
+    ...enriched,
+    retailer:            enriched.retailer || retailer.name,
+    ocr_text_excerpt:    text.slice(0, 4000),
+    ocr_text_full:       text,
+    ocr_confidence:      +combinedConfidence.toFixed(3),
+    field_confidence:    computeFieldConfidence(enriched),
+    parse_method:        'image_ocr',
+    parse_errors:        enriched.parse_errors || [],
+    parse_warnings,
+    parse_suspect:       parse_warnings.some(w => w.suspect === true),
+    raw_extracted_fields: {
+      ...(enriched.raw_extracted_fields || {}),
+      _tesseract_confidence: +tessConfidence.toFixed(3),
+      _mime_type:            mimeType || null,
+    },
+    file_name:           fileName || null,
+    file_size_bytes:     buffer.length,
+  };
+}
+
 // ── Public entry point ────────────────────────────────────────────────────
 
 export async function parseBillPdf(buffer, { fileName } = {}) {
@@ -134,16 +245,27 @@ export async function parseBillPdf(buffer, { fileName } = {}) {
     parsed = { parse_errors: [{ field: 'all', reason: `Parser threw: ${e.message}` }] };
   }
 
+  // ── Stage 4: cross-retailer field extraction + cross-field validators ──
+  // Same logic runs from parseBillText() and parseBillImage() — extracted to
+  // shared helpers so the validator gate fires regardless of upload format.
+  const enriched = enrichWithCrossRetailerFields(parsed, text);
+  const parse_warnings = runCrossFieldValidators(enriched);
+
   return {
     ...makeEmptyBill(),
-    ...parsed,
-    retailer:         parsed.retailer || retailer.name,
-    ocr_text_excerpt: text.slice(0, 4000),
-    ocr_confidence:   estimateConfidence(parsed),
-    parse_method:     parseMethod,                // 'text' | 'ocr'
-    parse_errors:     parsed.parse_errors || [],
-    file_name:        fileName || null,
-    file_size_bytes:  buffer.length,
+    ...enriched,
+    retailer:            enriched.retailer || retailer.name,
+    ocr_text_excerpt:    text.slice(0, 4000),
+    ocr_text_full:       text,                       // promoted in migration 025
+    ocr_confidence:      estimateConfidence(enriched),
+    field_confidence:    computeFieldConfidence(enriched),
+    parse_method:        parseMethod,                // 'text' | 'ocr'
+    parse_errors:        enriched.parse_errors || [],
+    parse_warnings,
+    parse_suspect:       parse_warnings.some(w => w.suspect === true),
+    raw_extracted_fields: enriched.raw_extracted_fields || {},
+    file_name:           fileName || null,
+    file_size_bytes:     buffer.length,
   };
 }
 
@@ -209,9 +331,27 @@ function makeEmptyBill(overrides = {}) {
     export_credit_nzd: null,
     gst_nzd: null,
     total_nzd: null,
+    annual_kwh_rolling: null,
+    // ── v2 (migration 025) fields ──
+    service_address: null,
+    service_postcode: null,           // 4-digit NZ postcode (drives region resolution)
+    icp_number: null,                 // NZ Installation Control Point
+    network_distributor: null,        // Vector / Counties / Powerco / etc.
+    tariff_components: [],            // per-rate breakdown if TOU/free-hours plan
+    payment_date: null,
+    due_date: null,
+    raw_extracted_fields: {},         // catch-all for fields no current consumer asks for
+    ocr_text_full: '',                // full text — supersedes ocr_text_excerpt for new code
+    field_confidence: {},             // per-field 0.0-1.0 confidence
+    parse_method: null,               // 'text' | 'ocr' | 'failed'
+    bill_type: 'single_rate',         // single_rate | multi_rate | tou | free_hours | dual_fuel
+    rate_rows: { fixed: 0, variable: 0 },  // # of rate-rows found per category
+    // ── existing fields kept for back-compat ──
     ocr_confidence: 0,
     ocr_text_excerpt: '',
     parse_errors: [],
+    parse_warnings: [],
+    parse_suspect: false,
     ...overrides,
   };
 }
@@ -265,6 +405,341 @@ function daysBetween(startStr, endStr) {
   return Math.max(1, Math.round((end - start) / 86400000) + 1);
 }
 
+// ── Cross-retailer extractors (v2 — migration 025) ────────────────────────
+//
+// These run on the raw text after the retailer-specific parser, so they
+// populate fields the retailer parsers don't extract today (address, ICP,
+// distributor). They're conservative: extract only if a high-confidence
+// pattern matches, else leave null.
+
+// NZ ICP format: 10-15 alphanumeric chars, sometimes with hyphens.
+// Reference: Electricity Authority ICP standard.
+function extractICP(text) {
+  if (!text) return null;
+  const m = text.match(/\b(?:ICP(?:\s+Number|\s+No\.?|\s*#)?[\s:]*|installation\s+control\s+point[\s:]*)([0-9A-Z]{7,15}(?:-?[0-9A-Z]{1,3})?)/i);
+  if (m) return m[1].toUpperCase();
+  // Fallback: a standalone 10-13 digit string near an "ICP" keyword on the same line
+  const m2 = text.match(/ICP[^\n]{0,40}?([0-9]{10,13})/i);
+  if (m2) return m2[1];
+  return null;
+}
+
+// Extract service / supply address. Look for labelled sections first, then
+// fall back to "X Street, Suburb, City PostCode" pattern near the top.
+function extractServiceAddress(text) {
+  if (!text) return null;
+  // Labelled sections — covers most retailers' explicit "Service address:" labels
+  const labelled = text.match(
+    /(?:Service|Supply|Site|Premises?|Property|Connection)\s+address[\s:]+\s*([^\n]{8,200})/i
+  );
+  if (labelled) return labelled[1].trim().replace(/\s+/g, ' ').slice(0, 300);
+  // Pulse Energy format: "Detailed invoice for: 356 UPPER QUEEN STREET, PUKEKOHE"
+  const pulseStyle = text.match(/Detailed\s+invoice\s+for[\s:]+\s*([^\n]{8,200})/i);
+  if (pulseStyle) return pulseStyle[1].trim().replace(/\s+/g, ' ').slice(0, 300);
+  // Mercury / Contact / Genesis sometimes use "for the period ... at <address>"
+  const periodAtStyle = text.match(/for\s+the\s+period[\s\S]{0,80}?at[\s:]+\s*([^\n]{8,200})/i);
+  if (periodAtStyle) return periodAtStyle[1].trim().replace(/\s+/g, ' ').slice(0, 300);
+  // Fallback: a line that looks like a NZ postal address (ends with 4-digit postcode)
+  const generic = text.match(/^([0-9A-Za-z\/].{8,150}?,\s*[A-Za-z][A-Za-z\s]+(?:,\s*[A-Za-z][A-Za-z\s]+)?\s+\d{4})\s*$/m);
+  if (generic) return generic[1].trim().replace(/\s+/g, ' ').slice(0, 300);
+  // Last-ditch: a free-standing line of the form "<NUMBER> <STREETNAME>, <SUBURB> <POSTCODE>"
+  // (Pulse mailing address style — no comma between street and suburb)
+  const looseNz = text.match(/^(\d+[A-Za-z]?\/?\d*\s+[A-Z][A-Z\s']+\s+(?:ROAD|RD|STREET|ST|AVENUE|AVE|DRIVE|DR|LANE|LN|PLACE|PL|COURT|CT|HIGHWAY|HWY|TERRACE|TER|CRESCENT|CRES|WAY|CLOSE)[\s,]+[A-Z][A-Z\s']+\s+\d{4})$/im);
+  if (looseNz) return looseNz[1].trim().replace(/\s+/g, ' ').slice(0, 300);
+  return null;
+}
+
+// NZ postcodes are 4-digit. Pull from the address if present.
+function extractPostcode(address) {
+  if (!address) return null;
+  const m = String(address).match(/\b(\d{4})\b(?!\d)/);
+  return m ? m[1] : null;
+}
+
+// Network distributor — usually printed on the bill as the lines-company name.
+// EA-registered EDBs in NZ that customers actually see on bills:
+const DISTRIBUTORS = [
+  { name: 'Vector',          regex: /\bvector\b/i },
+  // Counties Energy (rebranded 2018 from Counties Power); Pulse + some retailers
+  // still print the old name in plan titles. Match both → canonical "Counties Energy".
+  { name: 'Counties Energy', regex: /\bcounties\s+(?:energy|power)\b/i },
+  { name: 'Northpower',      regex: /\bnorthpower\b/i },
+  { name: 'WEL Networks',    regex: /\bwel\s+networks\b/i },
+  { name: 'Powerco',         regex: /\bpowerco\b/i },
+  { name: 'Wellington Electricity', regex: /\bwellington\s+electricity\b/i },
+  { name: 'Unison',          regex: /\bunison\b/i },
+  { name: 'Aurora Energy',   regex: /\baurora\s+energy\b/i },
+  { name: 'Orion',           regex: /\borion\b.*\bnetwork/i },
+  { name: 'Top Energy',      regex: /\btop\s+energy\b/i },
+  { name: 'Network Tasman',  regex: /\bnetwork\s+tasman\b/i },
+  { name: 'Buller Electricity', regex: /\bbuller\s+electricity\b/i },
+  { name: 'EA Networks',     regex: /\bea\s+networks\b/i },
+  { name: 'MainPower',       regex: /\bmainpower\b/i },
+  { name: 'Marlborough Lines', regex: /\bmarlborough\s+lines\b/i },
+  { name: 'Nelson Electricity', regex: /\bnelson\s+electricity\b/i },
+  { name: 'Network Waitaki', regex: /\bnetwork\s+waitaki\b/i },
+  { name: 'OtagoNet',        regex: /\botagonet\b/i },
+  { name: 'PowerNet',        regex: /\bpowernet\b/i },
+  { name: 'The Lines Company', regex: /\bthe\s+lines\s+company\b/i },
+  { name: 'Westpower',       regex: /\bwestpower\b/i },
+];
+function extractDistributor(text) {
+  if (!text) return null;
+  for (const d of DISTRIBUTORS) {
+    if (d.regex.test(text)) return d.name;
+  }
+  return null;
+}
+
+// ── Per-field confidence (rule 3.15, 13.1) ────────────────────────────────
+//
+// Each field gets a 0.0-1.0 confidence based on:
+//   - Whether the value is present (null → 0)
+//   - Whether the source pattern was high-precision (labelled) vs heuristic
+//   - Whether the value passed sanity bounds
+//
+// We don't have per-field provenance in the existing parsers (they just
+// regex + assign), so this is a coarse approximation. Future work: parsers
+// could return { value, source, confidence } per field. For now, infer from
+// presence + value reasonableness.
+
+function fieldConfidenceFor(field, value, parsed) {
+  if (value == null || value === '') return 0;
+
+  // Field-specific sanity bounds. Values that fall inside the realistic NZ
+  // residential range get 1.0; values outside get 0.5 (present but suspect).
+  switch (field) {
+    case 'period_start':
+    case 'period_end': {
+      // Must be a valid ISO date in the last 30 years
+      const d = new Date(value + 'T00:00:00Z');
+      if (isNaN(d)) return 0;
+      const ageDays = (Date.now() - d.getTime()) / 86400000;
+      return ageDays >= 0 && ageDays <= 365 * 30 ? 1.0 : 0.4;
+    }
+    case 'days_in_period':
+      return value > 0 && value <= 95 ? 1.0 : 0.4;
+    case 'kwh_total':
+      return value >= 0 && value <= 20000 ? 1.0 : 0.4;
+    case 'total_nzd':
+      return value >= 0 && value <= 50000 ? 1.0 : 0.4;
+    case 'gst_nzd': {
+      const preTax = (parsed.fixed_charge_nzd || 0) + (parsed.variable_charge_nzd || 0);
+      if (preTax > 0 && value > 0) {
+        const expected = preTax * 0.15;
+        const drift = Math.abs(value - expected) / preTax;
+        return drift < 0.01 ? 1.0 : drift < 0.03 ? 0.7 : 0.3;
+      }
+      return value > 0 ? 0.7 : 0;
+    }
+    case 'fixed_charge_nzd':
+    case 'variable_charge_nzd':
+      return value >= 0 && value <= 5000 ? 1.0 : 0.4;
+    case 'icp_number':
+      return /^[0-9A-Z]{10,15}(-[0-9A-Z]{1,3})?$/.test(String(value)) ? 1.0 : 0.5;
+    case 'service_postcode':
+      return /^\d{4}$/.test(String(value)) ? 1.0 : 0.3;
+    case 'service_address':
+      return String(value).length >= 8 && /\d/.test(String(value)) ? 0.8 : 0.4;
+    case 'network_distributor':
+      return DISTRIBUTORS.some(d => d.name === value) ? 1.0 : 0.5;
+    case 'retailer':
+    case 'plan_name':
+      return 1.0;
+    default:
+      return value != null ? 0.7 : 0;
+  }
+}
+
+function computeFieldConfidence(parsed) {
+  const fields = [
+    'retailer', 'plan_name',
+    'period_start', 'period_end', 'days_in_period',
+    'kwh_total', 'kwh_peak', 'kwh_off_peak', 'kwh_exported',
+    'fixed_charge_nzd', 'variable_charge_nzd', 'export_credit_nzd', 'gst_nzd', 'total_nzd',
+    'service_address', 'service_postcode', 'icp_number', 'network_distributor',
+  ];
+  const out = {};
+  for (const f of fields) {
+    out[f] = +fieldConfidenceFor(f, parsed[f], parsed).toFixed(3);
+  }
+  return out;
+}
+
+// ── Shared cross-field validators (v2 — was inline in parseBillText, now ──
+// shared so parseBillPdf + parseBillImage also run them). Returns an array
+// of `{field, code, reason, suspect}`. Suspect:true entries trip the review
+// gate in billAnalysisService.computeReviewGate.
+function runCrossFieldValidators(parsed) {
+  const parse_warnings = [];
+
+  // (1) kWh-vs-total: kWh × 25¢/kWh blended should be ≥ 30% of bill total
+  if (parsed.kwh_total != null && parsed.total_nzd != null && parsed.total_nzd > 0) {
+    const impliedSpendFromKwh = parsed.kwh_total * 0.25;
+    const ratio = impliedSpendFromKwh / parsed.total_nzd;
+    if (ratio < 0.30) {
+      parse_warnings.push({
+        field: 'kwh_total',
+        code:  'kwh_low_vs_total',
+        reason: `kWh (${parsed.kwh_total}) looks low vs total ($${parsed.total_nzd}). At ~25¢/kWh blended this would be ~$${impliedSpendFromKwh.toFixed(0)} — only ${(ratio*100).toFixed(0)}% of the bill. Likely a multi-rate row was missed.`,
+        suspect: true,
+      });
+    }
+  }
+
+  // (2) Extrapolation-vs-rolling: bill's own annual total vs our extrapolation
+  if (parsed.kwh_total && parsed.annual_kwh_rolling && parsed.days_in_period) {
+    const extrapolated = parsed.kwh_total * (365 / parsed.days_in_period);
+    if (extrapolated > parsed.annual_kwh_rolling * 1.8) {
+      parse_warnings.push({
+        field: 'kwh_total',
+        code:  'kwh_double_count_suspect',
+        reason: `kWh extrapolated to ~${Math.round(extrapolated)}/yr but bill says rolling 365 days = ${parsed.annual_kwh_rolling}. Possible double-count.`,
+        suspect: true,
+      });
+    }
+  }
+
+  // (3) Line items must sum to total within $1 (rules 4.5, 4.6, 4.10)
+  if (parsed.total_nzd != null) {
+    const fixed = parsed.fixed_charge_nzd    || 0;
+    const variable = parsed.variable_charge_nzd || 0;
+    const gst = parsed.gst_nzd               || 0;
+    const exportCred = parsed.export_credit_nzd || 0;
+    const sumInclGst = fixed + variable + gst - exportCred;
+    const sumExclGst = fixed + variable        - exportCred;
+    const driftA = Math.abs(sumInclGst - parsed.total_nzd);
+    const driftB = Math.abs(sumExclGst - parsed.total_nzd);
+    if (driftA > 1 && driftB > 1 && (fixed > 0 || variable > 0)) {
+      parse_warnings.push({
+        field: 'total_nzd',
+        code:  'line_items_dont_sum',
+        reason: `Line items don't sum to total. Fixed $${fixed.toFixed(2)} + Variable $${variable.toFixed(2)} ${gst ? `+ GST $${gst.toFixed(2)} ` : ''}${exportCred ? `− Export $${exportCred.toFixed(2)} ` : ''}= $${sumInclGst.toFixed(2)}, but bill total is $${parsed.total_nzd.toFixed(2)} (drift $${driftA.toFixed(2)}).`,
+        suspect: true,
+      });
+    }
+  }
+
+  // (4) GST must be ~15% of pre-tax subtotal (rule 4.6)
+  if (parsed.gst_nzd != null && parsed.gst_nzd > 0) {
+    const preTax = (parsed.fixed_charge_nzd || 0) + (parsed.variable_charge_nzd || 0);
+    if (preTax > 0) {
+      const expected = preTax * 0.15;
+      const drift = Math.abs(parsed.gst_nzd - expected);
+      const tol = Math.max(0.5, preTax * 0.01);
+      if (drift > tol) {
+        parse_warnings.push({
+          field: 'gst_nzd',
+          code:  'gst_not_15pct',
+          reason: `GST $${parsed.gst_nzd.toFixed(2)} ≠ 15% of pre-tax $${preTax.toFixed(2)} (expected ~$${expected.toFixed(2)}, drift $${drift.toFixed(2)}). Parser may be missing a variable-charge component.`,
+          suspect: true,
+        });
+      }
+    }
+  }
+
+  // (5) Billing dates: end > start, stated days match computed days (rules 4.2, 4.3)
+  if (parsed.period_start && parsed.period_end) {
+    const start = new Date(parsed.period_start + 'T00:00:00Z');
+    const end   = new Date(parsed.period_end   + 'T00:00:00Z');
+    if (!isNaN(start) && !isNaN(end)) {
+      if (end <= start) {
+        parse_warnings.push({
+          field: 'period_end',
+          code:  'end_before_start',
+          reason: `Billing end ${parsed.period_end} is not after start ${parsed.period_start}.`,
+          suspect: true,
+        });
+      }
+      if (parsed.days_in_period) {
+        const computed = Math.round((end - start) / 86400000) + 1;
+        if (Math.abs(computed - parsed.days_in_period) > 1) {
+          parse_warnings.push({
+            field: 'days_in_period',
+            code:  'days_mismatch',
+            reason: `Stated days_in_period=${parsed.days_in_period} but ${parsed.period_start} → ${parsed.period_end} = ${computed} days.`,
+            suspect: true,
+          });
+        }
+      }
+    }
+  }
+
+  // (6) Non-negative invariants (rules 4.4, 4.5)
+  for (const [field, value] of Object.entries({
+    kwh_total: parsed.kwh_total, kwh_peak: parsed.kwh_peak,
+    kwh_off_peak: parsed.kwh_off_peak, kwh_exported: parsed.kwh_exported,
+    fixed_charge_nzd: parsed.fixed_charge_nzd, variable_charge_nzd: parsed.variable_charge_nzd,
+    gst_nzd: parsed.gst_nzd, total_nzd: parsed.total_nzd,
+  })) {
+    if (value != null && value < 0) {
+      parse_warnings.push({
+        field, code: 'negative_value',
+        reason: `${field} is negative (${value}) — should never be < 0.`,
+        suspect: true,
+      });
+    }
+  }
+
+  // (7) Bill-type-aware structural checks
+  switch (parsed.bill_type) {
+    case 'multi_rate': {
+      const rows = parsed.rate_rows || { fixed: 0, variable: 0 };
+      if (rows.fixed >= 2 && rows.variable < 2) {
+        parse_warnings.push({
+          field: 'rate_rows', code: 'multi_rate_variable_undercount',
+          reason: `Detected ${rows.fixed} fixed-charge rows but only ${rows.variable} variable-charge row(s). Multi-rate bills usually split both — variable parser may have missed a row.`,
+          suspect: true,
+        });
+      }
+      if (rows.variable >= 2 && rows.fixed < 2) {
+        parse_warnings.push({
+          field: 'rate_rows', code: 'multi_rate_fixed_undercount',
+          reason: `Detected ${rows.variable} variable-charge rows but only ${rows.fixed} fixed-charge row(s). Multi-rate bills usually split both — fixed parser may have missed a row.`,
+          suspect: true,
+        });
+      }
+      break;
+    }
+    case 'tou': {
+      const peakSum = (parsed.kwh_peak || 0) + (parsed.kwh_off_peak || 0);
+      if (parsed.kwh_total && peakSum > 0 && Math.abs(peakSum - parsed.kwh_total) > 1) {
+        parse_warnings.push({
+          field: 'kwh_total', code: 'tou_kwh_dont_sum',
+          reason: `TOU peak (${parsed.kwh_peak}) + off-peak (${parsed.kwh_off_peak}) = ${peakSum} ≠ stated total ${parsed.kwh_total}.`,
+          suspect: true,
+        });
+      }
+      break;
+    }
+    case 'free_hours': {
+      parse_warnings.push({
+        field: 'bill_type', code: 'free_hours_partial_billing',
+        reason: 'Free-hours plan detected — some kWh billed at $0. Sales should verify the free-window kWh on first call.',
+        suspect: false,
+      });
+      break;
+    }
+  }
+
+  return parse_warnings;
+}
+
+// Shared enrichment with cross-retailer fields (address, postcode, ICP, distributor)
+function enrichWithCrossRetailerFields(parsed, text) {
+  const serviceAddress    = parsed.service_address    || extractServiceAddress(text);
+  const servicePostcode   = parsed.service_postcode   || extractPostcode(serviceAddress);
+  const icpNumber         = parsed.icp_number         || extractICP(text);
+  const networkDistributor= parsed.network_distributor|| extractDistributor(text);
+  return {
+    ...parsed,
+    service_address:     serviceAddress,
+    service_postcode:    servicePostcode,
+    icp_number:          icpNumber,
+    network_distributor: networkDistributor,
+  };
+}
+
 // ── Retailer-specific parsers ─────────────────────────────────────────────
 
 const MERCURY = {
@@ -308,22 +783,31 @@ const MERCURY = {
       out.period_end   = parseDate(periodMatch[2]);
     } else errors.push({ field: 'period', reason: 'Could not find billing period dates' });
 
-    // ── kWh total — Mercury 2025 format ──
-    // Patterns in order of preference:
-    //   "Anytime 273 kWh x 20.96 cents $57.22"  — usage line for variable rate
-    //   "Variable Usage Charge 550 kWh x ..."   — alt label
-    //   "Total kWh used: 273"                    — older format
-    //   "Units used 273 kWh"                     — meter table line
-    //   "(actual) 273 kWh"                       — meter table fallback
-    const kwhMatch = pickFirst(elec, [
-      /(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+([\d,]+(?:\.\d+)?)\s*kWh\s+x/i,
-      /Total\s+kWh\s+used[:\s]+([\d,]+(?:\.\d+)?)/i,
-      /Units\s+used[\s\S]{0,40}?([\d,]+(?:\.\d+)?)\s*kWh/i,
-      /\(actual\)[\s\S]{0,80}?([\d,]+(?:\.\d+)?)\s*kWh\s*$/im,
-      /([\d,]+(?:\.\d+)?)\s*kWh\s*@/,
-    ]);
-    if (kwhMatch) out.kwh_total = parseNum(kwhMatch[1]);
-    else errors.push({ field: 'kwh_total', reason: 'kWh total not found in electricity section' });
+    // ── kWh total — sum ALL multi-rate usage lines ──
+    // Mercury splits usage across two lines when a price change falls inside
+    // the billing period (e.g. "Anytime 85 kWh x 19.90 cents ... / Anytime 593
+    // kWh x 20.96 cents ..."). matchAll captures every Anytime/Day/Night/Off-
+    // Peak/Variable row in the elec slice and we sum them. Falls back to
+    // single-figure formats only when none of the rate-line pattern matches.
+    const rateLines = [...elec.matchAll(/(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+([\d,]+(?:\.\d+)?)\s*kWh\s+x/gi)];
+    if (rateLines.length) {
+      out.kwh_total = +rateLines.reduce((sum, m) => sum + parseNum(m[1]), 0);
+    } else {
+      const fallback = pickFirst(elec, [
+        /Total\s+kWh\s+used[:\s]+([\d,]+(?:\.\d+)?)/i,
+        /Units\s+used[\s\S]{0,40}?([\d,]+(?:\.\d+)?)\s*kWh/i,
+        /\(actual\)[\s\S]{0,80}?([\d,]+(?:\.\d+)?)\s*kWh\s*$/im,
+        /([\d,]+(?:\.\d+)?)\s*kWh\s*@/,
+      ]);
+      if (fallback) out.kwh_total = parseNum(fallback[1]);
+      else errors.push({ field: 'kwh_total', reason: 'kWh total not found in electricity section' });
+    }
+
+    // ── Rolling 12-month usage — Mercury prints this on every bill ──
+    // "Your total usage for the last 365 days is 9504 units (kWh)."
+    // Used as a ground-truth annual kWh + sanity check against our extrapolation.
+    const rollingMatch = elec.match(/total\s+usage\s+for\s+the\s+last\s+365\s+days\s+is\s+([\d,]+)\s+units/i);
+    if (rollingMatch) out.annual_kwh_rolling = parseNum(rollingMatch[1]);
 
     // ── Per-fuel ELECTRICITY total — preferred over combined "Amount due" ──
     // Mercury 2025 format: "ELECTRICITY TOTAL $153.38"
@@ -337,20 +821,65 @@ const MERCURY = {
     if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
     else errors.push({ field: 'total_nzd', reason: 'Electricity total not found' });
 
-    // ── Fixed charge — must capture $-amount, not the per-day rate (cents) ──
-    // 2025 format: "Daily Fixed Charge 28 Days x 272.00 cents $76.16"
-    // Capture the LAST $-amount on the line (the dollar total), not the rate.
-    const fixedMatch = elec.match(/(?:Daily\s+(?:fixed\s+)?charge|Fixed\s+charge)[\s\S]{0,120}?\$([\d,]+\.\d{2})\s*$/im)
-                    || elec.match(/(?:Daily\s+(?:fixed\s+)?charge|Fixed\s+charge)[\s\S]{0,200}?\$([\d,]+\.\d{2})(?!\s*cents)/i);
-    if (fixedMatch) out.fixed_charge_nzd = parseNum(fixedMatch[1]);
+    // ── Fixed charge — sum ALL "Daily Fixed Charge" line totals ──
+    // Handles BOTH:
+    //   (a) single-rate bills: one row, e.g.
+    //       "Daily fixed charge   31 days @ $1.40     $43.40"
+    //       Captures the line-end $X.XX (the column TOTAL), not the per-day rate.
+    //   (b) multi-rate bills (price change mid-period): two rows, e.g.
+    //       "Daily Fixed Charge  4 Days x 237.00 cents $9.48"
+    //       "Daily Fixed Charge 28 Days x 272.00 cents $76.16"
+    //       matchAll captures both; sum = $85.64.
+    // The `\s*$` with /m flag is load-bearing: anchors to end-of-line so we
+    // always capture the LAST $-amount on each row (the column total), not
+    // the per-day rate that appears earlier on the same line.
+    const fixedLines = [...elec.matchAll(/(?:Daily\s+(?:fixed\s+)?charge|Fixed\s+charge)[\s\S]{0,160}?\$([\d,]+\.\d{2})\s*$/gim)];
+    if (fixedLines.length) {
+      out.fixed_charge_nzd = +fixedLines.reduce((sum, m) => sum + parseNum(m[1]), 0).toFixed(2);
+    }
 
-    // ── Variable charge — the per-kWh dollar total on the usage line ──
-    // 2025 format: "Anytime 273 kWh x 20.96 cents $57.22"
-    const variableMatch = pickFirst(elec, [
-      /(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+[\d,]+(?:\.\d+)?\s*kWh\s+x\s+[\d.]+\s*cents\s+\$([\d,]+\.\d{2})/i,
-      /(?:Energy|Variable|Electricity)\s+charges?[\s\S]{0,200}?\$([\d,]+\.\d{2})/i,
-    ]);
-    if (variableMatch) out.variable_charge_nzd = parseNum(variableMatch[1]);
+    // ── Variable charge — sum ALL per-rate usage $-totals on the elec slice ──
+    // Handles BOTH single-rate and multi-rate. The pattern ends at $X.XX after
+    // "x N cents" — both formats put the line total at the same anchor point.
+    //   single-rate: "Anytime 1940 kWh x 28.9 cents $560.66"
+    //   multi-rate:  "Anytime 85 kWh x 19.90c $16.92" + "Anytime 593 kWh x 20.96c $124.29"
+    const variableLines = [...elec.matchAll(/(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+[\d,]+(?:\.\d+)?\s*kWh\s+x\s+[\d.]+\s*cents\s+\$([\d,]+\.\d{2})/gi)];
+    if (variableLines.length) {
+      out.variable_charge_nzd = +variableLines.reduce((sum, m) => sum + parseNum(m[1]), 0).toFixed(2);
+    } else {
+      const fallback = elec.match(/(?:Energy|Variable|Electricity)\s+charges?[\s\S]{0,200}?\$([\d,]+\.\d{2})/i);
+      if (fallback) out.variable_charge_nzd = parseNum(fallback[1]);
+    }
+
+    // ── Bill type detection ──
+    // Captures the structural shape of the bill so type-aware validators
+    // can apply the right consistency rules downstream.
+    //   single_rate — one fixed-charge row + one variable-charge row
+    //   multi_rate  — 2+ rows in either (price change mid-period)
+    //   tou         — variable rows include Peak / Off-Peak / Day / Night labels
+    //   free_hours  — has a Free / 0-cost kWh row (Contact Good Nights, etc.)
+    //   dual_fuel   — bill has both ELECTRICITY and GAS sections (we already
+    //                 scope `elec` to electricity-only above; flag for transparency)
+    const variableLabels = variableLines.map(m => m[0].match(/Anytime|Off[- ]?Peak|Day|Night|Variable\s+Usage\s+Charge/i)?.[0]);
+    const uniqueRateLabels = [...new Set(variableLabels.map(l => l?.toLowerCase()))].filter(Boolean);
+    const isTou = uniqueRateLabels.some(l => /off.?peak|day|night/i.test(l)) && uniqueRateLabels.length > 1;
+    const isMultiRate = fixedLines.length > 1 || (variableLines.length > 1 && !isTou);
+    const isDualFuel = /\bGAS\b/i.test(t) && /\bELECTRICITY\b/i.test(t);
+    const hasFreeHours = /\bFree\b[\s\S]{0,30}?\d+\s*kWh\s*@?\s*0+(?:\.0+)?\s*(?:c(?:ents?)?)?/i.test(elec)
+                       || /9\s*pm[\s\S]{0,20}?midnight/i.test(elec);
+
+    out.bill_type = isDualFuel       ? 'dual_fuel'
+                   : hasFreeHours    ? 'free_hours'
+                   : isTou           ? 'tou'
+                   : isMultiRate     ? 'multi_rate'
+                                     : 'single_rate';
+    out.rate_rows = { fixed: fixedLines.length, variable: variableLines.length };
+    out.raw_extracted_fields = {
+      ...(out.raw_extracted_fields || {}),
+      fixed_rows_total_$: fixedLines.map(m => parseNum(m[1])),
+      variable_rows_total_$: variableLines.map(m => parseNum(m[1])),
+      detected_rate_labels: uniqueRateLabels,
+    };
 
     // ── Subtotal (excl GST) — Mercury 2025 includes a "Subtotal" line ──
     const subtotalMatch = elec.match(/Subtotal[:\s]+\$?([\d,]+\.\d{2})/i);
@@ -412,18 +941,27 @@ const GENESIS = {
       out.period_end   = parseDate(periodMatch[2]);
     } else errors.push({ field: 'period', reason: 'Could not find billing period dates' });
 
-    // ── kWh total ──
-    // Commercial line: "Plus Standard Anytime 251409757 35564 37023 Actual 1459 @ 23.5200 c/unit 343.16"
-    // Older format: "Total electricity used: 1,750 kWh"
-    const kwhMatch = pickFirst(elec, [
-      /Actual\s+([\d,]+(?:\.\d+)?)\s+@\s+[\d.]+\s*c\/unit/i,
-      /([\d,]+(?:\.\d+)?)\s+@\s+[\d.]+\s*c\/unit/,
-      /Total\s+(?:electricity|energy)\s+used[:\s]+([\d,]+(?:\.\d+)?)\s*kWh/i,
-      /([\d,]+(?:\.\d+)?)\s*kWh\s+used/i,
-      /([\d,]+(?:\.\d+)?)\s*kWh\s*@/,
-    ]);
-    if (kwhMatch) out.kwh_total = parseNum(kwhMatch[1]);
-    else errors.push({ field: 'kwh_total', reason: 'kWh total not found' });
+    // ── kWh total — sum ALL "N @ R c/unit" rate lines ──
+    // Same multi-rate handling as Mercury: a price change mid-period (or a
+    // multi-meter setup) prints multiple "Actual N @ R c/unit X.XX" rows.
+    // Sum every kWh value to get the true total.
+    const kwhLines = [...elec.matchAll(/(?:Actual\s+)?([\d,]+(?:\.\d+)?)\s+@\s+[\d.]+\s*c\/unit/gi)];
+    if (kwhLines.length) {
+      out.kwh_total = +kwhLines.reduce((sum, m) => sum + parseNum(m[1]), 0);
+    } else {
+      const fallback = pickFirst(elec, [
+        /Total\s+(?:electricity|energy)\s+used[:\s]+([\d,]+(?:\.\d+)?)\s*kWh/i,
+        /([\d,]+(?:\.\d+)?)\s*kWh\s+used/i,
+        /([\d,]+(?:\.\d+)?)\s*kWh\s*@/,
+      ]);
+      if (fallback) out.kwh_total = parseNum(fallback[1]);
+      else errors.push({ field: 'kwh_total', reason: 'kWh total not found' });
+    }
+
+    // ── Rolling 12-month usage (if Genesis prints it) ──
+    const rollingMatch = elec.match(/total\s+(?:usage|consumption)\s+for\s+the\s+last\s+365\s+days[\s\S]{0,40}?([\d,]+)\s*(?:units|kWh)/i)
+                      || t.match(/(?:Annual|Yearly)\s+(?:usage|consumption)[\s\S]{0,40}?([\d,]+)\s*kWh/i);
+    if (rollingMatch) out.annual_kwh_rolling = parseNum(rollingMatch[1]);
 
     // ── Total — prefer post-discount total, fall back to pre-discount ──
     // Genesis dollar amounts often have a space: "$ 443.11"
@@ -437,19 +975,24 @@ const GENESIS = {
     if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
     else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
 
-    // ── Fixed charge — "30 days @ 267.4900 c/day 80.25" ──
-    const fixedMatch = pickFirst(elec, [
-      /\d+\s+days\s+@\s+[\d.]+\s*c\/day\s+([\d,]+\.\d{2})/i,
-      /Daily\s+(?:Fixed\s+|Charge)[\s\S]{0,200}?\$?\s*([\d,]+\.\d{2})/i,
-    ]);
-    if (fixedMatch) out.fixed_charge_nzd = parseNum(fixedMatch[1]);
+    // ── Fixed charge — sum ALL "N days @ R c/day X.XX" rows ──
+    // Multi-rate bills print two "days @ c/day" lines (one per rate period).
+    const fixedLines = [...elec.matchAll(/\d+\s+days\s+@\s+[\d.]+\s*c\/day\s+([\d,]+\.\d{2})/gi)];
+    if (fixedLines.length) {
+      out.fixed_charge_nzd = +fixedLines.reduce((sum, m) => sum + parseNum(m[1]), 0).toFixed(2);
+    } else {
+      const fallback = elec.match(/Daily\s+(?:Fixed\s+|Charge)[\s\S]{0,200}?\$?\s*([\d,]+\.\d{2})/i);
+      if (fallback) out.fixed_charge_nzd = parseNum(fallback[1]);
+    }
 
-    // ── Variable charge — "1459 @ 23.5200 c/unit 343.16" ──
-    const variableMatch = pickFirst(elec, [
-      /[\d,]+\s+@\s+[\d.]+\s*c\/unit\s+([\d,]+\.\d{2})/i,
-      /(?:Anytime|Variable|Energy)\s+rate[\s\S]{0,200}?\$?\s*([\d,]+\.\d{2})/i,
-    ]);
-    if (variableMatch) out.variable_charge_nzd = parseNum(variableMatch[1]);
+    // ── Variable charge — sum ALL "N @ R c/unit X.XX" totals ──
+    const variableLines = [...elec.matchAll(/[\d,]+\s+@\s+[\d.]+\s*c\/unit\s+([\d,]+\.\d{2})/gi)];
+    if (variableLines.length) {
+      out.variable_charge_nzd = +variableLines.reduce((sum, m) => sum + parseNum(m[1]), 0).toFixed(2);
+    } else {
+      const fallback = elec.match(/(?:Anytime|Variable|Energy)\s+rate[\s\S]{0,200}?\$?\s*([\d,]+\.\d{2})/i);
+      if (fallback) out.variable_charge_nzd = parseNum(fallback[1]);
+    }
 
     // ── Subtotal (excl GST) ──
     const subtotalMatch = elec.match(/Sub\s*Total[\s\S]{0,40}?([\d,]+\.\d{2})/i);
@@ -731,9 +1274,35 @@ const PULSE = {
       } else errors.push({ field: 'kwh_total', reason: 'kWh total not found' });
     }
 
-    // ── Variable charge — "Total Energy $437.75" ──
-    const variableMatch = t.match(/Total\s+Energy[\s\S]{0,40}?\$([\d,]+\.\d{2})/i);
-    if (variableMatch) out.variable_charge_nzd = parseNum(variableMatch[1]);
+    // ── Variable charge — sum BOTH energy AND delivery-side variable lines ──
+    // Pulse bills have a two-section structure:
+    //   Energy section:    "Energy Rate - Uncontrolled / Controlled" → "Total Energy"
+    //   Delivery section:  "EA Levy", "Network Services Variable - Controlled/Uncontrolled"
+    //                      plus the per-day fixed lines (Metering, Fixed Daily, Retailer)
+    //
+    // The OLD parser captured only "Total Energy" (Energy section only) and silently
+    // dropped the Delivery-section variable charges — typically $100-150/bill of
+    // network usage charges. This caused 30%+ underestimation of variable spend
+    // for every Pulse customer (cross-field validator flagged it as line_items_dont_sum).
+    //
+    // Fix: sum (Total Energy) + (each per-kWh delivery-side row identified by its
+    // "N kWh" quantity marker). The fixed_charge_nzd block below independently
+    // captures the per-day rows from the same section, so no double-count.
+    const energyTotalMatch = t.match(/Total\s+Energy[\s\S]{0,40}?\$([\d,]+\.\d{2})/i);
+    let variableTotal = energyTotalMatch ? parseNum(energyTotalMatch[1]) : 0;
+    // Delivery-side per-kWh charges — identifiable by their "<num> kWh" quantity
+    // marker (distinguishes them from per-day "<num> Days" fixed rows).
+    // Constrain to a single line ([^\n]) so the regex can't accidentally reach
+    // forward to the next row's $-amount when two consecutive rows share the
+    // same label prefix (e.g. "Network Services Variable - Controlled" and
+    // "Network Services Variable - Uncontrolled" on adjacent lines).
+    const deliveryVarLines = [...t.matchAll(
+      /(?:(?:EA|Electricity)\s+(?:Authority\s+)?Levy|Network\s+Services\s+Variable)[^\n]*?[\d,]+\s*kWh[^\n]*?\$([\d,]+\.\d{2})/gi
+    )];
+    for (const m of deliveryVarLines) {
+      variableTotal += parseNum(m[1]) || 0;
+    }
+    if (variableTotal > 0) out.variable_charge_nzd = +variableTotal.toFixed(2);
 
     // ── Fixed charge — sum of "X Days @ Y.000 $Z.ZZ" lines for fixed-daily items ──
     // Pulse's "Total Delivery" mixes per-kWh network charges with per-day fixed
@@ -743,6 +1312,16 @@ const PULSE = {
       out.fixed_charge_nzd = +dayLines.reduce((sum, m) => sum + parseNum(m[2]), 0).toFixed(2);
     }
 
+    // ── "Other Fees" — non-electricity charges (dishonour fees, late fees, etc.) ──
+    // Pulse includes one-off fees in "Current Electricity Charges (including GST)"
+    // but they're NOT actual electricity usage — solar won't reduce them. Capture
+    // separately so we can subtract from total_nzd (which the analysis engine
+    // uses as the "baseline annual spend" for sizing). Without this exclusion,
+    // a customer who's had a bounced direct debit would get an over-sized
+    // solar quote based on inflated baseline spend.
+    const otherFeesMatch = t.match(/Total\s+Other\s+Fees[\s\S]{0,40}?\$([\d,]+\.\d{2})/i);
+    const otherFees = otherFeesMatch ? parseNum(otherFeesMatch[1]) : 0;
+
     // ── Total — "Current Electricity Charges (including GST) $1,335.39" ──
     // Prefer this over "Total Current Amount Due" which can include opening balance.
     const totalMatch = pickFirst(t, [
@@ -750,8 +1329,20 @@ const PULSE = {
       /Electricity\s+Charges[\s\S]{0,20}?\$([\d,]+\.\d{2})/i,
       /Total\s+Current\s+Amount\s+Due[\s\S]{0,80}?\$([\d,]+\.\d{2})/i,
     ]);
-    if (totalMatch) out.total_nzd = parseNum(totalMatch[1]);
-    else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
+    if (totalMatch) {
+      const grossTotal = parseNum(totalMatch[1]);
+      // Strip "Other Fees" so total_nzd represents true electricity usage cost.
+      // The original gross is preserved in raw_extracted_fields for audit.
+      out.total_nzd = +(grossTotal - otherFees).toFixed(2);
+      if (otherFees > 0) {
+        out.raw_extracted_fields = {
+          ...(out.raw_extracted_fields || {}),
+          gross_bill_total_nzd: grossTotal,
+          other_fees_nzd:       otherFees,
+          other_fees_excluded_from_total: true,
+        };
+      }
+    } else errors.push({ field: 'total_nzd', reason: 'Total amount not found' });
 
     // ── GST — "GST at 15% $108.82" ──
     const gstMatch = t.match(/GST\s+at\s+15%[\s\S]{0,40}?\$([\d,]+\.\d{2})/i)
@@ -845,13 +1436,249 @@ export function parseBillText(text, opts = {}) {
   let parsed;
   try { parsed = retailer.parse(text); }
   catch (e) { parsed = { parse_errors: [{ field: 'all', reason: `Parser threw: ${e.message}` }] }; }
+
+  // ── Cross-retailer enrichment + cross-field validators (shared helpers) ──
+  // Same logic runs from parseBillPdf() and parseBillImage().
+  const enriched = enrichWithCrossRetailerFields(parsed, text);
+  const parse_warnings = runCrossFieldValidators(enriched);
+
   return {
     ...makeEmptyBill(),
-    ...parsed,
-    retailer: parsed.retailer || retailer.name,
+    ...enriched,
+    retailer: enriched.retailer || retailer.name,
     ocr_text_excerpt: text.slice(0, 4000),
-    ocr_confidence: estimateConfidence(parsed),
-    parse_errors: parsed.parse_errors || [],
+    ocr_text_full: text,
+    ocr_confidence: estimateConfidence(enriched),
+    field_confidence: computeFieldConfidence(enriched),
+    parse_errors: enriched.parse_errors || [],
+    parse_warnings,
+    parse_suspect: parse_warnings.some(w => w.suspect === true),
+    raw_extracted_fields: enriched.raw_extracted_fields || {},
+    file_name: opts.fileName || null,
+  };
+}
+
+// ── (legacy inline validator block removed — superseded by shared
+//     runCrossFieldValidators() above; parseBillPdf, parseBillImage, and
+//     parseBillText all call the same helper now.) ──
+
+function _legacy_remove_me_anchor() {
+  /* The following block is intentionally unreachable. It existed as the
+     old inline validator block in parseBillText. Kept as a stub so the
+     remaining code below this comment (return statement + closing brace)
+     stays syntactically valid until I do a follow-up cleanup commit. */
+  const parse_warnings = [];
+  const parsed = {};
+  const text = '';
+  const opts = {};
+  const retailer = { name: '' };
+
+  // (1) kWh-vs-total: existing check (kept for back-compat)
+  if (parsed.kwh_total != null && parsed.total_nzd != null && parsed.total_nzd > 0) {
+    const impliedSpendFromKwh = parsed.kwh_total * 0.25;
+    const ratio = impliedSpendFromKwh / parsed.total_nzd;
+    if (ratio < 0.30) {
+      parse_warnings.push({
+        field: 'kwh_total',
+        code:  'kwh_low_vs_total',
+        reason: `kWh (${parsed.kwh_total}) looks low vs total ($${parsed.total_nzd}). At ~25¢/kWh blended this would be ~$${impliedSpendFromKwh.toFixed(0)} — only ${(ratio*100).toFixed(0)}% of the bill. Likely a multi-rate row was missed.`,
+        suspect: true,
+      });
+    }
+  }
+
+  // (2) Extrapolation-vs-rolling: existing check
+  if (parsed.kwh_total && parsed.annual_kwh_rolling && parsed.days_in_period) {
+    const extrapolated = parsed.kwh_total * (365 / parsed.days_in_period);
+    if (extrapolated > parsed.annual_kwh_rolling * 1.8) {
+      parse_warnings.push({
+        field: 'kwh_total',
+        code:  'kwh_double_count_suspect',
+        reason: `kWh extrapolated to ~${Math.round(extrapolated)}/yr but bill says rolling 365 days = ${parsed.annual_kwh_rolling}. Possible double-count.`,
+        suspect: true,
+      });
+    }
+  }
+
+  // (3) NEW — line items must sum to total within $1 (rules 4.5, 4.6, 4.10)
+  if (parsed.total_nzd != null) {
+    const fixed = parsed.fixed_charge_nzd    || 0;
+    const variable = parsed.variable_charge_nzd || 0;
+    const gst = parsed.gst_nzd               || 0;
+    const exportCred = parsed.export_credit_nzd || 0;
+    // Different retailers express totals as (fixed + variable + gst − export_credit)
+    // or with GST already inside the line totals. Allow both — flag if BOTH
+    // interpretations are off by more than $1.
+    const sumInclGst = fixed + variable + gst - exportCred;
+    const sumExclGst = fixed + variable        - exportCred;
+    const driftA = Math.abs(sumInclGst - parsed.total_nzd);
+    const driftB = Math.abs(sumExclGst - parsed.total_nzd);
+    if (driftA > 1 && driftB > 1 && (fixed > 0 || variable > 0)) {
+      parse_warnings.push({
+        field: 'total_nzd',
+        code:  'line_items_dont_sum',
+        reason: `Line items don't sum to total. Fixed $${fixed.toFixed(2)} + Variable $${variable.toFixed(2)} ${gst ? `+ GST $${gst.toFixed(2)} ` : ''}${exportCred ? `− Export $${exportCred.toFixed(2)} ` : ''}= $${sumInclGst.toFixed(2)}, but bill total is $${parsed.total_nzd.toFixed(2)} (drift $${driftA.toFixed(2)}).`,
+        suspect: true,
+      });
+    }
+  }
+
+  // (4) NEW — GST must be ~15% of pre-tax subtotal (rule 4.6)
+  if (parsed.gst_nzd != null && parsed.gst_nzd > 0) {
+    const preTax = (parsed.fixed_charge_nzd || 0) + (parsed.variable_charge_nzd || 0);
+    if (preTax > 0) {
+      const expected = preTax * 0.15;
+      const drift = Math.abs(parsed.gst_nzd - expected);
+      // Tolerance: 1% of pre-tax OR $0.50, whichever is bigger (rounding)
+      const tol = Math.max(0.5, preTax * 0.01);
+      if (drift > tol) {
+        parse_warnings.push({
+          field: 'gst_nzd',
+          code:  'gst_not_15pct',
+          reason: `GST $${parsed.gst_nzd.toFixed(2)} ≠ 15% of pre-tax $${preTax.toFixed(2)} (expected ~$${expected.toFixed(2)}, drift $${drift.toFixed(2)}).`,
+          suspect: true,
+        });
+      }
+    }
+  }
+
+  // (5) NEW — billing end must be after start, duration positive (rules 4.2, 4.3)
+  if (parsed.period_start && parsed.period_end) {
+    const start = new Date(parsed.period_start + 'T00:00:00Z');
+    const end   = new Date(parsed.period_end   + 'T00:00:00Z');
+    if (!isNaN(start) && !isNaN(end)) {
+      if (end <= start) {
+        parse_warnings.push({
+          field: 'period_end',
+          code:  'end_before_start',
+          reason: `Billing end ${parsed.period_end} is not after start ${parsed.period_start}.`,
+          suspect: true,
+        });
+      }
+      // Also: stated days_in_period must match end−start+1 (within 1 day)
+      if (parsed.days_in_period) {
+        const computed = Math.round((end - start) / 86400000) + 1;
+        if (Math.abs(computed - parsed.days_in_period) > 1) {
+          parse_warnings.push({
+            field: 'days_in_period',
+            code:  'days_mismatch',
+            reason: `Stated days_in_period=${parsed.days_in_period} but ${parsed.period_start} → ${parsed.period_end} = ${computed} days.`,
+            suspect: true,
+          });
+        }
+      }
+    }
+  }
+
+  // (6) NEW — non-negative invariants (rules 4.4, 4.5)
+  for (const [field, value] of Object.entries({
+    kwh_total: parsed.kwh_total, kwh_peak: parsed.kwh_peak,
+    kwh_off_peak: parsed.kwh_off_peak, kwh_exported: parsed.kwh_exported,
+    fixed_charge_nzd: parsed.fixed_charge_nzd, variable_charge_nzd: parsed.variable_charge_nzd,
+    gst_nzd: parsed.gst_nzd, total_nzd: parsed.total_nzd,
+  })) {
+    if (value != null && value < 0) {
+      parse_warnings.push({
+        field, code: 'negative_value',
+        reason: `${field} is negative (${value}) — should never be < 0.`,
+        suspect: true,
+      });
+    }
+  }
+
+  // (7) NEW — bill-type-aware structural checks
+  //
+  // The earlier sum + GST + dates validators above apply to ALL bill types
+  // because the math (fixed + variable + gst = total) is invariant. These
+  // additional checks key off `bill_type` to catch type-specific parser bugs
+  // that the sum check alone would miss:
+  //   multi_rate  — must have ≥2 rate rows extracted; if parser only got 1,
+  //                 the bill total would still match (because we'd have one
+  //                 of the two correct totals + a wrong one) so the sum check
+  //                 wouldn't always fire. Explicit row-count check catches it.
+  //   tou         — peak kWh + off-peak kWh should sum to total kWh (within 1)
+  //   free_hours  — flag that variable-charge math will look off because some
+  //                 kWh are billed at $0; this is INFORMATIONAL only, not suspect
+  switch (parsed.bill_type) {
+    case 'multi_rate': {
+      const rows = parsed.rate_rows || { fixed: 0, variable: 0 };
+      // The classifier set bill_type=multi_rate because fixedLines>1 OR variableLines>1.
+      // Flag if the OTHER category only has 1 row — usually means parser missed
+      // a row (Mercury multi-rate bills should have BOTH fixed and variable
+      // duplicated when a price change falls inside the period).
+      if (rows.fixed >= 2 && rows.variable < 2) {
+        parse_warnings.push({
+          field: 'rate_rows',
+          code:  'multi_rate_variable_undercount',
+          reason: `Detected ${rows.fixed} fixed-charge rows but only ${rows.variable} variable-charge row(s). Multi-rate bills usually split both — variable parser may have missed a row.`,
+          suspect: true,
+        });
+      }
+      if (rows.variable >= 2 && rows.fixed < 2) {
+        parse_warnings.push({
+          field: 'rate_rows',
+          code:  'multi_rate_fixed_undercount',
+          reason: `Detected ${rows.variable} variable-charge rows but only ${rows.fixed} fixed-charge row(s). Multi-rate bills usually split both — fixed parser may have missed a row.`,
+          suspect: true,
+        });
+      }
+      break;
+    }
+    case 'tou': {
+      // Time-of-use: peak + off-peak kWh should sum to total (within 1 kWh)
+      const peakSum = (parsed.kwh_peak || 0) + (parsed.kwh_off_peak || 0);
+      if (parsed.kwh_total && peakSum > 0 && Math.abs(peakSum - parsed.kwh_total) > 1) {
+        parse_warnings.push({
+          field: 'kwh_total',
+          code:  'tou_kwh_dont_sum',
+          reason: `TOU peak (${parsed.kwh_peak}) + off-peak (${parsed.kwh_off_peak}) = ${peakSum} ≠ stated total ${parsed.kwh_total}.`,
+          suspect: true,
+        });
+      }
+      break;
+    }
+    case 'free_hours': {
+      // Informational only — variable_charge math won't equal kwh_total × rate
+      // because some kWh are billed at $0 (Contact Good Nights 9pm-midnight)
+      parse_warnings.push({
+        field: 'bill_type',
+        code:  'free_hours_partial_billing',
+        reason: 'Free-hours plan detected — some kWh are billed at $0. Variable-charge sum checks adjusted; sales should still verify the free-window kWh on first call.',
+        suspect: false,                 // INFO, not blocker
+      });
+      break;
+    }
+    // single_rate, dual_fuel — covered fully by checks (1)-(6) above
+  }
+
+  // ── v2 cross-retailer field extraction (same as parseBillPdf) ──
+  const serviceAddress    = parsed.service_address    || extractServiceAddress(text);
+  const servicePostcode   = parsed.service_postcode   || extractPostcode(serviceAddress);
+  const icpNumber         = parsed.icp_number         || extractICP(text);
+  const networkDistributor= parsed.network_distributor|| extractDistributor(text);
+
+  const enriched = {
+    ...parsed,
+    service_address:     serviceAddress,
+    service_postcode:    servicePostcode,
+    icp_number:          icpNumber,
+    network_distributor: networkDistributor,
+  };
+
+  return {
+    ...makeEmptyBill(),
+    ...enriched,
+    retailer: enriched.retailer || retailer.name,
+    ocr_text_excerpt: text.slice(0, 4000),
+    ocr_text_full: text,
+    ocr_confidence: estimateConfidence(enriched),
+    field_confidence: computeFieldConfidence(enriched),
+    parse_errors: enriched.parse_errors || [],
+    parse_warnings,
+    // Only "suspect" if at least one warning explicitly marks suspect:true.
+    // INFO-level entries (e.g. free_hours_partial_billing) don't trip the gate.
+    parse_suspect: parse_warnings.some(w => w.suspect === true),
+    raw_extracted_fields: enriched.raw_extracted_fields || {},
     file_name: opts.fileName || null,
   };
 }

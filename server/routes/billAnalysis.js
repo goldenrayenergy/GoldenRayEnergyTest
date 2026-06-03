@@ -1,19 +1,35 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { supabaseAdmin } from '../config/supabase.js';
-import { parseBillPdf } from '../services/billOcrService.js';
+import { parseBillPdf, parseBillImage } from '../services/billOcrService.js';
 import { analyzeBills } from '../services/billAnalysisService.js';
 import { normaliseFromBillAnalysis, normaliseFromEstimate } from '../services/pm/customerProfileService.js';
 import { validateEstimateForm } from '../utils/validators.js';
 
 const router = Router();
 
-// Multipart upload — bills can be 1-12 PDFs, each up to 5 MB. Hold in
-// memory; we don't persist the file blob, only the parsed numbers.
+// Multipart upload — bills can be PDFs OR camera-captured photos. PDFs up
+// to 5 MB; photos up to 10 MB (modern phone cameras produce larger files
+// before compression). Hold in memory; we don't persist the file blob.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 12 },
+  limits: { fileSize: 10 * 1024 * 1024, files: 12 },
+  fileFilter: (req, file, cb) => {
+    const ok = file.mimetype === 'application/pdf' ||
+               /^image\/(jpe?g|png|webp|heic|heif)$/i.test(file.mimetype);
+    if (!ok) return cb(new Error(`Unsupported file type: ${file.mimetype} (expected PDF or image)`), false);
+    cb(null, true);
+  },
 });
+
+// Dispatch one uploaded file to the right parser based on MIME type.
+async function parseUploadedFile(file) {
+  if (file.mimetype === 'application/pdf') {
+    return parseBillPdf(file.buffer, { fileName: file.originalname });
+  }
+  // image/* — camera capture
+  return parseBillImage(file.buffer, { fileName: file.originalname, mimeType: file.mimetype });
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -58,7 +74,7 @@ function buildAnalysisRow(analysis, { region, postcode, email, contactId }) {
     retailer:                  analysis.aggregate.retailer,
     plan_name:                 analysis.aggregate.plan_name,
     region,
-    postcode:                  postcode || null,
+    postcode:                  postcode || analysis.region_postcode || null,
     patterns:                  analysis.patterns,
     scenarios:                 analysis.scenarios,
     recommended_system_kw:     analysis.recommendation.recommended_system_kw,
@@ -71,6 +87,10 @@ function buildAnalysisRow(analysis, { region, postcode, email, contactId }) {
     switch_annual_saving:      analysis.switch_advice?.annualSaving || null,
     status:                    'completed',
     expires_at:                contactId ? null : new Date(Date.now() + ANON_TTL_MS).toISOString(),
+    // v2 (migration 025) — review gate per accuracy rule-set §14
+    review_required:           analysis.review_required || false,
+    review_reasons:            analysis.review_reasons  || [],
+    region_resolved_from:      analysis.region_resolved_from || null,
   };
 }
 
@@ -97,6 +117,17 @@ function buildUploadRows(parsedBills, analysisId) {
     gst_nzd:              b.gst_nzd,
     total_nzd:            b.total_nzd,
     parse_errors:         b.parse_errors,
+    // v2 (migration 025) — new extraction + per-field confidence
+    service_address:      b.service_address      || null,
+    icp_number:           b.icp_number           || null,
+    network_distributor:  b.network_distributor  || null,
+    tariff_components:    b.tariff_components    || [],
+    payment_date:         b.payment_date         || null,
+    due_date:             b.due_date             || null,
+    raw_extracted_fields: b.raw_extracted_fields || {},
+    ocr_text_full:        b.ocr_text_full        || null,
+    field_confidence:     b.field_confidence     || {},
+    parse_method:         b.parse_method         || null,
   }));
 }
 
@@ -120,13 +151,17 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       return res.status(400).json({ error: 'No bills uploaded. Drop one or more PDFs.' });
     }
 
-    // 1. Parse each PDF → array of normalised bill objects
+    // 1. Parse each file (PDF or camera image) → normalised bill objects.
+    // Keep the original buffers alongside so we can upload them to Storage
+    // after the bill_uploads rows have IDs (storage path includes the upload id).
     const parsedBills = [];
+    const sourceFiles = [];                          // parallel to parsedBills
     const ocrErrors = [];
     for (const f of req.files) {
       try {
-        const parsed = await parseBillPdf(f.buffer, { fileName: f.originalname });
+        const parsed = await parseUploadedFile(f);
         parsedBills.push(parsed);
+        sourceFiles.push(f);
       } catch (e) {
         ocrErrors.push({ file: f.originalname, error: e.message });
       }
@@ -164,8 +199,45 @@ router.post('/', upload.array('files', 12), async (req, res) => {
     if (insErr) throw insErr;
 
     const uploadRows = buildUploadRows(parsedBills, inserted.id);
-    const { error: uplErr } = await supabaseAdmin.from('bill_uploads').insert(uploadRows);
+    const { data: insertedUploads, error: uplErr } = await supabaseAdmin
+      .from('bill_uploads')
+      .insert(uploadRows)
+      .select('id');
     if (uplErr) console.error('Bill uploads insert failed (non-fatal):', uplErr.message);
+
+    // ── Store original bill PDFs/images to Supabase Storage ────────────────
+    // Per business decision (Path A): store every bill so sales has the
+    // source artifact when reviewing flagged bills + future re-analysis.
+    // Bucket name + setup script: server/scripts/setup-bill-storage.js.
+    // Failure here is non-fatal — the analysis still completes; sales will
+    // just not have the original PDF to look at for this customer.
+    if (insertedUploads?.length === parsedBills.length) {
+      for (let i = 0; i < parsedBills.length; i++) {
+        const uploadId = insertedUploads[i].id;
+        const file     = sourceFiles[i];
+        const ext      = (file.originalname.match(/\.([a-z0-9]+)$/i)?.[1] || 'bin').toLowerCase();
+        const path     = `${inserted.id}/${uploadId}.${ext}`;
+        try {
+          const { error: storeErr } = await supabaseAdmin.storage
+            .from('customer-bills')
+            .upload(path, file.buffer, {
+              contentType: file.mimetype,
+              upsert:      false,
+            });
+          if (storeErr) {
+            console.warn(`Storage upload failed for ${file.originalname} (non-fatal): ${storeErr.message}`);
+          } else {
+            await supabaseAdmin.from('bill_uploads').update({
+              file_storage_path: path,
+              file_mime_type:    file.mimetype,
+              file_uploaded_at:  new Date().toISOString(),
+            }).eq('id', uploadId);
+          }
+        } catch (e) {
+          console.warn(`Storage upload exception for ${file.originalname} (non-fatal): ${e.message}`);
+        }
+      }
+    }
 
     // 4. Normalise into customer_profiles (Phase 1.5) — non-blocking
     const normResult = await normaliseFromBillAnalysis(inserted.id, { ...analysis, region }, parsedBills);
@@ -614,6 +686,137 @@ router.post('/:id/promote-to-quote', async (req, res) => {
     res.status(201).json({ success: true, contact_id: contactId, analysis_id: req.params.id });
   } catch (e) {
     console.error('Bill-analysis promote error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── ADMIN: re-run the scenario engine on stored structured data ──────────
+//
+// Per accuracy rule 1.5 (deterministic + reproducible) and 15.11 (auditable),
+// an admin should be able to re-run the analysis after the engine improves
+// (e.g. better tariff handling, fixed bug, refreshed rate dataset) without
+// requiring the customer to re-upload their bills. This endpoint reads the
+// already-persisted bill_uploads rows + rebuilds the analysis from them.
+//
+// We do NOT re-OCR — the original ocr_text_full + structured parsed fields
+// are what the engine reads. If we want to also re-parse, the caller can
+// pass `?reparse=1` and we'll re-run parseBillText against ocr_text_full.
+router.post('/:id/reanalyze', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    const { id } = req.params;
+    const reparse = req.query.reparse === '1';
+
+    // 1. Pull the persisted bill_uploads for this analysis
+    const { data: rows, error: fetchErr } = await supabaseAdmin
+      .from('bill_uploads')
+      .select('*')
+      .eq('analysis_id', id);
+    if (fetchErr) throw fetchErr;
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'No bill_uploads found for that analysis_id.' });
+    }
+
+    // 2. Optionally re-parse from ocr_text_full
+    let bills = rows;
+    if (reparse) {
+      const { parseBillText } = await import('../services/billOcrService.js');
+      bills = rows.map(r => {
+        if (!r.ocr_text_full) return r;            // can't re-parse without text
+        const reparsed = parseBillText(r.ocr_text_full, { fileName: r.file_name });
+        return { ...r, ...reparsed };
+      });
+    }
+
+    // 3. Re-run the analyser
+    const analysis = analyzeBills({ bills });
+
+    // 4. Update the bill_analyses row with the new outputs
+    const { data: existing, error: fetchAnalysisErr } = await supabaseAdmin
+      .from('bill_analyses')
+      .select('contact_id, email, region')
+      .eq('id', id)
+      .single();
+    if (fetchAnalysisErr) throw fetchAnalysisErr;
+
+    const updated = buildAnalysisRow(analysis, {
+      region:    analysis.region,
+      postcode:  analysis.region_postcode,
+      email:     existing.email,
+      contactId: existing.contact_id,
+    });
+    delete updated.contact_id;        // don't overwrite who owns it
+    delete updated.email;
+    delete updated.expires_at;        // don't reset TTL on reanalyze
+
+    const { error: updateErr } = await supabaseAdmin
+      .from('bill_analyses')
+      .update(updated)
+      .eq('id', id);
+    if (updateErr) throw updateErr;
+
+    // 5. Log activity (auditability — rule 1.10, 15.11)
+    try {
+      await supabaseAdmin.from('activities').insert({
+        type:        'system',
+        description: `Bill analysis ${id} re-run by admin. Region: ${analysis.region}. Review-required: ${analysis.review_required}.`,
+        contact_id:  existing.contact_id || null,
+        metadata: {
+          analysis_id:    id,
+          reparse,
+          review_required: analysis.review_required,
+          review_reasons: analysis.review_reasons,
+          source:         'reanalyze',
+        },
+      });
+    } catch (e) { /* non-fatal */ }
+
+    res.json({
+      success:         true,
+      analysis_id:     id,
+      reparse,
+      review_required: analysis.review_required,
+      review_reasons:  analysis.review_reasons,
+      region:          analysis.region,
+      region_resolved_from: analysis.region_resolved_from,
+    });
+  } catch (e) {
+    console.error('Reanalyze error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── PORTAL: signed URL to the original bill PDF/image ────────────────────
+//
+// Sales clicks "View original bill" in the PM Tool review-queue UI; this
+// endpoint returns a 60-minute signed URL that lets the browser stream the
+// file directly from Supabase Storage. The bucket is private so the URL
+// is the only way to access the file outside the portal.
+router.get('/uploads/:id/signed-url', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { data: row, error } = await supabaseAdmin
+      .from('bill_uploads')
+      .select('file_storage_path, file_mime_type, file_name')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!row?.file_storage_path) {
+      return res.status(404).json({ error: 'No stored file for this upload.' });
+    }
+    const { data: signed, error: signErr } = await supabaseAdmin.storage
+      .from('customer-bills')
+      .createSignedUrl(row.file_storage_path, 3600);
+    if (signErr) throw signErr;
+    res.json({
+      signed_url:  signed.signedUrl,
+      expires_in:  3600,
+      mime_type:   row.file_mime_type,
+      file_name:   row.file_name,
+    });
+  } catch (e) {
+    console.error('Signed URL error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
