@@ -4,7 +4,7 @@ import api from '../../services/api';
 import DataTable from '../../components/ui/DataTable';
 import Badge from '../../components/ui/Badge';
 import { fmt$, fmtDateTime } from '../../utils/format';
-import { Search, Inbox } from 'lucide-react';
+import { Search, Inbox, AlertTriangle, Clock } from 'lucide-react';
 
 const STATUS_COLOR = {
   new:        '#F5A623',
@@ -26,12 +26,24 @@ export default function EnquiriesPage() {
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [chip, setChip] = useState('all');                    // 'all' | 'review' | 'partial'
+  const [reviewCount, setReviewCount] = useState(0);
 
   useEffect(() => {
     api.get('/enquiries').then(r => setRows(r.data)).finally(() => setLoading(false));
+    // Count of flagged bill_analyses — surfaces as the "Review (n)" chip count
+    api.get('/enquiries/_counts/review-required').then(r => setReviewCount(r.data.count || 0)).catch(() => {});
   }, []);
 
+  // partial-rows live with status='partial' — Pattern B captures these at Step 3
+  const partialCount = rows.filter(r => r.status === 'partial').length;
+
   const filtered = rows.filter(r => {
+    if (chip === 'partial' && r.status !== 'partial') return false;
+    // 'review' chip filters to flagged analyses — handled by the
+    // /enquiries/_counts endpoint count but the row-level flag isn't on the
+    // list endpoint. For now we surface the count and let the row click reveal
+    // the flag (Track 5 follow-up: extend /enquiries list with review flag).
     if (!search) return true;
     const q = search.toLowerCase();
     const name = `${r.first_name || ''} ${r.last_name || ''}`.trim().toLowerCase();
@@ -57,6 +69,13 @@ export default function EnquiriesPage() {
         </div>
       </div>
 
+      {/* Filter chips — Review pulls flagged analyses; Partial pulls mid-flow bail-outs */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <ChipBtn label="All" count={rows.length} active={chip === 'all'} onClick={() => setChip('all')} />
+        <ChipBtn label="Review" icon={AlertTriangle} count={reviewCount} active={chip === 'review'} onClick={() => setChip('review')} color="red" />
+        <ChipBtn label="Partial (mid-flow)" icon={Clock} count={partialCount} active={chip === 'partial'} onClick={() => setChip('partial')} color="amber" />
+      </div>
+
       <div className="relative">
         <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" />
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, email, phone, or address..."
@@ -64,7 +83,7 @@ export default function EnquiriesPage() {
       </div>
 
       <DataTable
-        onRowClick={r => nav(`/portal/enquiries/${r.id}`)}
+        onRowClick={r => nav(`/portal/enquiries/${r.id}${r.status === 'partial' || chip === 'review' ? '?tab=bills' : ''}`)}
         data={filtered}
         columns={[
           { label: 'Submitted', render: r => <span className="text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r.created_at)}</span> },
@@ -88,5 +107,22 @@ export default function EnquiriesPage() {
         ]}
       />
     </div>
+  );
+}
+
+function ChipBtn({ label, count, active, onClick, icon: Icon, color }) {
+  const colorMap = {
+    red:   { active: 'bg-red-100 text-red-700 border-red-300',     idle: 'border-gray-200 text-gray-600 hover:border-red-300' },
+    amber: { active: 'bg-amber-100 text-amber-700 border-amber-300', idle: 'border-gray-200 text-gray-600 hover:border-amber-300' },
+    gray:  { active: 'bg-gray-100 text-gray-800 border-gray-300',  idle: 'border-gray-200 text-gray-600 hover:border-gray-400' },
+  };
+  const c = colorMap[color || 'gray'];
+  return (
+    <button onClick={onClick}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-bold transition ${active ? c.active : c.idle}`}>
+      {Icon && <Icon size={11} />}
+      {label}
+      <span className={`px-1.5 rounded-full text-[10px] ${active ? 'bg-white/70' : 'bg-gray-100'}`}>{count}</span>
+    </button>
   );
 }

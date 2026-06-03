@@ -5,6 +5,83 @@ import { parseBillPdf, parseBillImage } from '../services/billOcrService.js';
 import { analyzeBills } from '../services/billAnalysisService.js';
 import { normaliseFromBillAnalysis, normaliseFromEstimate } from '../services/pm/customerProfileService.js';
 import { validateEstimateForm } from '../utils/validators.js';
+import { sendTeamNewLeadEmail } from '../services/emailService.js';
+
+// Track 1 + 2 — when the analyzer flags review_required AND the request came
+// from a wizard visitor who'd already created a partial enquiry at Step 3,
+// escalate immediately: notify the team, raise the bail-out task to 'high',
+// and update the contact's last_activity so the portal shows the flag.
+//
+// Fully non-blocking — the response to the customer is never delayed by this.
+async function escalatePartialOnReview({ contactId, enquiryId, analysisId, analysis, reqBody }) {
+  if (!contactId && !enquiryId) return;
+  if (!analysis?.review_required) return;
+
+  // Best-effort updates; failures are logged but don't surface to the client.
+  try {
+    if (enquiryId) {
+      await supabaseAdmin
+        .from('website_enquiries')
+        .update({ lead_score: 75 })  // bump score — flagged leads are higher priority
+        .eq('id', enquiryId);
+    }
+    if (contactId) {
+      await supabaseAdmin
+        .from('contacts')
+        .update({
+          last_activity: `🚨 Bill analysis review required — ${(analysis.review_reasons || []).map(r => r.code).join(', ')}`,
+          lead_score: 75,
+        })
+        .eq('id', contactId);
+      // Promote the medium-priority bail-out task to 'high' urgency
+      await supabaseAdmin
+        .from('tasks')
+        .update({
+          priority: 'high',
+          title: `🚨 REVIEW REQUIRED — call ASAP`,
+          description: `[Sales] Bill analyzer flagged review_required. Reasons: ${(analysis.review_reasons || []).map(r => `${r.code}(${r.severity})`).join(', ')}. View analysis: /portal/enquiries/${enquiryId || ''}. Customer is mid-wizard; reach out before they bail.`,
+        })
+        .eq('contact_id', contactId)
+        .like('title', 'Mid-flow partial — bail-out follow-up%')
+        .eq('status', 'todo');
+    }
+  } catch (e) {
+    console.warn('escalatePartialOnReview state update failed (non-fatal):', e.message);
+  }
+
+  // Fire team email — payload mimics the partial-capture flow so the email
+  // template's existing review-flag rendering kicks in.
+  try {
+    const { data: admins } = await supabaseAdmin
+      .from('users')
+      .select('email')
+      .eq('role', 'admin')
+      .eq('is_active', true);
+    const recipients = (admins || []).map(u => u.email).filter(Boolean);
+    if (recipients.length === 0) return;
+    await sendTeamNewLeadEmail({
+      form: {
+        firstName: reqBody.firstName || '(customer)',
+        email:     reqBody.email      || '',
+        phone:     reqBody.phone      || '',
+        wizardIntent: 'bills',
+        _partial: true,
+        _reviewMidFlow: true,
+      },
+      calculation: null,
+      leadScore: 75,
+      recipients,
+      reviewFlag: {
+        analysis_id:     analysisId,
+        enquiry_id:      enquiryId,
+        review_required: true,
+        review_reasons:  analysis.review_reasons || [],
+      },
+    });
+  } catch (e) {
+    console.error('escalatePartialOnReview email failed (non-fatal):', e.message);
+  }
+}
 
 const router = Router();
 
@@ -184,11 +261,15 @@ router.post('/', upload.array('files', 12), async (req, res) => {
     const analysis = analyzeBills({ bills: usableBills, region });
 
     // 3. Persist
+    // Step-3 partial ids — when present, the analysis row is linked to the
+    // contact and review_required cases escalate immediately.
+    const partialContactId = req.body.contact_id || null;
+    const partialEnquiryId = req.body.enquiry_id || null;
     const row = buildAnalysisRow(analysis, {
       region,
       postcode: req.body.postcode,
       email:    req.body.email,
-      contactId: null,
+      contactId: partialContactId,
     });
 
     const { data: inserted, error: insErr } = await supabaseAdmin
@@ -197,6 +278,15 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       .select('id')
       .single();
     if (insErr) throw insErr;
+
+    // Fire-and-forget escalation when review_required + partial linked.
+    escalatePartialOnReview({
+      contactId: partialContactId,
+      enquiryId: partialEnquiryId,
+      analysisId: inserted.id,
+      analysis,
+      reqBody: req.body,
+    });
 
     const uploadRows = buildUploadRows(parsedBills, inserted.id);
     const { data: insertedUploads, error: uplErr } = await supabaseAdmin
@@ -365,8 +455,10 @@ router.post('/estimate', async (req, res) => {
     const analysis = analyzeBills({ bills: [syntheticBill], region });
 
     // Persist with door='estimate' marker
+    const partialContactId = req.body.contact_id || null;
+    const partialEnquiryId = req.body.enquiry_id || null;
     const row = buildAnalysisRow(analysis, {
-      region, postcode: req.body.postcode, email: req.body.email, contactId: null,
+      region, postcode: req.body.postcode, email: req.body.email, contactId: partialContactId,
     });
     row.bills_uploaded = 0;  // marker: no bills uploaded for this analysis
 
@@ -376,6 +468,14 @@ router.post('/estimate', async (req, res) => {
       .select('id')
       .single();
     if (insErr) throw insErr;
+
+    escalatePartialOnReview({
+      contactId: partialContactId,
+      enquiryId: partialEnquiryId,
+      analysisId: inserted.id,
+      analysis,
+      reqBody: req.body,
+    });
 
     // Normalise into customer_profiles (Phase 1.5) — non-blocking
     const normResult = await normaliseFromEstimate(inserted.id, {
@@ -501,8 +601,10 @@ router.post('/tabular', async (req, res) => {
     const region   = req.body.region || regionFromPostcode(req.body.postcode);
     const analysis = analyzeBills({ bills, region });
 
+    const partialContactId = req.body.contact_id || null;
+    const partialEnquiryId = req.body.enquiry_id || null;
     const row = buildAnalysisRow(analysis, {
-      region, postcode: req.body.postcode, email: req.body.email, contactId: null,
+      region, postcode: req.body.postcode, email: req.body.email, contactId: partialContactId,
     });
     row.bills_uploaded = bills.length;
 
@@ -512,6 +614,14 @@ router.post('/tabular', async (req, res) => {
       .select('id')
       .single();
     if (insErr) throw insErr;
+
+    escalatePartialOnReview({
+      contactId: partialContactId,
+      enquiryId: partialEnquiryId,
+      analysisId: inserted.id,
+      analysis,
+      reqBody: req.body,
+    });
 
     // Persist the synthesised bill rows so future audits can see what the
     // customer typed (and the date assumptions).
