@@ -339,7 +339,27 @@ router.post('/submit', async (req, res) => {
       },
     });
 
-    // ── 5. Notify the team + send customer acknowledgment in parallel.
+    // ── 5. If this lead came with an analysisId, fetch the review flag so the
+    //      team email can warn sales the bills need verification before quoting.
+    let reviewFlag = null;
+    if (form.analysisId) {
+      try {
+        const { data: analysisRow } = await supabaseAdmin
+          .from('bill_analyses')
+          .select('id, review_required, review_reasons')
+          .eq('id', form.analysisId)
+          .maybeSingle();
+        if (analysisRow?.review_required) {
+          reviewFlag = {
+            analysis_id:     analysisRow.id,
+            review_required: true,
+            review_reasons:  analysisRow.review_reasons || [],
+          };
+        }
+      } catch (e) { console.warn('Could not fetch analysis review flag (non-fatal):', e.message); }
+    }
+
+    // ── 6. Notify the team + send customer acknowledgment in parallel.
     //      Both non-fatal — we never block the API response on email problems.
     //      Skip the team email on UPDATE path (it was sent at /submit-partial).
     Promise.all([
@@ -352,7 +372,7 @@ router.post('/submit', async (req, res) => {
             .eq('role', 'admin')
             .eq('is_active', true);
           const recipients = (admins || []).map(u => u.email).filter(Boolean);
-          await sendTeamNewLeadEmail({ form, calculation, leadScore, recipients });
+          await sendTeamNewLeadEmail({ form, calculation, leadScore, recipients, reviewFlag });
         } catch (e) { console.error('Team notification email failed (non-fatal):', e.message); }
       })(),
       (async () => {

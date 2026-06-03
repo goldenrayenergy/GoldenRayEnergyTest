@@ -132,7 +132,7 @@ export async function sendQuoteEmail(customer, calc, pdfBuffer, fileName) {
 // ── New: team notification on a fresh website lead ─────────────────────────
 // Sent from POST /api/quote/submit after the enquiry/contact/project rows
 // land. Notifies the project owner (if assigned) and Aroha (admin).
-export async function sendTeamNewLeadEmail({ form, calculation, leadScore, recipients, projectCode }) {
+export async function sendTeamNewLeadEmail({ form, calculation, leadScore, recipients, projectCode, reviewFlag }) {
   const customerName = [form.firstName, form.lastName].filter(Boolean).join(' ').trim() || 'New website enquiry';
   const recipientList = (recipients || []).filter(Boolean);
   if (recipientList.length === 0) {
@@ -140,7 +140,26 @@ export async function sendTeamNewLeadEmail({ form, calculation, leadScore, recip
     return null;
   }
   const detail = (label, value) => value ? `<tr><td style="padding:5px 8px;color:#6b7280;font-size:12px">${label}</td><td style="padding:5px 8px;font-weight:600;font-size:13px">${value}</td></tr>` : '';
+
+  // ── Review-required block — appended above the normal lead summary ──
+  // Fires when the bill analysis engine flagged the customer's upload
+  // (parse_suspect, multi-address, low field confidence, etc.). Sales
+  // walks into the "first call within 1 hour" task already knowing what
+  // to verify with the customer instead of quoting blindly.
+  const reviewBlock = reviewFlag?.review_required ? `
+    <div style="background:#fef2f2;border-left:4px solid #ef4444;border-radius:6px;padding:14px 16px;margin:0 0 18px 0">
+      <div style="font-size:13px;font-weight:800;color:#991b1b;margin-bottom:6px">🚨 REVIEW REQUIRED — verify bills before quoting</div>
+      <div style="font-size:12px;color:#7f1d1d;margin-bottom:8px">The bill analysis engine flagged this customer's upload. The customer was told a specialist would call within 24 hours <strong>instead of</strong> seeing an auto-generated savings projection — so they have no specific number in their head yet. Use this call to verify and quote honestly.</div>
+      <div style="font-size:12px;font-weight:700;color:#7f1d1d;margin-bottom:4px">What to verify:</div>
+      <ul style="font-size:12px;color:#7f1d1d;margin:0;padding-left:18px;line-height:1.55">
+        ${(reviewFlag.review_reasons || []).map(r => `<li><strong>[${r.severity}]</strong> ${r.message}</li>`).join('')}
+      </ul>
+      ${reviewFlag.analysis_id ? `<div style="font-size:11px;color:#7f1d1d;margin-top:8px">Original bill PDFs: open Bill Analysis <code style="background:#fee2e2;padding:1px 5px;border-radius:3px">${reviewFlag.analysis_id}</code> in the portal to download.</div>` : ''}
+    </div>
+  ` : '';
+
   const body = `
+    ${reviewBlock}
     <p style="font-size:14px"><strong style="color:#d97706">New website lead</strong>${projectCode ? ` · Project <code style="background:#fef3c7;padding:2px 6px;border-radius:4px;font-size:12px">${projectCode}</code>` : ''}</p>
     <p style="color:#4b5563;font-size:13px">A new enquiry just came through the website form. Lead score: <strong>${leadScore || '—'} / 100</strong>.</p>
     <div style="background:#f8fafc;border-radius:8px;padding:8px;margin:14px 0">
@@ -158,10 +177,11 @@ export async function sendTeamNewLeadEmail({ form, calculation, leadScore, recip
       </table>
     </div>
     <p style="font-size:13px">Open the project in the portal to qualify the lead and start the follow-up cadence.</p>`;
+  const subjectPrefix = reviewFlag?.review_required ? '[🚨 REVIEW NEEDED] ' : '[New lead] ';
   return send({
     to: recipientList,
-    subject: `[New lead] ${customerName}${form.monthlyBill ? ` — $${form.monthlyBill}/mo bill` : ''}`,
-    html: wrap({ title: 'New Website Lead', body }),
+    subject: `${subjectPrefix}${customerName}${form.monthlyBill ? ` — $${form.monthlyBill}/mo bill` : ''}`,
+    html: wrap({ title: reviewFlag?.review_required ? 'Lead — Review Required' : 'New Website Lead', body }),
   });
 }
 

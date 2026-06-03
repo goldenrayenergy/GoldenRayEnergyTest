@@ -659,15 +659,183 @@ function addSensitivity(scenario, transparency) {
   };
 }
 
+// ── Postcode → region resolver (NZ Post public ranges) ───────────────────
+//
+// NZ Post publishes 4-digit postcode ranges by territorial authority. We map
+// each range to a region key that exists in nz-retailer-rates.json (so the
+// region-specific irradiance is used downstream). Best-effort — boundary
+// cases at range edges may fall into an adjacent region; the worst-case
+// irradiance error within a wrong-but-neighbouring region is <8%.
+//
+// Source: NZ Post postcode coverage tables (public domain).
+const POSTCODE_RANGES = [
+  // [minInclusive, maxInclusive, region]
+  [100,  599,  'northland'],
+  [600,  999,  'auckland'],          // North Shore + West Auckland
+  [1000, 1499, 'auckland'],          // CBD / Central
+  [1500, 1999, 'auckland'],          // South Auckland to airport
+  [2000, 2999, 'auckland'],          // Counties / Manukau (still in 'auckland' irradiance bucket)
+  [3000, 3499, 'waikato'],           // Hamilton + surrounds
+  [3500, 3999, 'bay_of_plenty'],     // Tauranga, Rotorua, Whakatāne
+  [4000, 4099, 'bay_of_plenty'],     // Gisborne — closest irradiance proxy
+  [4100, 4499, 'hawkes_bay'],
+  [4500, 4899, 'manawatu'],          // Manawatū + Taranaki + Whanganui
+  [4900, 4999, 'wellington'],        // Wairarapa
+  [5000, 6999, 'wellington'],        // Wellington region
+  [7000, 7799, 'tasman'],            // Marlborough / Tasman / Nelson
+  [7800, 7999, 'westland'],          // West Coast
+  [8000, 8999, 'canterbury'],
+  [9000, 9499, 'otago'],
+  [9500, 9999, 'southland'],
+];
+
+export function regionFromPostcode(postcode) {
+  if (!postcode) return null;
+  const n = parseInt(String(postcode).trim(), 10);
+  if (isNaN(n) || n < 100 || n > 9999) return null;
+  for (const [min, max, region] of POSTCODE_RANGES) {
+    if (n >= min && n <= max) return region;
+  }
+  return null;
+}
+
+// Resolve which region to use, with provenance for audit (rule 1.4).
+// Priority: explicit user override > bill postcode > default.
+export function resolveRegion({ bills, regionOverride }) {
+  if (regionOverride) {
+    return { region: regionOverride, region_resolved_from: 'user_override' };
+  }
+  // Most common postcode across the supplied bills
+  const postcodes = (bills || []).map(b => b.service_postcode).filter(Boolean);
+  if (postcodes.length) {
+    const tally = {};
+    for (const p of postcodes) tally[p] = (tally[p] || 0) + 1;
+    const dominantPostcode = Object.entries(tally).sort((a, b) => b[1] - a[1])[0][0];
+    const region = regionFromPostcode(dominantPostcode);
+    if (region) {
+      return { region, region_resolved_from: 'address_postcode', region_postcode: dominantPostcode };
+    }
+  }
+  return { region: 'auckland', region_resolved_from: 'default' };
+}
+
+// ── Validation gate (rules 4.10, 14.10, 16.9, 16.12, 16.15) ──────────────
+//
+// Computes whether this analysis should be blocked from generating customer-
+// facing recommendations until a human has reviewed it. The route layer is
+// responsible for actually surfacing this — this function just decides.
+//
+// Returns: { review_required: bool, review_reasons: [{code, severity, message}] }
+//
+// Severities:
+//   'blocker' — analysis MUST NOT be shown to customer until reviewed
+//   'warning' — analysis can be shown but with a "verify with us" banner
+//   'info'    — purely informational, no review required
+export function computeReviewGate({ bills, aggregate, recommendation, regionInfo }) {
+  const reasons = [];
+
+  // (1) Any bill flagged as parse_suspect = blocker
+  const suspectBills = (bills || []).filter(b => b.parse_suspect);
+  if (suspectBills.length) {
+    reasons.push({
+      code: 'bill_parse_suspect',
+      severity: 'blocker',
+      message: `${suspectBills.length} bill(s) failed cross-field validation: ${
+        suspectBills.flatMap(b => (b.parse_warnings || []).map(w => w.code)).filter(Boolean).join(', ')
+      }`,
+    });
+  }
+
+  // (2) Critical fields missing across ALL bills (rules 14.3, 16.12)
+  if (!aggregate || !aggregate.annual_kwh || aggregate.annual_kwh <= 0) {
+    reasons.push({
+      code: 'no_consumption_data',
+      severity: 'blocker',
+      message: 'No usable kWh consumption could be extracted from any bill.',
+    });
+  }
+  if (!aggregate || !aggregate.annual_spend_nzd || aggregate.annual_spend_nzd <= 0) {
+    reasons.push({
+      code: 'no_spend_data',
+      severity: 'blocker',
+      message: 'No usable bill total could be extracted from any bill.',
+    });
+  }
+
+  // (3) Conflicting service addresses across bills (rule 2.10, 16.11)
+  // Different supply addresses → bills are for different sites, must not be merged
+  const addresses = [...new Set((bills || []).map(b => b.service_address).filter(Boolean))];
+  if (addresses.length > 1) {
+    reasons.push({
+      code: 'multiple_service_addresses',
+      severity: 'blocker',
+      message: `Bills cover ${addresses.length} different service addresses — they may belong to different sites and must not be combined.`,
+    });
+  }
+
+  // (4) Region resolution failed → no irradiance basis (rule 6.10)
+  if (regionInfo && regionInfo.region_resolved_from === 'default' && !addresses.length) {
+    reasons.push({
+      code: 'region_unresolved',
+      severity: 'warning',
+      message: 'Service location could not be determined from bills. Generation estimates use Auckland irradiance as a placeholder.',
+    });
+  }
+
+  // (5) Very short history → annualisation is rough (rule 5.11)
+  if (aggregate && aggregate.months_covered < 3) {
+    reasons.push({
+      code: 'insufficient_history',
+      severity: 'warning',
+      message: `Only ${aggregate.months_covered} month(s) of bills provided. Annual figures are extrapolated and may be off by ±20%.`,
+    });
+  }
+
+  // (6) Aggregate field confidence low (rules 13.5, 13.6)
+  // Take min confidence across critical fields per bill, then min across bills
+  const criticalConf = (bills || []).map(b => {
+    const fc = b.field_confidence || {};
+    const critical = ['period_start','period_end','kwh_total','total_nzd'];
+    const vals = critical.map(f => fc[f]).filter(v => typeof v === 'number');
+    return vals.length ? Math.min(...vals) : 0;
+  });
+  const aggregateFieldConf = criticalConf.length ? Math.min(...criticalConf) : 0;
+  if (aggregateFieldConf < 0.5 && criticalConf.length > 0) {
+    reasons.push({
+      code: 'low_field_confidence',
+      severity: 'blocker',
+      message: `Critical-field confidence is ${(aggregateFieldConf*100).toFixed(0)}% (need ≥50%). One or more required fields could not be reliably extracted.`,
+    });
+  }
+
+  const isBlocked = reasons.some(r => r.severity === 'blocker');
+  return {
+    review_required: isBlocked,
+    review_reasons:  reasons,
+    overall_field_confidence: +aggregateFieldConf.toFixed(3),
+  };
+}
+
 // ── Public top-level entry point ─────────────────────────────────────────
 
-export function analyzeBills({ bills, region = 'auckland' }) {
+export function analyzeBills({ bills, region: regionOverride = null }) {
   const aggregate = aggregateBills(bills);
-  const recommendation = recommendSystem(aggregate.annual_kwh, region);
+  // Resolve region from the bills' service_postcode (public NZ Post mapping)
+  // before any solar production math runs. Falls back to 'auckland' default
+  // when no address is extractable — and computeReviewGate flags that.
+  const regionInfo = resolveRegion({ bills, regionOverride });
+  const recommendation = recommendSystem(aggregate.annual_kwh, regionInfo.region);
   const { scenarios, switch_advice } = buildScenarios({ aggregate, recommendation });
   const patterns = detectPatterns(bills, aggregate);
-  const transparency = buildTransparency({ aggregate, recommendation, region });
+  const transparency = buildTransparency({ aggregate, recommendation, region: regionInfo.region });
   const scenariosWithSensitivity = scenarios.map(s => addSensitivity(s, transparency));
+
+  // Compute the review gate. Per rule 4.10/16.9/16.12, recommendations from
+  // blocked analyses must NOT be presented to the customer until a human has
+  // verified. The route layer/UI is responsible for honouring this; this
+  // function just decides. We still return the (preliminary) recommendation
+  // so the reviewing human has something to evaluate.
+  const gate = computeReviewGate({ bills, aggregate, recommendation, regionInfo });
 
   return {
     aggregate,
@@ -675,7 +843,12 @@ export function analyzeBills({ bills, region = 'auckland' }) {
     scenarios: scenariosWithSensitivity,
     switch_advice,
     patterns,
-    region,
+    region: regionInfo.region,
+    region_resolved_from: regionInfo.region_resolved_from,
+    region_postcode: regionInfo.region_postcode || null,
+    review_required: gate.review_required,
+    review_reasons:  gate.review_reasons,
+    overall_field_confidence: gate.overall_field_confidence,
     transparency,
   };
 }

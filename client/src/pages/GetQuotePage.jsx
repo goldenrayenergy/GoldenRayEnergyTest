@@ -136,11 +136,17 @@ export default function GetQuotePage() {
   }
 
   // ── File drop handlers ──
+  // Accepts PDFs (from email / desktop) AND images (from phone camera).
+  // Image bills go through Tesseract OCR server-side via parseBillImage().
   const onDropFiles = useCallback((dropped) => {
-    const pdfs = Array.from(dropped).filter(f =>
-      f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
-    );
-    setFiles(prev => [...prev, ...pdfs].slice(0, 12));
+    const accepted = Array.from(dropped).filter(f => {
+      const name = (f.name || '').toLowerCase();
+      return f.type === 'application/pdf'
+          || name.endsWith('.pdf')
+          || /^image\/(jpe?g|png|webp|heic|heif)$/i.test(f.type || '')
+          || /\.(jpe?g|png|webp|heic|heif)$/i.test(name);
+    });
+    setFiles(prev => [...prev, ...accepted].slice(0, 12));
   }, []);
   const removeFile = (i) => setFiles(prev => prev.filter((_, idx) => idx !== i));
 
@@ -624,6 +630,7 @@ function Step2Container({ subtitle, onBack, onNext, nextEnabled, skipProjection,
 // ── Branch: Bills upload ──
 function BillsBranch({ files, onDrop, removeFile, inputRef, onSwitchToManual }) {
   const [dragOver, setDragOver] = useState(false);
+  const cameraInputRef = useRef(null);
   return (
     <div>
       <div
@@ -634,15 +641,39 @@ function BillsBranch({ files, onDrop, removeFile, inputRef, onSwitchToManual }) 
         className={`rounded-2xl border-2 border-dashed transition cursor-pointer p-8 text-center
           ${dragOver ? 'border-amber-500 bg-amber-50 dark:bg-amber-500/5' : 'border-gray-300 dark:border-white/15 hover:border-amber-300'}`}>
         <Upload size={36} className="mx-auto text-amber-500 mb-3" />
-        <div className="text-sm font-bold mb-1 dark:text-gray-100">Drop 1-12 power bill PDFs here</div>
-        <div className="text-xs text-gray-500 dark:text-gray-400">Or click to browse · Mercury, Pulse, Contact, Genesis supported · 5 MB max</div>
-        <input ref={inputRef} type="file" accept=".pdf,application/pdf" multiple
+        <div className="text-sm font-bold mb-1 dark:text-gray-100">Drop 1-12 power bills here</div>
+        <div className="text-xs text-gray-500 dark:text-gray-400">PDFs or photos · Mercury, Pulse, Contact, Genesis, Meridian, Powershop · 10 MB max</div>
+        <input ref={inputRef} type="file" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif" multiple
           onChange={e => onDrop(e.target.files)} className="hidden" />
+      </div>
+
+      {/* Mobile-first: tap to open the phone camera and snap a photo of the bill. */}
+      {/* `capture="environment"` hints mobile browsers to use the rear camera. */}
+      {/* Desktop browsers ignore `capture` and show a normal file picker. */}
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => cameraInputRef.current?.click()}
+          className="px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border-2 border-amber-200 dark:border-amber-500/30 hover:border-amber-400 transition text-sm font-bold text-amber-700 dark:text-amber-200 flex items-center justify-center gap-2">
+          📷 Take a photo
+        </button>
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border-2 border-gray-200 dark:border-white/10 hover:border-amber-300 transition text-sm font-bold text-gray-700 dark:text-gray-200 flex items-center justify-center gap-2">
+          📁 Choose file
+        </button>
+        <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" multiple
+          onChange={e => onDrop(e.target.files)} className="hidden" />
+      </div>
+
+      <div className="mt-2 text-[10px] text-gray-400 text-center">
+        Tip: on mobile, "Take a photo" opens your camera. Make sure the bill is well-lit and in focus for best results.
       </div>
 
       {onSwitchToManual && (
         <div className="mt-3 text-center text-xs text-gray-500 dark:text-gray-400">
-          PDFs not working? Some NZ retailer bills are image-only and can't be auto-read.{' '}
+          Photos / PDFs not working? Some bill formats can't be auto-read.{' '}
           <button onClick={onSwitchToManual} className="text-amber-700 dark:text-amber-300 font-bold hover:underline">
             Type my numbers instead →
           </button>
@@ -1128,6 +1159,17 @@ function Step3Projection({ intent, files, estimate, manualRows, onAnalysisReady,
   }
 
   const a = result.analysis;
+
+  // ── REVIEW-REQUIRED BRANCH ──
+  // When the bill analysis engine flagged the upload (parse_suspect, multiple
+  // addresses, low field confidence, etc.), do NOT show the customer a precise
+  // savings projection — those numbers could be 2x wrong. Instead show a
+  // "we're verifying" message + the three most popular packages (specs only,
+  // no $-amounts — the specialist will quote during the call).
+  if (a.review_required) {
+    return <Step3ReviewRequired analysis={a} onBack={onBack} onNext={onNext} />;
+  }
+
   const doNothing  = a.scenarios.find(s => s.id === 'do-nothing');
   const solarOnly  = a.scenarios.find(s => s.id === 'solar-only');
   const solarBatt  = a.scenarios.find(s => s.id === 'solar-plus-battery');
@@ -1219,6 +1261,136 @@ function Step3Projection({ intent, files, estimate, manualRows, onAnalysisReady,
         <button onClick={onBack} className="text-xs font-bold text-gray-500 hover:text-gray-700">← Back</button>
         <button onClick={onNext} className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm hover:opacity-90 transition flex items-center gap-2 shadow-md shadow-amber-500/30">
           Get my tailored proposal <ArrowRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Step 3 — REVIEW REQUIRED branch ─────────────────────────────────────
+// Rendered when the bill analysis engine flagged the upload (parse_suspect,
+// multi-address, low field confidence, etc.). Shows a verification message
+// + 3 popular packages with system specs only — NO $-amounts (sales quotes
+// the price during the verification call).
+function Step3ReviewRequired({ analysis, onBack, onNext }) {
+  const [packages, setPackages] = useState(null);
+  const [loadErr, setLoadErr]   = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await publicApi.get('/packages/public');
+        if (cancelled) return;
+        // Show the 3 we recommend by default: the recommended slug + 2 others.
+        // If recommended slug not in catalogue, just take the top 3 by sort_order.
+        const recommended = analysis.recommendation?.recommended_package_slug;
+        const sorted = (data || []).slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+        const picked = recommended
+          ? [sorted.find(p => p.slug === recommended), ...sorted.filter(p => p.slug !== recommended)].filter(Boolean).slice(0, 3)
+          : sorted.slice(0, 3);
+        setPackages(picked);
+      } catch (e) {
+        if (!cancelled) setLoadErr(e.response?.data?.error || e.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [analysis]);
+
+  return (
+    <div className="bg-white dark:bg-brand-dark-1 rounded-3xl border border-gray-100 dark:border-white/10 shadow-xl p-8 animate-fade-in">
+      <div className="text-center mb-6">
+        <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">STEP 3 OF 4</div>
+        <h1 className="text-3xl md:text-4xl font-extrabold font-display mb-2 dark:text-gray-100">We're verifying your bills</h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400 max-w-2xl mx-auto">
+          Thanks — we've received your bills. Our analysis found a few things worth verifying
+          with you before we issue a precise savings quote. <strong className="text-gray-700 dark:text-gray-200">
+          A specialist will call within 24 hours</strong> to walk through your real usage and
+          recommend the right system.
+        </p>
+      </div>
+
+      {/* Honest "why" — small print so customer trusts the friction */}
+      <div className="bg-amber-50 dark:bg-amber-500/10 border-l-4 border-amber-400 p-4 rounded-r-lg mb-6">
+        <div className="flex items-start gap-3">
+          <Info size={18} className="text-amber-600 dark:text-amber-300 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-xs font-bold text-amber-800 dark:text-amber-200 mb-1">Why we're calling instead of auto-quoting:</p>
+            <ul className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
+              <li>• Solar economics scale with your real usage — getting it right matters more than getting it fast</li>
+              <li>• A few items on your bills need a human eye to confirm what's energy use vs one-off charges</li>
+              <li>• The system size we recommend during the call will be honest, not optimistic</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div className="text-center mb-4">
+        <h2 className="text-base font-extrabold dark:text-gray-100 mb-1">In the meantime — here's what most NZ homes choose</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Browse what suits you. Final pricing tailored to your home during the call.</p>
+      </div>
+
+      {/* Package cards — SPECS ONLY, NO PRICES */}
+      {!packages && !loadErr && (
+        <div className="text-center py-8">
+          <Loader2 size={24} className="animate-spin text-amber-500 mx-auto" />
+        </div>
+      )}
+      {loadErr && (
+        <div className="text-center py-6 text-xs text-red-500">Could not load packages — your specialist will walk you through them on the call.</div>
+      )}
+      {packages && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+          {packages.map(pkg => (
+            <a
+              key={pkg.slug}
+              href={`/solar-packages/${pkg.slug}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-xl border-2 border-gray-200 dark:border-white/10 hover:border-amber-400 transition p-4 bg-white dark:bg-brand-dark-1"
+            >
+              {pkg.badge && (
+                <div className="inline-block text-[9px] font-extrabold tracking-widest text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-500/20 rounded-full px-2 py-0.5 mb-2">
+                  {pkg.badge}
+                </div>
+              )}
+              <div className="text-base font-extrabold dark:text-gray-100 mb-1">{pkg.name}</div>
+              <div className="space-y-1.5 mt-3">
+                <div className="flex items-center gap-2 text-xs">
+                  <Sun size={12} className="text-amber-500 flex-shrink-0" />
+                  <span className="text-gray-700 dark:text-gray-300"><strong>{pkg.system_kw} kW</strong> solar</span>
+                </div>
+                {pkg.battery_kwh > 0 && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <Battery size={12} className="text-emerald-500 flex-shrink-0" />
+                    <span className="text-gray-700 dark:text-gray-300"><strong>{pkg.battery_kwh} kWh</strong> battery</span>
+                  </div>
+                )}
+                {pkg.description && (
+                  <div className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed mt-2 line-clamp-2">{pkg.description}</div>
+                )}
+              </div>
+              <div className="mt-3 text-[10px] font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                View details <ArrowRight size={10} />
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+
+      <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-500/10 dark:to-orange-500/10 border border-amber-200 dark:border-amber-500/30 p-5 rounded-xl text-center mb-5">
+        <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+          Almost done — one more step so we can call you
+        </p>
+        <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+          Your contact details on the next page, then our specialist will be in touch within 24 hours.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between pt-5 border-t border-gray-100 dark:border-white/10">
+        <button onClick={onBack} className="text-xs font-bold text-gray-500 hover:text-gray-700">← Back</button>
+        <button onClick={onNext} className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm hover:opacity-90 transition flex items-center gap-2 shadow-md shadow-amber-500/30">
+          Continue to contact details <ArrowRight size={14} />
         </button>
       </div>
     </div>
