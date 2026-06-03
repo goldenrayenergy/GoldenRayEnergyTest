@@ -499,7 +499,8 @@ function Step3Capture({ intent, customerType, estimate, utm, contact, setContact
       </div>
 
       <div className="flex items-center justify-between mt-6 pt-5 border-t border-gray-100 dark:border-white/10">
-        <button onClick={onBack} className="text-xs font-bold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">← Back</button>
+        <button onClick={onBack}
+          className="px-3 py-2 -ml-3 rounded-lg text-sm font-bold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">← Back</button>
         <div className="text-[10px] text-gray-400">Required to continue · no skip</div>
       </div>
     </div>
@@ -639,7 +640,8 @@ function Step2Container({ subtitle, onBack, onNext, nextEnabled, skipProjection,
       {children}
 
       <div className="flex items-center justify-between mt-6 pt-5 border-t border-gray-100 dark:border-white/10">
-        <button onClick={onBack} className="text-xs font-bold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">← Back</button>
+        <button onClick={onBack}
+          className="px-3 py-2 -ml-3 rounded-lg text-sm font-bold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">← Back</button>
         <button
           onClick={onNext}
           disabled={!nextEnabled}
@@ -738,11 +740,15 @@ function BillsBranch({ files, onDrop, removeFile, inputRef, onSwitchToManual }) 
 
           <div className="mt-3 bg-white dark:bg-brand-dark border border-gray-100 dark:border-white/10 rounded-xl divide-y divide-gray-100 dark:divide-white/5">
             {files.map((f, i) => (
-              <div key={i} className="px-4 py-2 flex items-center gap-3">
+              <div key={i} className="pl-4 pr-2 py-1.5 flex items-center gap-3">
                 <FileText size={14} className="text-amber-500 flex-shrink-0" />
                 <span className="text-xs flex-1 truncate dark:text-gray-200">{f.name}</span>
                 <span className="text-[10px] text-gray-400">{Math.round(f.size / 1024)} KB</span>
-                <button onClick={() => removeFile(i)} className="text-gray-300 hover:text-red-500"><X size={12} /></button>
+                <button onClick={() => removeFile(i)}
+                  className="w-9 h-9 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center justify-center flex-shrink-0"
+                  title="Remove file" aria-label={`Remove ${f.name}`}>
+                  <X size={16} />
+                </button>
               </div>
             ))}
           </div>
@@ -800,7 +806,64 @@ function ManualTableBranch({ rows, setRows, onSwitchToUpload }) {
         </p>
       </div>
 
-      <div className="overflow-x-auto bg-white dark:bg-brand-dark-1 border border-gray-200 dark:border-white/10 rounded-xl">
+      {/* Mobile-first: stacked cards, one per billing period. md+ shows the
+          original 5-column table for paste-from-Excel ergonomics. Same data
+          + onPaste handler, two layouts. */}
+      <div className="md:hidden space-y-3">
+        {rows.map((r, i) => {
+          const FIELD_LABELS = {
+            days:      { label: 'Days in period',       required: true,  placeholder: '32',      hint: 'How many days the bill covers' },
+            kwh:       { label: 'Electricity used (kWh)', required: true, placeholder: '1906',    hint: 'Total kWh for the period' },
+            total_nzd: { label: 'Total incl GST (NZ$)', required: true,  placeholder: '558.23',  hint: 'Final amount on the bill' },
+            fixed_nzd: { label: 'Fixed daily charge (NZ$)', required: false, placeholder: '0.00', hint: 'Optional — sum of daily charges' },
+            usage_nzd: { label: 'Usage charge (NZ$)',   required: false, placeholder: '0.00',    hint: 'Optional — variable kWh charges' },
+          };
+          const rowOK = r.days && r.kwh && r.total_nzd;
+          return (
+            <div key={i} className={`rounded-xl border-2 p-4 transition
+              ${rowOK ? 'border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-500/5'
+                      : 'border-gray-200 dark:border-white/10 bg-white dark:bg-brand-dark-1'}`}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs font-extrabold tracking-widest text-amber-700 dark:text-amber-300">
+                  BILL {i + 1} {rowOK && <span className="ml-1 text-emerald-600">✓</span>}
+                </div>
+                {rows.length > 1 && (
+                  <button onClick={() => removeRow(i)}
+                    className="w-9 h-9 -mr-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center justify-center"
+                    title="Remove this bill" aria-label="Remove this bill">
+                    <X size={18} />
+                  </button>
+                )}
+              </div>
+              <div className="space-y-3">
+                {['days', 'kwh', 'total_nzd', 'fixed_nzd', 'usage_nzd'].map((c, j) => {
+                  const meta = FIELD_LABELS[c];
+                  return (
+                    <div key={c}>
+                      <label className="text-[11px] font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-1">
+                        {meta.label} {meta.required && <span className="text-amber-600">*</span>}
+                      </label>
+                      <input
+                        type="number" step="0.01" inputMode="decimal"
+                        value={r[c] ?? ''}
+                        onChange={e => update(i, c, e.target.value)}
+                        onPaste={onCellPaste(i, COLS.indexOf(c), COLS)}
+                        placeholder={meta.placeholder}
+                        className="w-full px-3 py-3 rounded-lg border border-gray-200 dark:border-white/10 text-base bg-white dark:bg-brand-dark focus:border-amber-400 focus:ring-2 focus:ring-amber-200 outline-none"
+                      />
+                      <div className="text-[10px] text-gray-400 mt-1">{meta.hint}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop / tablet: original compact table — easier to scan multiple
+          rows side-by-side and Excel paste flows naturally into adjacent cells. */}
+      <div className="hidden md:block overflow-x-auto bg-white dark:bg-brand-dark-1 border border-gray-200 dark:border-white/10 rounded-xl">
         <table className="w-full text-xs">
           <thead className="bg-gray-50 dark:bg-white/5">
             <tr>
@@ -831,8 +894,8 @@ function ManualTableBranch({ rows, setRows, onSwitchToUpload }) {
                 ))}
                 <td className="px-2 py-1 text-right">
                   {rows.length > 1 && (
-                    <button onClick={() => removeRow(i)} className="text-gray-300 hover:text-red-500" title="Remove row">
-                      <X size={12} />
+                    <button onClick={() => removeRow(i)} className="w-7 h-7 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 inline-flex items-center justify-center" title="Remove row" aria-label="Remove row">
+                      <X size={14} />
                     </button>
                   )}
                 </td>
@@ -1303,7 +1366,8 @@ function Step3Projection({ intent, files, estimate, manualRows, partial, onAnaly
       )}
 
       <div className="flex items-center justify-between pt-5 border-t border-gray-100 dark:border-white/10">
-        <button onClick={onBack} className="text-xs font-bold text-gray-500 hover:text-gray-700">← Back</button>
+        <button onClick={onBack}
+          className="px-3 py-2 -ml-3 rounded-lg text-sm font-bold text-gray-500 hover:text-gray-700 hover:bg-gray-50">← Back</button>
         <button onClick={onNext} className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm hover:opacity-90 transition flex items-center gap-2 shadow-md shadow-amber-500/30">
           Get my tailored proposal <ArrowRight size={14} />
         </button>
@@ -1433,7 +1497,8 @@ function Step3ReviewRequired({ analysis, onBack, onNext }) {
       </div>
 
       <div className="flex items-center justify-between pt-5 border-t border-gray-100 dark:border-white/10">
-        <button onClick={onBack} className="text-xs font-bold text-gray-500 hover:text-gray-700">← Back</button>
+        <button onClick={onBack}
+          className="px-3 py-2 -ml-3 rounded-lg text-sm font-bold text-gray-500 hover:text-gray-700 hover:bg-gray-50">← Back</button>
         <button onClick={onNext} className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-sm hover:opacity-90 transition flex items-center gap-2 shadow-md shadow-amber-500/30">
           Continue to contact details <ArrowRight size={14} />
         </button>
@@ -1759,7 +1824,7 @@ function Step4ContactForm({ intent, customerType, estimate, analysisId, analysis
               </div>
             </div>
             <button type="button" onClick={() => setEditContact(true)}
-              className="text-[10px] font-bold text-amber-700 dark:text-amber-300 hover:underline whitespace-nowrap">Edit</button>
+              className="px-3 py-2 -mr-1 rounded-lg text-xs font-bold text-amber-700 dark:text-amber-300 hover:bg-amber-100/50 dark:hover:bg-amber-500/10 whitespace-nowrap">Edit</button>
           </div>
         ) : (
           <div className="rounded-xl border border-gray-200 dark:border-white/10 p-3 space-y-3">
@@ -1770,7 +1835,7 @@ function Step4ContactForm({ intent, customerType, estimate, analysisId, analysis
             <Field label="Email *" value={contact.email} onChange={v => set('email', v)} placeholder="john@example.com" type="email" />
             <div className="text-right">
               <button type="button" onClick={() => setEditContact(false)}
-                className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline">Done editing</button>
+                className="px-3 py-2 rounded-lg text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/50 dark:hover:bg-emerald-500/10">Done editing</button>
             </div>
           </div>
         )}
@@ -1872,7 +1937,8 @@ function Step4ContactForm({ intent, customerType, estimate, analysisId, analysis
       </p>
 
       <div className="flex items-center justify-center mt-5 pt-5 border-t border-gray-100 dark:border-white/10">
-        <button onClick={onBack} className="text-xs font-bold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+        <button onClick={onBack}
+          className="px-4 py-2 rounded-lg text-sm font-bold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">
           ← {analysisResult ? 'Back to savings' : 'Back'}
         </button>
       </div>
