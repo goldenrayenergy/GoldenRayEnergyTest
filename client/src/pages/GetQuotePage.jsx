@@ -143,7 +143,10 @@ export default function GetQuotePage() {
       return f.type === 'application/pdf'
           || name.endsWith('.pdf')
           || /^image\/(jpe?g|png|webp|heic|heif)$/i.test(f.type || '')
-          || /\.(jpe?g|png|webp|heic|heif)$/i.test(name);
+          || /\.(jpe?g|png|webp|heic|heif)$/i.test(name)
+          // Smart-meter CSVs from Mercury / Genesis / Contact / Powerswitch
+          || name.endsWith('.csv')
+          || /^(text\/csv|application\/(csv|vnd\.ms-excel))$/i.test(f.type || '');
     });
     setFiles(prev => [...prev, ...accepted].slice(0, 12));
   }, []);
@@ -663,9 +666,18 @@ function BillsBranch({ files, onDrop, removeFile, inputRef, onSwitchToManual }) 
           ${dragOver ? 'border-amber-500 bg-amber-50 dark:bg-amber-500/5' : 'border-gray-300 dark:border-white/15 hover:border-amber-300'}`}>
         <Upload size={36} className="mx-auto text-amber-500 mb-3" />
         <div className="text-sm font-bold mb-1 dark:text-gray-100">Drop 1-12 power bills here</div>
-        <div className="text-xs text-gray-500 dark:text-gray-400">PDFs or photos · Mercury, Pulse, Contact, Genesis, Meridian, Powershop · 10 MB max</div>
-        <input ref={inputRef} type="file" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif" multiple
+        <div className="text-xs text-gray-500 dark:text-gray-400">PDFs, photos, or smart-meter CSVs · Mercury, Genesis, Contact, Pulse, Ecotricity, Powerswitch · 10 MB max</div>
+        <input ref={inputRef} type="file"
+          accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif,.csv,text/csv,application/vnd.ms-excel"
+          multiple
           onChange={e => onDrop(e.target.files)} className="hidden" />
+      </div>
+
+      {/* Smart-meter CSV upgrade hint — most customers don't know they CAN download
+          half-hourly data from their retailer's portal. Mentioning it converts
+          some uncertain bill-uploaders into high-accuracy CSV-uploaders. */}
+      <div className="mt-2 text-[10px] text-gray-400 dark:text-gray-500 text-center">
+        💡 Got smart-meter CSV from your retailer's app? Drop that here for the most accurate projection.
       </div>
 
       {/* Mobile-first: tap to open the phone camera and snap a photo of the bill. */}

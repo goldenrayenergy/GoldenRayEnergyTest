@@ -6,6 +6,7 @@ import { analyzeBills } from '../services/billAnalysisService.js';
 import { normaliseFromBillAnalysis, normaliseFromEstimate } from '../services/pm/customerProfileService.js';
 import { validateEstimateForm } from '../utils/validators.js';
 import { sendTeamNewLeadEmail } from '../services/emailService.js';
+import { parseSmartMeterCsv } from '../services/smartMeterCsvService.js';
 
 // Track 1 + 2 — when the analyzer flags review_required AND the request came
 // from a wizard visitor who'd already created a partial enquiry at Step 3,
@@ -92,20 +93,109 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 12 },
   fileFilter: (req, file, cb) => {
-    const ok = file.mimetype === 'application/pdf' ||
-               /^image\/(jpe?g|png|webp|heic|heif)$/i.test(file.mimetype);
-    if (!ok) return cb(new Error(`Unsupported file type: ${file.mimetype} (expected PDF or image)`), false);
+    const name = (file.originalname || '').toLowerCase();
+    const ok = file.mimetype === 'application/pdf'
+            || /^image\/(jpe?g|png|webp|heic|heif)$/i.test(file.mimetype)
+            // Smart-meter CSVs — Mercury / Genesis / Contact / Powerswitch exports
+            // Browsers report inconsistent MIME types for .csv (text/csv,
+            // application/vnd.ms-excel, application/octet-stream), so fall
+            // through to the .csv extension check as a backup.
+            || /^(text\/csv|application\/csv|application\/vnd\.ms-excel|text\/plain|application\/octet-stream)$/i.test(file.mimetype)
+            || name.endsWith('.csv');
+    if (!ok) return cb(new Error(`Unsupported file type: ${file.mimetype} (expected PDF, image, or CSV)`), false);
     cb(null, true);
   },
 });
 
-// Dispatch one uploaded file to the right parser based on MIME type.
+// A file is "CSV-shaped" if its filename ends in .csv. We trust the extension
+// because browser MIME reporting is unreliable for CSV (sometimes text/plain,
+// sometimes application/octet-stream depending on OS + browser).
+function isCsvFile(file) {
+  if (!file?.originalname) return false;
+  return file.originalname.toLowerCase().endsWith('.csv')
+      || /^(text\/csv|application\/csv|application\/vnd\.ms-excel)$/i.test(file.mimetype);
+}
+
+// Dispatch one uploaded file to the right parser based on type.
+// CSV files are handled separately in the upload route — this dispatcher
+// covers PDF + image branches only.
 async function parseUploadedFile(file) {
   if (file.mimetype === 'application/pdf') {
     return parseBillPdf(file.buffer, { fileName: file.originalname });
   }
   // image/* — camera capture
   return parseBillImage(file.buffer, { fileName: file.originalname, mimeType: file.mimetype });
+}
+
+// Convert smart-meter CSV monthly buckets into the synthesised-bill shape
+// the analyzeBills() pipeline consumes. Each bucket becomes one "bill" with
+// kwh_total + period dates.
+//
+// CSV cost handling:
+//   • If the CSV has a cost column (Genesis, some Mercury exports) we use
+//     the customer's actual dollars — most accurate.
+//   • If only kWh data (Powerswitch, most Mercury exports) we estimate cost
+//     using NZ-average residential rates ($0.30/kWh variable + $1.50/day
+//     fixed). The analyser uses this for "current spend" baseline only —
+//     it computes its own forward projections from retailer rate cards.
+//     The estimated rows are flagged in raw_extracted_fields so sales can
+//     refine later if the customer also uploads a bill.
+const NZ_AVG_VARIABLE_PER_KWH_NZD = 0.30;   // ex-GST, post-discount average
+const NZ_AVG_FIXED_PER_DAY_NZD    = 1.50;   // ex-GST average daily charge
+function csvBucketsToBills(buckets, retailerName) {
+  return buckets.map(b => {
+    const [y, m] = b.month_year.split('-').map(Number);
+    const periodStart = `${y}-${String(m).padStart(2, '0')}-01`;
+    const lastDay     = new Date(y, m, 0).getDate();
+    const periodEnd   = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    let variableExGst, fixedExGst, gstNzd, totalNzd, costEstimated;
+    if (b.usage_nzd != null) {
+      // CSV included a cost column — use it as the source of truth.
+      // Customer's printed usage_nzd is incl-GST; back out the ex-GST split.
+      variableExGst = +(b.usage_nzd / 1.15).toFixed(2);
+      fixedExGst    = +(b.days * NZ_AVG_FIXED_PER_DAY_NZD).toFixed(2);
+      gstNzd        = +(b.usage_nzd - b.usage_nzd / 1.15).toFixed(2);
+      totalNzd      = +b.usage_nzd.toFixed(2);
+      costEstimated = false;
+    } else {
+      // CSV had kWh only. Estimate cost from NZ-average residential rates.
+      variableExGst = +(b.kwh * NZ_AVG_VARIABLE_PER_KWH_NZD).toFixed(2);
+      fixedExGst    = +(b.days * NZ_AVG_FIXED_PER_DAY_NZD).toFixed(2);
+      const subtotal = variableExGst + fixedExGst;
+      gstNzd        = +(subtotal * 0.15).toFixed(2);
+      totalNzd      = +(subtotal + gstNzd).toFixed(2);
+      costEstimated = true;
+    }
+
+    return {
+      retailer:             retailerName,
+      plan_name:            null,
+      period_start:         periodStart,
+      period_end:           periodEnd,
+      days_in_period:       b.days,
+      kwh_total:            b.kwh,
+      kwh_peak:             null,
+      kwh_off_peak:         null,
+      kwh_exported:         null,
+      fixed_charge_nzd:     fixedExGst,
+      variable_charge_nzd:  variableExGst,
+      export_credit_nzd:    null,
+      gst_nzd:              gstNzd,
+      total_nzd:            totalNzd,
+      // CSV-from-customer = high confidence (real meter data) when cost
+      // present; medium when we estimated cost ourselves.
+      ocr_confidence:       costEstimated ? 0.75 : 0.95,
+      file_name:            null,
+      file_size_bytes:      0,
+      ocr_text_excerpt:     '',
+      parse_errors:         [],
+      parse_method:         'smart_meter_csv',
+      raw_extracted_fields: costEstimated
+        ? { csv_cost_estimated_from_nz_avg_rates: true, variable_rate_used_per_kwh: NZ_AVG_VARIABLE_PER_KWH_NZD, fixed_rate_used_per_day: NZ_AVG_FIXED_PER_DAY_NZD }
+        : { csv_cost_from_file: true },
+    };
+  });
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -228,17 +318,52 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       return res.status(400).json({ error: 'No bills uploaded. Drop one or more PDFs.' });
     }
 
-    // 1. Parse each file (PDF or camera image) → normalised bill objects.
-    // Keep the original buffers alongside so we can upload them to Storage
-    // after the bill_uploads rows have IDs (storage path includes the upload id).
+    // 1. Parse each file → normalised bill objects.
+    // Routes:
+    //   • CSV  → smartMeterCsvService.parseSmartMeterCsv() → buckets → synthesised bills
+    //   • PDF  → parseBillPdf() (text extraction + retailer parsers)
+    //   • IMG  → parseBillImage() (Tesseract OCR + retailer parsers)
+    //
+    // Each CSV file expands into multiple synthesised bills (one per month
+    // in the CSV); each PDF/image produces one. sourceFiles is parallel to
+    // parsedBills only for PDF/image uploads (we don't store CSV originals
+    // since the bill_uploads schema is bill-shaped, not CSV-shaped).
     const parsedBills = [];
-    const sourceFiles = [];                          // parallel to parsedBills
+    const sourceFiles = [];                          // parallel to parsedBills for PDF/image
     const ocrErrors = [];
+    const csvSummaries = [];                         // per-CSV summary for the response
     for (const f of req.files) {
       try {
-        const parsed = await parseUploadedFile(f);
-        parsedBills.push(parsed);
-        sourceFiles.push(f);
+        if (isCsvFile(f)) {
+          const csvResult = parseSmartMeterCsv(f.buffer);
+          if (csvResult.monthly_rows.length === 0) {
+            ocrErrors.push({
+              file: f.originalname,
+              error: csvResult.warnings.map(w => w.reason).join('; ') || 'CSV had no usable rows.',
+            });
+            continue;
+          }
+          const retailerName = csvResult.retailer || 'Smart-meter CSV';
+          const bills = csvBucketsToBills(csvResult.monthly_rows, retailerName);
+          for (const b of bills) {
+            parsedBills.push(b);
+            sourceFiles.push(null);                  // CSV → no source-PDF to upload
+          }
+          csvSummaries.push({
+            file_name:    f.originalname,
+            source:       csvResult.source,
+            retailer:     csvResult.retailer,
+            granularity:  csvResult.granularity,
+            row_count:    csvResult.row_count,
+            month_count:  csvResult.monthly_rows.length,
+            date_range:   csvResult.date_range,
+            warnings:     csvResult.warnings,
+          });
+        } else {
+          const parsed = await parseUploadedFile(f);
+          parsedBills.push(parsed);
+          sourceFiles.push(f);
+        }
       } catch (e) {
         ocrErrors.push({ file: f.originalname, error: e.message });
       }
@@ -305,6 +430,8 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       for (let i = 0; i < parsedBills.length; i++) {
         const uploadId = insertedUploads[i].id;
         const file     = sourceFiles[i];
+        // CSV-derived synthesised bills have no source-PDF/image to upload.
+        if (!file) continue;
         const ext      = (file.originalname.match(/\.([a-z0-9]+)$/i)?.[1] || 'bin').toLowerCase();
         const path     = `${inserted.id}/${uploadId}.${ext}`;
         try {
@@ -332,10 +459,18 @@ router.post('/', upload.array('files', 12), async (req, res) => {
     // 4. Normalise into customer_profiles (Phase 1.5) — non-blocking
     const normResult = await normaliseFromBillAnalysis(inserted.id, { ...analysis, region }, parsedBills);
 
+    // source_door reflects how the data arrived — CSV uploads land in their
+    // own bucket so analytics can split bill-upload customers from smart-meter
+    // customers.
+    const csvCount = csvSummaries.length;
+    const pdfImgCount = parsedBills.length - csvSummaries.reduce((s, c) => s + (c.month_count || 0), 0);
+    const sourceDoor = csvCount > 0 && pdfImgCount === 0 ? 'smart_meter_csv'
+                     : parsedBills.length >= 6 ? 'bill_upload_12'
+                     : 'bill_upload_partial';
     res.status(201).json({
       id: inserted.id,
       analysis,
-      source_door: parsedBills.length >= 6 ? 'bill_upload_12' : 'bill_upload_partial',
+      source_door: sourceDoor,
       confidence_band: normResult.profile?.confidence_band || 'medium',
       profile_normalised: normResult.ok,
       parse_summary: parsedBills.map(b => ({
@@ -347,6 +482,7 @@ router.post('/', upload.array('files', 12), async (req, res) => {
         ocr_confidence:  b.ocr_confidence,
         parse_errors:    b.parse_errors,
       })),
+      csv_summary: csvSummaries.length ? csvSummaries : undefined,
       ocr_errors: ocrErrors,
     });
   } catch (e) {
