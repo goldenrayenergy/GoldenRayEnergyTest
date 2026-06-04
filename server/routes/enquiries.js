@@ -118,7 +118,7 @@ router.get('/:id/bills-analysis', async (req, res) => {
     if (analysisIds.length) {
       const { data: ups, error: upErr } = await supabaseAdmin
         .from('bill_uploads')
-        .select('id, analysis_id, file_name, file_size_bytes, file_storage_path, file_mime_type, retailer, plan_name, period_start, period_end, days_in_period, kwh_total, fixed_charge_nzd, variable_charge_nzd, gst_nzd, total_nzd, service_address, icp_number, network_distributor, parse_errors, ocr_confidence, parse_method')
+        .select('id, analysis_id, file_name, file_size_bytes, file_storage_path, file_mime_type, retailer, plan_name, period_start, period_end, days_in_period, kwh_total, fixed_charge_nzd, variable_charge_nzd, export_credit_nzd, gst_nzd, total_nzd, service_address, icp_number, network_distributor, parse_errors, parse_warnings, field_confidence, ocr_confidence, parse_method')
         .in('analysis_id', analysisIds)
         .order('period_end', { ascending: false });
       if (upErr) console.warn('bill_uploads fetch failed:', upErr.message);

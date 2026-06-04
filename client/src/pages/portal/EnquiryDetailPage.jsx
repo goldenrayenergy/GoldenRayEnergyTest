@@ -7,7 +7,7 @@ import { fmt$, fmtDateTime } from '../../utils/format';
 import {
   ArrowLeft, Sun, Zap, Leaf, DollarSign, TrendingUp, Battery,
   Mail, Phone, MapPin, Home, Calendar, User as UserIcon,
-  FileText, AlertTriangle, CheckCircle, ExternalLink, Loader2, Eye,
+  FileText, AlertTriangle, CheckCircle, ExternalLink, Loader2, Eye, ChevronDown,
 } from 'lucide-react';
 
 const STATUS_OPTIONS = [
@@ -435,51 +435,10 @@ function BillsAnalysisTab({ loading, error, data, onMarkVerified, onViewPdf }) {
         </div>
       </Card>
 
-      {/* Bills table — one row per uploaded bill */}
-      <Card title="Uploaded bills" subtitle={`${uploads.length} bill${uploads.length === 1 ? '' : 's'} parsed`}>
-        {uploads.length === 0 ? (
-          <div className="text-center py-6 text-xs text-gray-400">No bill uploads stored (estimate intent, or storage upload failed)</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-gray-50 border-b border-gray-100">
-                <tr>
-                  <th className="text-left px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">File</th>
-                  <th className="text-left px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Period</th>
-                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Days</th>
-                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">kWh</th>
-                  <th className="text-right px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Total NZ$</th>
-                  <th className="text-left px-3 py-2 font-bold text-gray-500 text-[10px] uppercase">Address</th>
-                  <th className="text-right px-3 py-2"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {uploads.map(u => (
-                  <tr key={u.id}>
-                    <td className="px-3 py-2 text-gray-700">
-                      <div className="font-medium truncate max-w-[180px]">{u.file_name || '—'}</div>
-                      <div className="text-[10px] text-gray-400">{u.retailer || 'unknown'}{u.parse_method ? ` · ${u.parse_method}` : ''}</div>
-                    </td>
-                    <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{u.period_start} → {u.period_end}</td>
-                    <td className="px-3 py-2 text-right">{u.days_in_period || '—'}</td>
-                    <td className="px-3 py-2 text-right">{u.kwh_total != null ? u.kwh_total.toLocaleString() : '—'}</td>
-                    <td className="px-3 py-2 text-right font-semibold">{u.total_nzd != null ? fmt$(u.total_nzd) : '—'}</td>
-                    <td className="px-3 py-2 text-gray-500 text-[11px] truncate max-w-[160px]">{u.service_address || '—'}</td>
-                    <td className="px-3 py-2 text-right">
-                      {u.file_storage_path ? (
-                        <button onClick={() => onViewPdf(u.id)}
-                          className="text-amber-700 hover:text-amber-600 text-[10px] font-bold inline-flex items-center gap-1">
-                          <Eye size={11} /> View
-                        </button>
-                      ) : <span className="text-[9px] text-gray-300">not stored</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      {/* Per-bill drill-down — verification view for the team. Shows what the
+          parser extracted next to a reconciliation badge so they can tell at
+          a glance which bill (if any) needs verification on the call. */}
+      <BillDrilldownList uploads={uploads} onViewPdf={onViewPdf} />
 
       {/* Scenarios — same numbers customer would see */}
       {Array.isArray(analysis.scenarios) && analysis.scenarios.length > 0 && (
@@ -524,6 +483,214 @@ function Stat({ label, value, sub }) {
       <div className="text-[9px] text-gray-400 uppercase tracking-wide font-bold">{label}</div>
       <div className="text-base font-extrabold text-gray-900 mt-1 truncate">{value}</div>
       {sub && <div className="text-[9px] text-gray-400 mt-0.5 truncate">{sub}</div>}
+    </div>
+  );
+}
+
+// ── Per-bill drill-down (Track 7 observability) ─────────────────────────────
+// One expandable card per uploaded bill. Header always shows status badge +
+// totals so the team can spot the bad apple instantly. Expanded view shows
+// line-item breakdown, reconciliation arithmetic, per-bill validators that
+// fired, low-confidence fields. View PDF button on every row.
+//
+// Status priority (highest wins):
+//   ✗ Suspect  — parse_warnings contains a suspect:true entry OR sum drift > $1
+//   ⚠ Warning  — parse_warnings present (non-suspect) OR GST drifts from 15%
+//   ✓ Clean    — reconciles and 15% GST
+function BillDrilldownList({ uploads, onViewPdf }) {
+  if (!uploads.length) {
+    return (
+      <Card title="Uploaded bills" subtitle="0 bills">
+        <div className="text-center py-6 text-xs text-gray-400">
+          No bill uploads stored (estimate intent, or storage upload failed)
+        </div>
+      </Card>
+    );
+  }
+  const summary = uploads.reduce((acc, u) => {
+    const s = computeBillStatus(u);
+    acc[s.level] = (acc[s.level] || 0) + 1;
+    return acc;
+  }, {});
+  return (
+    <Card
+      title="Uploaded bills — parse verification"
+      subtitle={`${uploads.length} bill${uploads.length === 1 ? '' : 's'} · ${summary.clean || 0} clean · ${summary.warning || 0} warning · ${summary.suspect || 0} suspect`}
+    >
+      <div className="space-y-2">
+        {uploads.map(u => <BillDrilldownRow key={u.id} u={u} onViewPdf={onViewPdf} />)}
+      </div>
+    </Card>
+  );
+}
+
+function computeBillStatus(u) {
+  const f = Number(u.fixed_charge_nzd ?? 0);
+  const v = Number(u.variable_charge_nzd ?? 0);
+  const x = Number(u.export_credit_nzd ?? 0);
+  const g = Number(u.gst_nzd ?? 0);
+  const t = Number(u.total_nzd ?? 0);
+  const net = +(f + v - x).toFixed(2);
+  const sum = +(net + g).toFixed(2);
+  const sumDrift = +(sum - t).toFixed(2);
+  const reconciles = Math.abs(sumDrift) < 1 && t > 0;
+  const gstPct = net > 0 ? (g / net) * 100 : null;
+  const gstOk  = gstPct == null ? true : Math.abs(gstPct - 15) < 0.5;
+  const warnings = Array.isArray(u.parse_warnings) ? u.parse_warnings : [];
+  const hasSuspect = warnings.some(w => w.suspect === true) || (!reconciles && t > 0);
+  const hasWarning = warnings.length > 0 || (!gstOk && g > 0);
+  return {
+    level: hasSuspect ? 'suspect' : hasWarning ? 'warning' : 'clean',
+    reconciles, sumDrift, gstPct, gstOk, net, sum, warnings,
+  };
+}
+
+function BillDrilldownRow({ u, onViewPdf }) {
+  const [open, setOpen] = useState(false);
+  const s = computeBillStatus(u);
+  const fc = u.field_confidence || {};
+  const lowConfFields = Object.entries(fc).filter(([, v]) => typeof v === 'number' && v < 0.7);
+  const badge = s.level === 'suspect'
+    ? { color: 'bg-red-50 border-red-300 text-red-700',     icon: '✗', label: 'SUSPECT' }
+    : s.level === 'warning'
+    ? { color: 'bg-amber-50 border-amber-300 text-amber-700', icon: '⚠', label: 'WARNING' }
+    : { color: 'bg-emerald-50 border-emerald-200 text-emerald-700', icon: '✓', label: 'CLEAN' };
+  return (
+    <div className={`rounded-lg border ${badge.color.includes('red') ? 'border-red-200' : badge.color.includes('amber') ? 'border-amber-200' : 'border-gray-100'} bg-white`}>
+      {/* Always-visible header */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full px-3 py-2.5 flex items-center gap-3 text-left hover:bg-gray-50 transition rounded-lg"
+      >
+        <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold tracking-wider border ${badge.color}`}>
+          {badge.icon} {badge.label}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-bold text-gray-700 truncate">{u.file_name || '—'}</div>
+          <div className="text-[10px] text-gray-400">
+            {u.retailer || 'unknown'}{u.parse_method ? ` · ${u.parse_method}` : ''}
+            {u.period_start && ` · ${u.period_start} → ${u.period_end}`}
+          </div>
+        </div>
+        <div className="hidden md:flex items-center gap-3 text-[11px] text-gray-600">
+          <div className="text-right">
+            <div className="text-[9px] text-gray-400 uppercase">kWh</div>
+            <div className="font-bold">{u.kwh_total != null ? Number(u.kwh_total).toLocaleString() : '—'}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[9px] text-gray-400 uppercase">Total</div>
+            <div className="font-bold">{u.total_nzd != null ? `$${Number(u.total_nzd).toFixed(2)}` : '—'}</div>
+          </div>
+        </div>
+        <ChevronDown size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {/* Expanded detail */}
+      {open && (
+        <div className="border-t border-gray-100 px-3 py-3 space-y-3 text-[11px]">
+          {/* Line items + reconciliation */}
+          <div>
+            <div className="text-[9px] font-bold text-gray-400 uppercase mb-1.5">Extracted line items</div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              <FieldChip label="Fixed"    value={u.fixed_charge_nzd}    conf={fc.fixed_charge_nzd}    />
+              <FieldChip label="Variable" value={u.variable_charge_nzd} conf={fc.variable_charge_nzd} />
+              {u.export_credit_nzd > 0 && <FieldChip label="Export" value={u.export_credit_nzd} conf={fc.export_credit_nzd} negative />}
+              <FieldChip label="GST"      value={u.gst_nzd}             conf={fc.gst_nzd}             />
+              <FieldChip label="Total"    value={u.total_nzd}            conf={fc.total_nzd}            bold />
+            </div>
+            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+              <div className={`px-2 py-1.5 rounded border ${s.reconciles ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                {s.reconciles ? '✓' : '✗'} Reconciles: $
+                {((Number(u.fixed_charge_nzd ?? 0) + Number(u.variable_charge_nzd ?? 0) - Number(u.export_credit_nzd ?? 0) + Number(u.gst_nzd ?? 0))).toFixed(2)}
+                {' '} vs total ${Number(u.total_nzd ?? 0).toFixed(2)}
+                {!s.reconciles && Math.abs(s.sumDrift) > 0.5 && <span> · drift ${s.sumDrift.toFixed(2)}</span>}
+              </div>
+              <div className={`px-2 py-1.5 rounded border ${s.gstOk ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                {s.gstOk ? '✓' : '✗'} GST {s.gstPct != null ? `${s.gstPct.toFixed(1)}%` : 'n/a'} of net ${s.net.toFixed(2)} (expect 15%)
+              </div>
+            </div>
+          </div>
+
+          {/* Per-bill validator warnings */}
+          {s.warnings.length > 0 && (
+            <div>
+              <div className="text-[9px] font-bold text-red-500 uppercase mb-1.5">Red flags</div>
+              <ul className="space-y-1">
+                {s.warnings.map((w, i) => (
+                  <li key={i} className="flex items-start gap-2 px-2 py-1.5 rounded bg-red-50 border border-red-100">
+                    <AlertTriangle size={11} className="text-red-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-mono text-[9px] px-1 rounded bg-red-100 text-red-700 font-bold mr-1">{w.code}</span>
+                      <span className="text-gray-700">{w.reason || w.message || ''}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Low-confidence fields */}
+          {lowConfFields.length > 0 && (
+            <div>
+              <div className="text-[9px] font-bold text-amber-600 uppercase mb-1">Low-confidence fields</div>
+              <div className="flex flex-wrap gap-1.5">
+                {lowConfFields.map(([f, c]) => (
+                  <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 font-mono">
+                    {f}={Math.round(c * 100)}%
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Service address + ICP — surfaced because address mismatches drive the multi-site blocker */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] text-gray-500">
+            <div>
+              <div className="text-[9px] font-bold text-gray-400 uppercase mb-0.5">Service address</div>
+              <div>{u.service_address || '—'}</div>
+            </div>
+            <div>
+              <div className="text-[9px] font-bold text-gray-400 uppercase mb-0.5">ICP</div>
+              <div className="font-mono">{u.icp_number || '—'}</div>
+            </div>
+            <div>
+              <div className="text-[9px] font-bold text-gray-400 uppercase mb-0.5">Network</div>
+              <div>{u.network_distributor || '—'}</div>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-end gap-2 pt-1">
+            {u.file_storage_path ? (
+              <button onClick={() => onViewPdf(u.id)}
+                className="text-amber-700 hover:text-amber-600 text-[10px] font-bold inline-flex items-center gap-1 px-2 py-1 rounded border border-amber-200 hover:bg-amber-50">
+                <Eye size={11} /> View original PDF
+              </button>
+            ) : <span className="text-[9px] text-gray-300">PDF not stored</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FieldChip({ label, value, conf, bold, negative }) {
+  const v = value == null ? null : Number(value);
+  const display = v == null ? '—' : `${negative ? '−' : ''}$${Math.abs(v).toFixed(2)}`;
+  const confPct = typeof conf === 'number' ? Math.round(conf * 100) : null;
+  const confColor = confPct == null ? 'text-gray-300'
+                  : confPct >= 80  ? 'text-emerald-500'
+                  : confPct >= 50  ? 'text-amber-500'
+                                   : 'text-red-500';
+  return (
+    <div className="px-2 py-1.5 rounded bg-gray-50 border border-gray-100">
+      <div className="text-[9px] text-gray-400 uppercase">{label}</div>
+      <div className={`text-[11px] ${bold ? 'font-extrabold text-gray-900' : 'font-semibold text-gray-700'}`}>
+        {display}
+      </div>
+      {confPct != null && (
+        <div className={`text-[9px] font-mono ${confColor}`}>{confPct}%</div>
+      )}
     </div>
   );
 }

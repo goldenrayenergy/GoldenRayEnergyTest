@@ -754,23 +754,27 @@ const MERCURY = {
     const out = { retailer: 'Mercury', plan_name: null };
 
     // ── Scope to the ELECTRICITY section only ──
-    // Mercury bills can be electricity-only OR dual-fuel (electricity + gas).
-    // The bill analyser is solar-focused — we only care about the electricity
-    // portion. Slice the text from the "ELECTRICITY" header to the next
-    // major section header (GAS / If you have any concerns / PAYMENT SLIP).
+    // Mercury bills come in three shapes: electricity-only, electricity+gas
+    // (dual-fuel), and bundled (electricity + gas + mobile + broadband). On
+    // bundled bills the page-1 summary lists each service with its total —
+    // e.g. "Electricity $432.98" — so we must NOT match that as the section
+    // header, or the slice would also include the mobile/broadband GST lines
+    // that appear before the real ELECTRICITY section on page 3+.
+    //
+    // The genuine section header is always uppercase "ELECTRICITY" alone on a
+    // line (optionally preceded by a ⚡ icon glyph on the same line). The
+    // page-1 summary line has "$X.XX" immediately after, so requiring the
+    // line to end after the word excludes it.
     let elec = t;
-    const elecStart = t.search(/^\s*ELECTRICITY\s*$|⚡?\s*ELECTRICITY\b/im);
+    const elecStart = t.search(/^\s*(?:⚡\s*)?ELECTRICITY\s*$/m);
     if (elecStart >= 0) {
       const remaining = t.slice(elecStart);
-      // Cut at the next section: GAS section, PAYMENT SLIP, or "If you have"
-      const cutMatch = remaining.slice(15).search(/^\s*GAS\s*$|⚡?\s*GAS\b|PAYMENT\s+SLIP|If you have|^\s*ELECTRICITY\s+TOTAL\b/im);
-      // Include the ELECTRICITY TOTAL line (don't cut before it) but cut at GAS
-      const gasMatch = remaining.search(/(?:^|\n)\s*GAS\b(?!\s+TOTAL)/m);
-      if (gasMatch >= 0) {
-        elec = remaining.slice(0, gasMatch);
-      } else {
-        elec = remaining;
-      }
+      // Cut at the next section header. Like ELECTRICITY above, GAS / MOBILE /
+      // BROADBAND section headers appear uppercase on their own lines.
+      const cutMatch = remaining.slice(15).search(
+        /^\s*(?:⚡\s*)?(?:GAS|MOBILE|BROADBAND)\s*$|PAYMENT\s+SLIP|If you have/m
+      );
+      elec = cutMatch >= 0 ? remaining.slice(0, cutMatch + 15) : remaining;
     }
 
     // Plan name — Mercury uses "Homeline Standard" / "Homeline Saver" / "Anytime" / "Off-Peak"
