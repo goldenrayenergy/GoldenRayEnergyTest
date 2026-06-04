@@ -284,6 +284,10 @@ function buildUploadRows(parsedBills, analysisId) {
     gst_nzd:              b.gst_nzd,
     total_nzd:            b.total_nzd,
     parse_errors:         b.parse_errors,
+    // Per-bill cross-field validators (migration 029) — surfaces which bill in
+    // a multi-bill upload tripped which check (line_items_dont_sum etc.) so
+    // the team can drill into specific files instead of re-reading every PDF.
+    parse_warnings:       b.parse_warnings       || [],
     // v2 (migration 025) — new extraction + per-field confidence
     service_address:      b.service_address      || null,
     icp_number:           b.icp_number           || null,

@@ -763,8 +763,21 @@ export function computeReviewGate({ bills, aggregate, recommendation, regionInfo
   }
 
   // (3) Conflicting service addresses across bills (rule 2.10, 16.11)
-  // Different supply addresses → bills are for different sites, must not be merged
-  const addresses = [...new Set((bills || []).map(b => b.service_address).filter(Boolean))];
+  // Different supply addresses → bills are for different sites, must not be merged.
+  //
+  // Normalise before the unique check — Mercury (and others) format the same
+  // address inconsistently across consecutive bills: case differences, optional
+  // "NEW ZEALAND" country token, double-spaces, trailing punctuation. Treating
+  // those cosmetic variants as different sites produces false positives.
+  const normaliseAddress = (a) => (a || '')
+    .toUpperCase()
+    .replace(/\bNEW\s+ZEALAND\b/g, '')
+    .replace(/[,.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const addresses = [...new Set(
+    (bills || []).map(b => normaliseAddress(b.service_address)).filter(Boolean)
+  )];
   if (addresses.length > 1) {
     reasons.push({
       code: 'multiple_service_addresses',
