@@ -76,6 +76,35 @@ export const pmAdminAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+
+  // labour_rates — install / commissioning / compliance / design line items
+  // added to package pricing automatically by the proposal generator
+  listLabourRates:   () => api.get('/pm/admin/labour-rates'),
+  matchLabourRates:  (systemKw, hasBattery) =>
+    api.get(`/pm/admin/labour-rates/match?system_kw=${systemKw}&has_battery=${hasBattery}`),
+  createLabourRate:  (data) => api.post('/pm/admin/labour-rates', data),
+  updateLabourRate:  (id, patch) => api.patch(`/pm/admin/labour-rates/${id}`, patch),
+  deleteLabourRate:  (id) => api.delete(`/pm/admin/labour-rates/${id}`),
+
+  // P8 — Catalogue CSV import (labour + compliance rate-cards)
+  importCatalogueCsv: (kind, file, reason) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('reason', reason);
+    return api.post(`/pm/admin/catalogue/import/${kind}`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  listCatalogueImports: (target, limit = 20) =>
+    api.get(`/pm/admin/catalogue/imports${target ? `?target=${target}&limit=${limit}` : `?limit=${limit}`}`),
+  catalogueTemplateUrl: (kind) => `/pm/admin/catalogue/template/${kind}`,
+
+  // P8.5 — Per-row CRUD for the rate-cards (Labour & Compliance tab)
+  listRateCard:        (kind)         => api.get(`/pm/admin/catalogue/${kind}`),
+  createRateCardRow:   (kind, row)    => api.post(`/pm/admin/catalogue/${kind}`, row),
+  updateRateCardRow:   (kind, sku, patch) => api.patch(`/pm/admin/catalogue/${kind}/${encodeURIComponent(sku)}`, patch),
+  deactivateRateCardRow: (kind, sku, reason) =>
+    api.delete(`/pm/admin/catalogue/${kind}/${encodeURIComponent(sku)}`, { data: { reason } }),
 };
 
 // QR-code campaign management (Phase D)

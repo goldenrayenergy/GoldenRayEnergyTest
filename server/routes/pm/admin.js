@@ -164,4 +164,104 @@ router.post('/terms', async (req, res) => {
   }
 });
 
+// ── labour_rates ──────────────────────────────────────────────────────────
+//   GET    /api/pm/admin/labour-rates       → list all (active first)
+//   POST   /api/pm/admin/labour-rates       → add rate
+//   PATCH  /api/pm/admin/labour-rates/:id   → update rate
+//   DELETE /api/pm/admin/labour-rates/:id   → soft-delete (is_active=false)
+//   GET    /api/pm/admin/labour-rates/match → preview rates that match a system
+//                                            ?system_kw=10.45&has_battery=true
+router.get('/labour-rates', async (_req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { data, error } = await supabaseAdmin
+      .from('labour_rates')
+      .select('*')
+      .order('is_active', { ascending: false })
+      .order('category', { ascending: true })
+      .order('sort_order', { ascending: true });
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/labour-rates/match', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const systemKw = parseFloat(req.query.system_kw);
+    if (!isFinite(systemKw)) return res.status(400).json({ error: 'system_kw is required' });
+    const hasBattery = req.query.has_battery === 'true';
+
+    const { data, error } = await supabaseAdmin
+      .from('labour_rates').select('*').eq('is_active', true);
+    if (error) throw error;
+
+    const matched = data.filter(r =>
+      (r.applies_to_kw_min == null || systemKw >= r.applies_to_kw_min) &&
+      (r.applies_to_kw_max == null || systemKw <= r.applies_to_kw_max) &&
+      (r.requires_battery  == null || r.requires_battery === hasBattery)
+    );
+    const total = matched.reduce((s, r) => s + Number(r.amount_nzd || 0), 0);
+    res.json({ system_kw: systemKw, has_battery: hasBattery, total_nzd: +total.toFixed(2), matched });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/labour-rates', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { code, name, category, applies_to_kw_min, applies_to_kw_max,
+            requires_battery, amount_nzd, notes, sort_order } = req.body;
+    if (!code || !name || !category || amount_nzd == null) {
+      return res.status(400).json({ error: 'code, name, category, amount_nzd required' });
+    }
+    const { data, error } = await supabaseAdmin.from('labour_rates').insert({
+      code, name, category,
+      applies_to_kw_min: applies_to_kw_min ?? null,
+      applies_to_kw_max: applies_to_kw_max ?? null,
+      requires_battery:  requires_battery  ?? null,
+      amount_nzd, notes: notes ?? null,
+      sort_order: sort_order ?? 0,
+      updated_by: req.user?.id || null,
+    }).select().single();
+    if (error) throw error;
+    res.status(201).json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.patch('/labour-rates/:id', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const fields = ['code','name','category','applies_to_kw_min','applies_to_kw_max',
+                    'requires_battery','amount_nzd','notes','sort_order','is_active'];
+    const patch = {};
+    for (const k of fields) if (k in req.body) patch[k] = req.body[k];
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'No valid fields' });
+    patch.updated_by = req.user?.id || null;
+    const { data, error } = await supabaseAdmin
+      .from('labour_rates').update(patch).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/labour-rates/:id', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { error } = await supabaseAdmin
+      .from('labour_rates').update({ is_active: false }).eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 export default router;

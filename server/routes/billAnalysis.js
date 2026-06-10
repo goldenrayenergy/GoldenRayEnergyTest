@@ -84,6 +84,36 @@ async function escalatePartialOnReview({ contactId, enquiryId, analysisId, analy
   }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// P5 (A2) — Address write-through to contacts row.
+//
+// After a bill analysis successfully inserts (or links), propagate the
+// detected region + postcode back to the contact's record. Two safety
+// guards:
+//   • Only writes when a contact_id is present
+//   • SKIPS fields that are already populated on the contact — never
+//     overwrites rep-entered data with parser output
+// ────────────────────────────────────────────────────────────────────────────
+async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode }) {
+  if (!supabaseAdmin || !contactId) return;
+  if (!region && !postcode) return;
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from('contacts')
+      .select('id, region, postcode')
+      .eq('id', contactId)
+      .maybeSingle();
+    if (!existing) return;
+    const updates = {};
+    if (region   && !existing.region)   updates.region   = region;
+    if (postcode && !existing.postcode) updates.postcode = postcode;
+    if (Object.keys(updates).length === 0) return;
+    await supabaseAdmin.from('contacts').update(updates).eq('id', contactId);
+  } catch (e) {
+    console.error('writeAddressThroughToContact failed (non-fatal):', e.message);
+  }
+}
+
 const router = Router();
 
 // Multipart upload — bills can be PDFs OR camera-captured photos. PDFs up
@@ -408,6 +438,10 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       .single();
     if (insErr) throw insErr;
 
+    // P5 (A2) — write parsed region/postcode through to the contact row.
+    writeAddressThroughToContact(supabaseAdmin, partialContactId,
+      { region, postcode: req.body.postcode });
+
     // Fire-and-forget escalation when review_required + partial linked.
     escalatePartialOnReview({
       contactId: partialContactId,
@@ -608,6 +642,10 @@ router.post('/estimate', async (req, res) => {
       .select('id')
       .single();
     if (insErr) throw insErr;
+
+    // P5 (A2) — write parsed region/postcode through to the contact row.
+    writeAddressThroughToContact(supabaseAdmin, partialContactId,
+      { region, postcode: req.body.postcode });
 
     escalatePartialOnReview({
       contactId: partialContactId,
@@ -907,6 +945,10 @@ router.post('/:id/promote-to-quote', async (req, res) => {
       email: email || analysis.email,
       expires_at: null,
     }).eq('id', req.params.id);
+
+    // P5 (A2) — propagate parsed region/postcode to the now-linked contact
+    writeAddressThroughToContact(supabaseAdmin, contactId,
+      { region: analysis.region, postcode: analysis.postcode });
 
     // 5. Sales follow-up task (high priority, due tomorrow)
     await supabaseAdmin.from('tasks').insert({

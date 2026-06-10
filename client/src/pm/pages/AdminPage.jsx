@@ -32,7 +32,9 @@ export default function AdminPage() {
           { id: 'settings',  label: 'Company Settings' },
           { id: 'financing', label: 'Financing Options' },
           { id: 'terms',     label: 'T&Cs Versions' },
+          { id: 'labour',    label: 'Labour & Compliance' },
           { id: 'import',    label: 'Data Import' },
+          { id: 'catalogue', label: 'Catalogue CSV' },
         ].map(t => (
           <button
             key={t.id}
@@ -50,7 +52,177 @@ export default function AdminPage() {
       {tab === 'settings'  && <SettingsTab />}
       {tab === 'financing' && <FinancingTab />}
       {tab === 'terms'     && <TermsTab />}
+      {tab === 'labour'    && <LabourComplianceTab />}
       {tab === 'import'    && <ImportTab />}
+      {tab === 'catalogue' && <CatalogueCsvTab />}
+    </div>
+  );
+}
+
+// ── Catalogue CSV tab — labour + compliance rate-card refresh ────────────
+function CatalogueCsvTab() {
+  const [imports, setImports] = useState([]);
+  const [loadingImports, setLoadingImports] = useState(true);
+  const [err, setErr] = useState('');
+
+  function load() {
+    setLoadingImports(true);
+    pmAdminAPI.listCatalogueImports(null, 30)
+      .then(r => setImports(r.data.imports || []))
+      .catch(e => setErr(e.response?.data?.error || e.message))
+      .finally(() => setLoadingImports(false));
+  }
+  useEffect(load, []);
+
+  return (
+    <div className="max-w-5xl space-y-5">
+      {err && <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">{err}</div>}
+
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+        <div className="text-sm font-semibold text-amber-900 mb-1">Refresh rate-cards via CSV</div>
+        <p className="text-xs text-amber-800 leading-relaxed">
+          Upload a CSV to replace labour or compliance prices in bulk. Rows upsert by <code className="bg-white px-1 rounded">sku</code>.
+          A reason (≥10 chars) is required and stored in the audit log. The in-process catalogue cache
+          is invalidated immediately — reps will see new prices on their next live preview.
+        </p>
+        <div className="mt-2 flex gap-3 text-xs">
+          <a href={`/api${pmAdminAPI.catalogueTemplateUrl('labour')}`} className="text-amber-700 hover:underline">↓ Labour template CSV</a>
+          <a href={`/api${pmAdminAPI.catalogueTemplateUrl('compliance')}`} className="text-amber-700 hover:underline">↓ Compliance template CSV</a>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <UploadCsvCard kind="labour"     onSuccess={load} />
+        <UploadCsvCard kind="compliance" onSuccess={load} />
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-lg p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-slate-900">Recent imports</h3>
+          <button onClick={load} className="text-xs text-amber-700 hover:underline">Refresh</button>
+        </div>
+        {loadingImports ? (
+          <div className="text-xs text-slate-400">Loading…</div>
+        ) : imports.length === 0 ? (
+          <div className="text-xs text-slate-500 italic">No imports yet.</div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-600 uppercase">
+              <tr>
+                <th className="px-2 py-1.5 text-left">When</th>
+                <th className="px-2 py-1.5 text-left">Target</th>
+                <th className="px-2 py-1.5 text-left">File</th>
+                <th className="px-2 py-1.5 text-right">+</th>
+                <th className="px-2 py-1.5 text-right">~</th>
+                <th className="px-2 py-1.5 text-right">=</th>
+                <th className="px-2 py-1.5 text-right">!</th>
+                <th className="px-2 py-1.5 text-left">Reason</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {imports.map(r => (
+                <tr key={r.id}>
+                  <td className="px-2 py-1.5 whitespace-nowrap">{fmtDateLong(r.imported_at)}</td>
+                  <td className="px-2 py-1.5 font-mono text-[10px]">{r.target_table.replace('_rate_card','')}</td>
+                  <td className="px-2 py-1.5 truncate max-w-[12rem]">{r.csv_filename || '—'}</td>
+                  <td className={`px-2 py-1.5 text-right font-semibold ${r.rows_inserted > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>{r.rows_inserted}</td>
+                  <td className={`px-2 py-1.5 text-right font-semibold ${r.rows_updated > 0 ? 'text-blue-700' : 'text-slate-400'}`}>{r.rows_updated}</td>
+                  <td className="px-2 py-1.5 text-right text-slate-500">{r.rows_unchanged}</td>
+                  <td className={`px-2 py-1.5 text-right font-semibold ${r.rows_errored > 0 ? 'text-red-700' : 'text-slate-400'}`}>{r.rows_errored}</td>
+                  <td className="px-2 py-1.5 italic text-slate-600 truncate max-w-[16rem]" title={r.reason}>{r.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UploadCsvCard({ kind, onSuccess }) {
+  const [file, setFile]     = useState(null);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy]     = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError]   = useState('');
+
+  const title = kind === 'labour' ? 'Labour rate-card' : 'Compliance rate-card';
+
+  async function submit() {
+    if (!file)            return setError('Pick a CSV file first.');
+    if (reason.trim().length < 10) return setError('Reason must be at least 10 chars.');
+    setBusy(true); setError(''); setResult(null);
+    try {
+      const { data } = await pmAdminAPI.importCatalogueCsv(kind, file, reason);
+      setResult(data);
+      setFile(null);
+      setReason('');
+      onSuccess?.();
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="border border-slate-200 rounded-lg p-4 bg-white">
+      <h4 className="text-sm font-bold text-slate-900 mb-2">{title}</h4>
+      <input
+        type="file"
+        accept=".csv"
+        onChange={e => { setFile(e.target.files?.[0] || null); setResult(null); setError(''); }}
+        className="block w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-amber-50 file:text-amber-800 file:font-semibold file:cursor-pointer hover:file:bg-amber-100"
+      />
+      {file && <p className="text-[11px] text-slate-500 mt-1">{file.name} · {(file.size / 1024).toFixed(1)} KB</p>}
+
+      <div className="mt-3">
+        <label className="block text-[11px] font-medium text-slate-700 mb-1">Reason for change (≥10 chars)</label>
+        <textarea
+          rows={2}
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          placeholder={kind === 'labour'
+            ? 'e.g. Q2 install crew rate review — +5% to install crew, supervisor unchanged.'
+            : 'e.g. ESC fee rose to $135 effective May; design lift to $220.'}
+          className="w-full px-2 py-1.5 border border-slate-300 rounded text-xs"
+        />
+      </div>
+
+      <button
+        onClick={submit}
+        disabled={!file || busy || reason.trim().length < 10}
+        className="mt-3 px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold disabled:opacity-50 inline-flex items-center gap-1.5">
+        {busy && <span className="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full" />}
+        {busy ? 'Importing…' : `Import ${kind} CSV`}
+      </button>
+
+      {error  && <div className="mt-3 px-2 py-1.5 bg-red-50 border border-red-200 rounded text-[11px] text-red-700">{error}</div>}
+
+      {result && (
+        <div className="mt-3 px-2 py-2 bg-emerald-50 border border-emerald-200 rounded text-[11px] text-emerald-900 space-y-1">
+          <div>
+            <b>{result.summary.inserted}</b> inserted ·{' '}
+            <b>{result.summary.updated}</b> updated ·{' '}
+            <b>{result.summary.unchanged}</b> unchanged
+            {result.summary.errored > 0 && <> · <span className="text-red-700"><b>{result.summary.errored}</b> errored</span></>}
+          </div>
+          {result.summary.errors?.length > 0 && (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-red-700">View row errors</summary>
+              <ul className="mt-1 ml-3 max-h-32 overflow-y-auto text-red-700 font-mono space-y-0.5">
+                {result.summary.errors.slice(0, 50).map((e, i) => (
+                  <li key={i}>row {e.row_number}{e.sku ? ` · ${e.sku}` : ''}: {e.message}</li>
+                ))}
+                {result.summary.errors.length > 50 && (
+                  <li className="italic">…{result.summary.errors.length - 50} more</li>
+                )}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -470,6 +642,319 @@ function NewTermsModal({ onSave, onCancel }) {
   );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Labour & Compliance tab (P8.5) — pointed at labour_rate_card +
+// compliance_rate_card (the live tables the proposal engine reads). Replaces
+// the old LabourRatesTab that wrote to the dead labour_rates table.
+//
+// Two sub-tabs (Labour / Compliance). Each shows rows grouped by category
+// with inline edit. Margin% edits require a reason (admin policy).
+// ────────────────────────────────────────────────────────────────────────────
+function LabourComplianceTab() {
+  const [sub, setSub] = useState('labour');
+  return (
+    <div className="max-w-5xl">
+      <div className="flex border-b border-slate-200 mb-4">
+        {[
+          { id: 'labour',     label: 'Labour rates' },
+          { id: 'compliance', label: 'Compliance fees' },
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setSub(t.id)}
+            className={`px-3 py-1.5 -mb-px text-xs font-medium border-b-2 ${
+              sub === t.id
+                ? 'border-amber-500 text-amber-700'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <RateCardEditor kind={sub} key={sub} />
+    </div>
+  );
+}
+
+const RC_LABOUR_CATEGORIES = ['install','battery_install','supervisor','travel','logistics','premium','other'];
+const RC_COMPLIANCE_CATEGORIES = ['design','inspection','commissioning','grid_app','certificate','survey','other'];
+const RC_CATEGORY_LABEL = {
+  install: 'Install', battery_install: 'Battery install', supervisor: 'Supervisor',
+  travel: 'Travel', logistics: 'Logistics', premium: 'Premium',
+  design: 'Design', inspection: 'Inspection', commissioning: 'Commissioning',
+  grid_app: 'Grid application', certificate: 'Certificate', survey: 'Survey',
+  other: 'Other',
+};
+
+function RateCardEditor({ kind }) {
+  const [rows, setRows] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+
+  const categories = kind === 'labour' ? RC_LABOUR_CATEGORIES : RC_COMPLIANCE_CATEGORIES;
+
+  function load() {
+    setLoading(true);
+    pmAdminAPI.listRateCard(kind)
+      .then(r => setRows(r.data.rows || []))
+      .catch(e => setErr(e.response?.data?.error || e.message))
+      .finally(() => setLoading(false));
+  }
+  useEffect(load, [kind]);
+
+  function flashMsg(m) { setMsg(m); setTimeout(() => setMsg(''), 2500); }
+
+  async function save(row) {
+    setErr('');
+    try {
+      if (row.__isNew) {
+        const { sku, category, name, cost_nzd, margin_pct, default_qty,
+                applies_to_kw_min, applies_to_kw_max, active, reason } = row;
+        await pmAdminAPI.createRateCardRow(kind, {
+          sku, category, name, cost_nzd, margin_pct,
+          default_qty: default_qty ?? 1,
+          applies_to_kw_min, applies_to_kw_max,
+          active: active ?? true,
+          reason,
+        });
+        flashMsg(`Added ${sku} ✓`);
+      } else {
+        await pmAdminAPI.updateRateCardRow(kind, row.sku, {
+          category: row.category, name: row.name, cost_nzd: row.cost_nzd,
+          margin_pct: row.margin_pct, default_qty: row.default_qty,
+          applies_to_kw_min: row.applies_to_kw_min,
+          applies_to_kw_max: row.applies_to_kw_max,
+          active: row.active,
+          reason: row.reason,
+        });
+        flashMsg(`Updated ${row.sku} ✓`);
+      }
+      setEditing(null);
+      load();
+    } catch (e) {
+      setErr(e.response?.data?.error || e.message);
+    }
+  }
+
+  async function deactivate(row) {
+    const reason = prompt(`Deactivate ${row.sku}? Provide a reason (≥10 chars):`, '');
+    if (reason == null) return;
+    if (reason.trim().length < 10) return alert('Reason must be at least 10 chars.');
+    try {
+      await pmAdminAPI.deactivateRateCardRow(kind, row.sku, reason);
+      flashMsg(`Deactivated ${row.sku}`);
+      load();
+    } catch (e) {
+      setErr(e.response?.data?.error || e.message);
+    }
+  }
+
+  const byCategory = rows.reduce((acc, r) => {
+    const c = r.category || 'other';
+    (acc[c] = acc[c] || []).push(r);
+    return acc;
+  }, {});
+
+  function emptyRow() {
+    return {
+      __isNew: true,
+      sku: '', name: '', category: categories[0],
+      cost_nzd: 0, margin_pct: 30, default_qty: 1,
+      applies_to_kw_min: null, applies_to_kw_max: null,
+      active: true, reason: '',
+    };
+  }
+
+  return (
+    <div>
+      {err && <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm mb-3">{err}</div>}
+      {msg && <div className="bg-green-50 border border-green-200 text-green-800 px-3 py-2 rounded text-sm mb-3">{msg}</div>}
+
+      <div className="flex justify-between items-center mb-3">
+        <p className="text-sm text-slate-600">
+          {kind === 'labour'
+            ? 'Labour line items the engine picks per quote based on system kW / battery flag. Edit cost or qty freely; changing margin% requires a reason.'
+            : 'Compliance fees the engine adds to every quote. Edit cost / qty freely; changing margin% requires a reason.'}
+        </p>
+        <button
+          onClick={() => setEditing(emptyRow())}
+          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded text-sm font-medium">
+          + Add {kind === 'labour' ? 'labour row' : 'compliance row'}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-slate-400 text-sm">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="text-slate-500 text-sm italic">No rows yet. Use the Catalogue CSV tab to bulk-load, or click "+ Add" above.</div>
+      ) : (
+        categories.filter(c => byCategory[c]?.length).map(cat => (
+          <div key={cat} className="mb-4">
+            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">
+              {RC_CATEGORY_LABEL[cat] || cat}
+            </h3>
+            <table className="w-full text-sm bg-white border border-slate-200 rounded-lg overflow-hidden">
+              <thead className="bg-slate-50 text-xs text-slate-600 uppercase">
+                <tr>
+                  <th className="px-3 py-2 text-left">SKU</th>
+                  <th className="px-3 py-2 text-left">Name</th>
+                  {kind === 'labour' && <th className="px-3 py-2 text-left">kW range</th>}
+                  <th className="px-3 py-2 text-right">Cost</th>
+                  <th className="px-3 py-2 text-right">Margin %</th>
+                  <th className="px-3 py-2 text-right">Sell ≈</th>
+                  <th className="px-3 py-2 text-right">Default qty</th>
+                  <th className="px-3 py-2 text-center">Active</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {byCategory[cat].map(r => {
+                  const sell = Number(r.cost_nzd) * (1 + Number(r.margin_pct) / 100);
+                  return (
+                    <tr key={r.id || r.sku} className={r.active ? '' : 'bg-slate-50 text-slate-400'}>
+                      <td className="px-3 py-2 font-mono text-xs">{r.sku}</td>
+                      <td className="px-3 py-2">{r.name}</td>
+                      {kind === 'labour' && (
+                        <td className="px-3 py-2 text-xs">
+                          {r.applies_to_kw_min == null && r.applies_to_kw_max == null
+                            ? 'any'
+                            : `${r.applies_to_kw_min ?? '—'} – ${r.applies_to_kw_max ?? '—'}`}
+                        </td>
+                      )}
+                      <td className="px-3 py-2 text-right font-medium">{fmt$(r.cost_nzd)}</td>
+                      <td className="px-3 py-2 text-right">{Number(r.margin_pct).toFixed(0)}%</td>
+                      <td className="px-3 py-2 text-right text-slate-500">{fmt$(sell)}</td>
+                      <td className="px-3 py-2 text-right">{Number(r.default_qty)}</td>
+                      <td className="px-3 py-2 text-center">{r.active ? '✓' : '—'}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <button onClick={() => setEditing({ ...r })} className="text-amber-700 hover:underline text-xs mr-3">Edit</button>
+                        {r.active && <button onClick={() => deactivate(r)} className="text-red-600 hover:underline text-xs">Deactivate</button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ))
+      )}
+
+      {editing && (
+        <RateCardEditorModal
+          kind={kind}
+          row={editing}
+          categories={categories}
+          onSave={save}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function RateCardEditorModal({ kind, row, categories, onSave, onCancel }) {
+  const [v, setV] = useState(row);
+  const [marginReasonRequired, setMarginReasonRequired] = useState(false);
+
+  // Watch margin changes — if it differs from the original, force reason input
+  useEffect(() => {
+    if (row.__isNew) { setMarginReasonRequired(true); return; }
+    setMarginReasonRequired(Number(v.margin_pct) !== Number(row.margin_pct));
+  }, [v.margin_pct]);
+
+  const set = (k, val) => setV(p => ({ ...p, [k]: val }));
+  const canSave =
+    v.sku && v.name && v.category &&
+    Number.isFinite(Number(v.cost_nzd)) && Number(v.cost_nzd) >= 0 &&
+    (!marginReasonRequired || (v.reason && v.reason.trim().length >= 10));
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-lg p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+        <h3 className="font-bold text-lg mb-1">
+          {row.__isNew ? `Add ${kind} row` : `Edit ${kind} row`}
+        </h3>
+        <p className="text-xs text-slate-500 mb-4">
+          Changes apply to all new quotes immediately. Existing quotes keep their snapshot.
+        </p>
+
+        <Grid>
+          <Field label="SKU" v={v.sku} set={x => set('sku', x)}
+                 placeholder={kind === 'labour' ? 'LAB-INS-7KW' : 'CMP-DSGN'}
+                 disabled={!row.__isNew} />
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Category</label>
+            <select value={v.category} onChange={e => set('category', e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm">
+              {categories.map(c => <option key={c} value={c}>{RC_CATEGORY_LABEL[c] || c}</option>)}
+            </select>
+          </div>
+        </Grid>
+        <div className="mt-3">
+          <Field label="Name" v={v.name} set={x => set('name', x)}
+                 placeholder={kind === 'labour' ? 'Install crew 3–7kW' : 'Electrical Safety Certificate'} />
+        </div>
+
+        <Grid>
+          <Field label="Cost ($ NZD ex GST)" type="number" v={v.cost_nzd}
+                 set={x => set('cost_nzd', Number(x) || 0)} />
+          <Field
+            label={`Margin % ${marginReasonRequired ? '· reason required' : ''}`}
+            type="number"
+            v={v.margin_pct}
+            set={x => set('margin_pct', Number(x) || 0)}
+          />
+          <Field label="Default qty" type="number" v={v.default_qty ?? 1}
+                 set={x => set('default_qty', Number(x) || 0)} />
+          <div className="flex items-end pb-1">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={!!v.active} onChange={e => set('active', e.target.checked)} />
+              Active (shown to engine)
+            </label>
+          </div>
+        </Grid>
+
+        {kind === 'labour' && (
+          <Grid>
+            <Field label="Applies min kW (blank = any)" type="number"
+                   v={v.applies_to_kw_min ?? ''}
+                   set={x => set('applies_to_kw_min', x === '' ? null : Number(x))} />
+            <Field label="Applies max kW (blank = any)" type="number"
+                   v={v.applies_to_kw_max ?? ''}
+                   set={x => set('applies_to_kw_max', x === '' ? null : Number(x))} />
+          </Grid>
+        )}
+
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-slate-700 mb-1">
+            Reason {marginReasonRequired ? <span className="text-red-700">*</span> : <span className="text-slate-400">(optional unless changing margin %)</span>}
+          </label>
+          <textarea
+            rows={2}
+            value={v.reason || ''}
+            onChange={e => set('reason', e.target.value)}
+            placeholder="e.g. Crew rates lifted 5% effective May after rate review."
+            className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm"
+          />
+          {marginReasonRequired && (v.reason || '').trim().length < 10 && (
+            <p className="text-[11px] text-red-600 mt-1">Reason must be at least 10 characters.</p>
+          )}
+        </div>
+
+        <div className="flex gap-2 mt-5">
+          <button onClick={() => onSave(v)} disabled={!canSave}
+                  className="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded text-sm font-medium">
+            Save
+          </button>
+          <button onClick={onCancel} className="px-4 py-1.5 border border-slate-300 hover:bg-slate-50 rounded text-sm">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Reusable form helpers ────────────────────────────────────────────────
 function Card({ title, children }) {
   return (
@@ -482,21 +967,21 @@ function Card({ title, children }) {
 function Grid({ children }) {
   return <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{children}</div>;
 }
-function Field({ label, v, set, type = 'text', rows, placeholder }) {
+function Field({ label, v, set, type = 'text', rows, placeholder, disabled = false }) {
   if (type === 'textarea') {
     return (
       <div className="md:col-span-2">
         <label className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
-        <textarea rows={rows || 3} value={v ?? ''} onChange={e => set(e.target.value)} placeholder={placeholder}
-          className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" />
+        <textarea rows={rows || 3} value={v ?? ''} onChange={e => set(e.target.value)} placeholder={placeholder} disabled={disabled}
+          className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm disabled:bg-slate-100 disabled:text-slate-500" />
       </div>
     );
   }
   return (
     <div>
       <label className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
-      <input type={type} value={v ?? ''} onChange={e => set(e.target.value)} placeholder={placeholder}
-        className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" />
+      <input type={type} value={v ?? ''} onChange={e => set(e.target.value)} placeholder={placeholder} disabled={disabled}
+        className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm disabled:bg-slate-100 disabled:text-slate-500" />
     </div>
   );
 }

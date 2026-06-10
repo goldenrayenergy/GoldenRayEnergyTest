@@ -16,3 +16,6 @@ server/eng.traineddata
 
 # QR-code generator output — regenerable from server/scripts/generate-qr-files.js
 qr-output/
+
+# Apply-script log + CSV outputs — local-only artifacts
+server/scripts/out/

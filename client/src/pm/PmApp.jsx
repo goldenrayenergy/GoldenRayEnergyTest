@@ -8,6 +8,11 @@ import ProjectNewPage from './pages/ProjectNewPage';
 import ProjectDetailPage from './pages/ProjectDetailPage';
 import AdminPage from './pages/AdminPage';
 import QrCodesPage from './pages/QrCodesPage';
+import QuoteListPage from './pages/QuoteListPage';
+import QuoteNewPage from './pages/QuoteNewPage';
+import QuoteFormPage from './pages/QuoteFormPage';
+import QuoteDetailPage from './pages/QuoteDetailPage';
+import QuoteBillAnalysisPage from './pages/QuoteBillAnalysisPage';
 
 function PmProtected({ children }) {
   const { user, loading } = useAuth();
@@ -27,6 +32,11 @@ export default function PmApp() {
         <Route path="projects" element={<ProjectListPage />} />
         <Route path="projects/new" element={<ProjectNewPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
+        <Route path="quotes" element={<QuoteListPage />} />
+        <Route path="quotes/new" element={<QuoteNewPage />} />
+        <Route path="quotes/:id" element={<QuoteDetailPage />} />
+        <Route path="quotes/:id/edit" element={<QuoteFormPage />} />
+        <Route path="quotes/:id/bill-analysis" element={<QuoteBillAnalysisPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="admin/qr-codes" element={<QrCodesPage />} />
       </Route>
