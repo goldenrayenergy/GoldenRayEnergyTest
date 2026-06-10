@@ -26,6 +26,9 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [facets, setFacets] = useState({ categories: [], brands: [], stock_statuses: [], website_categories: [], subcategoriesByCategory: {} });
   const [filters, setFilters] = useState({ q: '', category: '', brand: '', stock_status: '', is_active: 'true' });
+  const [dateRange, setDateRange] = useState('all');   // 'today' | '7d' | '30d' | 'all' | 'custom'
+  const [customDate, setCustomDate] = useState('');
+  const [sortBy, setSortBy] = useState('updated_at_desc');  // sort key+dir combined
   const [editing, setEditing] = useState(null);     // product object or null
   const [importOpen, setImportOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -34,6 +37,7 @@ export default function ProductsPage() {
     setLoading(true);
     try {
       const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== ''));
+      params.limit = '500';   // load all so client-side date/sort works on the full set
       const { data } = await api.get('/products', { params });
       setRows(data.products || []);
       setTotal(data.total || 0);
@@ -61,7 +65,35 @@ export default function ProductsPage() {
   useEffect(() => { loadFacets(); }, []);
 
   const updateFilter = (k, v) => setFilters(f => ({ ...f, [k]: v }));
-  const clearFilters = () => setFilters({ q: '', category: '', brand: '', stock_status: '', is_active: 'true' });
+  const clearFilters = () => {
+    setFilters({ q: '', category: '', brand: '', stock_status: '', is_active: 'true' });
+    setDateRange('all'); setCustomDate(''); setSortBy('updated_at_desc');
+  };
+
+  // Client-side date filter + sort applied on top of the server-loaded rows.
+  const dateCutoff = (() => {
+    if (dateRange === 'all') return null;
+    if (dateRange === 'custom') return customDate ? new Date(customDate) : null;
+    const d = new Date();
+    if (dateRange === 'today') { d.setHours(0,0,0,0); return d; }
+    if (dateRange === '7d')    { d.setDate(d.getDate() - 7);  return d; }
+    if (dateRange === '30d')   { d.setDate(d.getDate() - 30); return d; }
+    return null;
+  })();
+  const displayRows = (() => {
+    let arr = rows;
+    if (dateCutoff) arr = arr.filter(r => r.updated_at && new Date(r.updated_at) >= dateCutoff);
+    const [key, dir] = sortBy.split('_').reduce((acc, _, i, parts) => {
+      const last = parts[parts.length - 1];
+      return ['asc','desc'].includes(last) ? [parts.slice(0, -1).join('_'), last] : acc;
+    }, ['updated_at', 'desc']);
+    arr = [...arr].sort((a, b) => {
+      const av = a[key] ?? ''; const bv = b[key] ?? '';
+      if (typeof av === 'number' && typeof bv === 'number') return dir === 'asc' ? av - bv : bv - av;
+      return dir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+    });
+    return arr;
+  })();
 
   const handleArchive = async (p) => {
     if (!confirm(`Archive "${p.name}"? It will hide from quotes & shop but old quotes keep referring to it.`)) return;
@@ -136,8 +168,44 @@ export default function ProductsPage() {
         </select>
         <button onClick={clearFilters} className="px-2.5 py-1.5 text-xs text-gray-500 hover:text-amber-600 transition">Clear</button>
         <div className="ml-auto self-center text-[11px] text-gray-400">
-          {loading ? 'Loading…' : `${total} ${total === 1 ? 'product' : 'products'}`}
+          {loading ? 'Loading…' : `${displayRows.length}${displayRows.length !== rows.length ? ` of ${rows.length}` : ''} ${displayRows.length === 1 ? 'product' : 'products'}`}
         </div>
+      </div>
+
+      {/* Date filter + Sort */}
+      <div className="bg-white dark:bg-brand-dark-1 rounded-xl border border-gray-100 dark:border-white/5 p-3 flex flex-wrap gap-2 items-center">
+        <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Updated:</span>
+        <div className="flex gap-0 border border-gray-200 dark:border-white/10 rounded-lg overflow-hidden bg-white dark:bg-brand-dark">
+          {[
+            { v: 'today', l: 'Today' },
+            { v: '7d',    l: 'Last 7d' },
+            { v: '30d',   l: 'Last 30d' },
+            { v: 'all',   l: 'All time' },
+            { v: 'custom',l: 'Since…' },
+          ].map(d => (
+            <button key={d.v} onClick={() => setDateRange(d.v)}
+              className={`px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${dateRange === d.v ? 'bg-indigo-500 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5'}`}>
+              {d.l}
+            </button>
+          ))}
+        </div>
+        {dateRange === 'custom' && (
+          <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}
+            className="px-2 py-1.5 border border-gray-200 dark:border-white/10 rounded-lg text-[11px] bg-white dark:bg-brand-dark" />
+        )}
+        <span className="ml-4 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Sort:</span>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          className="px-2.5 py-1.5 border border-gray-200 dark:border-white/10 rounded-lg text-[11px] font-semibold bg-white dark:bg-brand-dark">
+          <option value="updated_at_desc">Newest first (updated)</option>
+          <option value="updated_at_asc">Oldest first (updated)</option>
+          <option value="created_at_desc">Newest first (created)</option>
+          <option value="name_asc">Name A → Z</option>
+          <option value="name_desc">Name Z → A</option>
+          <option value="cost_nzd_desc">Cost: high → low</option>
+          <option value="cost_nzd_asc">Cost: low → high</option>
+          <option value="qty_available_desc">Stock: high → low</option>
+          <option value="category_asc">Category A → Z</option>
+        </select>
       </div>
 
       {/* Table */}
@@ -145,7 +213,7 @@ export default function ProductsPage() {
         <div className="flex items-center justify-center py-20"><Loader2 className="animate-spin text-amber-500" /></div>
       ) : (
         <DataTable
-          data={rows}
+          data={displayRows}
           onRowClick={p => setEditing(p)}
           columns={[
             { label: 'Name',    render: p => (
@@ -164,6 +232,7 @@ export default function ProductsPage() {
             )},
             { label: 'Qty',     render: p => <span className="text-xs">{p.qty_available ?? 0}</span> },
             { label: 'MOQ',     render: p => p.moq > 1 ? <span className="text-xs text-amber-600 font-semibold">{p.moq}</span> : <span className="text-xs text-gray-400">{p.moq ?? 1}</span> },
+            { label: 'Updated', render: p => <span className="text-[10px] text-gray-500" title={p.updated_at}>{p.updated_at ? new Date(p.updated_at).toLocaleDateString('en-NZ', {day:'numeric',month:'short'}) : '—'}</span> },
             { label: '',        render: p => (
               <div className="flex gap-1 justify-end">
                 <button onClick={(e) => { e.stopPropagation(); setEditing(p); }}
@@ -332,6 +401,29 @@ function ProductEditor({ product, facets = {}, defaultCategory = '', onClose, on
             <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-700 flex items-start gap-1.5">
               <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
               <span><strong>Needs review:</strong> {form.needs_review}</span>
+            </div>
+          )}
+
+          {!isNew && product?.specs && typeof product.specs === 'object' && Object.keys(product.specs).length > 0 && (
+            <div className="border border-gray-200 dark:border-white/10 rounded-lg overflow-hidden">
+              <div className="px-3 py-2 bg-gray-50 dark:bg-white/5 border-b border-gray-200 dark:border-white/10 flex items-center justify-between">
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Specs · read-only</span>
+                <span className="text-[10px] text-gray-400">{Object.keys(product.specs).length} fields</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-4 p-3">
+                {Object.entries(product.specs).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-2 text-[11px] border-b border-gray-50 dark:border-white/5 py-0.5">
+                    <span className="text-gray-400 truncate" title={k}>{k}</span>
+                    <span className="font-medium text-gray-700 dark:text-gray-200 text-right truncate"
+                      title={typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}>
+                      {v === null || v === undefined ? '—'
+                        : typeof v === 'boolean' ? (v ? 'Yes' : 'No')
+                        : typeof v === 'object' ? JSON.stringify(v)
+                        : String(v)}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

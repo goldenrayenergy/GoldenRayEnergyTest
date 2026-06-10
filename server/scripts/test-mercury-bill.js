@@ -65,3 +65,40 @@ GAS TOTAL $146.66
 
 const r = parseBillText(text, { fileName: 'MCYST_5074875709_1.pdf' });
 console.log(JSON.stringify(r, null, 2));
+
+// ── Multi-rate (price-change mid-period) regression test ──
+// Reproduces the bug from the user's 13-bill batch: Mercury splits Anytime
+// usage into two rows when a price change falls inside the billing period.
+// Pre-fix the parser only captured the first row; post-fix it sums both.
+const multiRateText = `
+Mercury
+Tax Invoice 5068933140 mercury.co.nz
+ELECTRICITY
+Billing period 28 Mar 2025 - 28 Apr 2025
+Your total usage for the last 365 days is 9504 units (kWh).
+CHARGE TYPE
+Anytime 85 kWh x 19.90 cents $16.92
+Anytime 593 kWh x 20.96 cents $124.29
+Daily Fixed Charge 4 Days x 237.00 cents $9.48
+Daily Fixed Charge 28 Days x 272.00 cents $76.16
+Subtotal $221.83
+GST $33.26
+ELECTRICITY TOTAL $255.09
+`;
+const r2 = parseBillText(multiRateText, { fileName: 'multi-rate-regression.pdf' });
+console.log('\n─── Multi-rate regression test ───');
+const assertions = [
+  ['kwh_total',           r2.kwh_total,           678,    'Should sum 85 + 593'],
+  ['fixed_charge_nzd',    r2.fixed_charge_nzd,    85.64,  'Should sum 9.48 + 76.16'],
+  ['variable_charge_nzd', r2.variable_charge_nzd, 141.21, 'Should sum 16.92 + 124.29'],
+  ['annual_kwh_rolling',  r2.annual_kwh_rolling,  9504,   'Should read "365 days is 9504"'],
+  ['parse_suspect',       r2.parse_suspect,       false,  'Numbers internally consistent — no warning'],
+];
+let pass = 0, fail = 0;
+for (const [field, actual, expected, why] of assertions) {
+  const ok = actual === expected;
+  console.log(`  ${ok ? '✅' : '❌'}  ${field}: ${actual} (expected ${expected}) — ${why}`);
+  ok ? pass++ : fail++;
+}
+console.log(`\nMulti-rate test: ${pass}/${pass+fail} passed`);
+if (fail) process.exit(1);

@@ -11,8 +11,13 @@ import artifactsRoutes from './artifacts.js';
 import ownerRoutes from './owner.js';
 import adminRoutes from './admin.js';
 import adminImportRoutes from './admin-import.js';
+import adminCatalogueImportRoutes from './admin-catalogue-import.js';
 import proposalRoutes from './proposals.js';
 import qrCodesRoutes from './qr-codes.js';
+import quotesRoutes from './quotes.js';
+import quoteActionsRoutes from './quote-actions.js';
+import contactsLookupRoutes from './contacts.js';
+import catalogueRoutes from './catalogue.js';
 
 const router = Router();
 
@@ -34,8 +39,28 @@ router.use('/admin', adminRoutes);
 // compatibility/region_defaults/cost_defaults from a single xlsx upload).
 router.use('/admin', adminImportRoutes);
 
+// P8 — Catalogue CSV import (labour + compliance rate-cards).
+// POST /api/pm/admin/catalogue/import/{labour|compliance}, GET /imports, /template/:kind
+router.use('/admin/catalogue', adminCatalogueImportRoutes);
+
 // QR-code campaign management — list / create / patch + PNG/SVG downloads
 router.use('/admin/qr-codes', qrCodesRoutes);
+
+// MVP1_001 proposal generator — quotes CRUD + discount workflow.
+// /api/pm/quotes — create / list / get / patch-spec / validate / discount
+router.use('/quotes', quotesRoutes);
+
+// Contact-scoped lookups for the quotes form (Day 7 — Path A bill prefill).
+router.use('/contacts', contactsLookupRoutes);
+
+// MVP1_002 lifecycle actions — generate / email / sign / counter-sign /
+// deposit / audit-log / pdf download. Sits on the SAME /quotes prefix; Express
+// merges the two routers, with CRUD routes from quotesRoutes resolved first.
+router.use('/quotes', quoteActionsRoutes);
+
+// MVP1_003 — products catalogue dropdown options (panels / inverters / batteries /
+// BMS / smart meters / EV chargers) from live products table with field aliasing.
+router.use('/catalogue', catalogueRoutes);
 
 router.get('/health', (req, res) => res.json({ status: 'ok', tool: 'pm', phase: 'A.4' }));
 
