@@ -125,12 +125,37 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
         // Annualized ex-GST $ ÷ 365 days = ex-GST daily; × 1.15 → inc-GST.
         daily_fixed_charge_incl_gst:
           +(fixedTotal * GST_GROSSUP / 365).toFixed(2),
-        // Buyback rate is not captured in bill_analyses — leave UI default.
+        // Buyback rate — derived from per-bill kwh_exported + export_credit_nzd
+        // sums in bill_uploads. Only populated for customers who already have
+        // solar; otherwise stays null and spec falls back to the engine default
+        // (0.09 / Mercury current).
+        buyback_rate: await deriveBuybackRate(data.id),
       },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
+
+// Derive per-customer buyback rate from per-bill solar-export totals.
+// Returns null when the customer has no solar export on file (the normal case),
+// so the spec falls through to the engine default.
+async function deriveBuybackRate(analysisId) {
+  if (!sb()) return null;
+  const { data: rows, error } = await sb()
+    .from('bill_uploads')
+    .select('kwh_exported, export_credit_nzd')
+    .eq('analysis_id', analysisId)
+    .not('kwh_exported', 'is', null);
+  if (error || !rows || rows.length === 0) return null;
+  let kwh = 0, dollars = 0;
+  for (const r of rows) {
+    const k = Number(r.kwh_exported) || 0;
+    const d = Number(r.export_credit_nzd) || 0;
+    if (k > 0 && d > 0) { kwh += k; dollars += d; }
+  }
+  if (kwh <= 0 || dollars <= 0) return null;
+  return +(dollars / kwh).toFixed(4);
+}
 
 export default router;

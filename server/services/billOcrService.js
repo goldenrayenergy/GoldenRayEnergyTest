@@ -237,6 +237,26 @@ export async function parseBillPdf(buffer, { fileName } = {}) {
     }
   }
 
+  // Image-only PDF detected + OCR disabled or failed → emit a CLEAR,
+  // actionable error so the rep knows to re-upload as JPG/PNG (image OCR
+  // path always works regardless of OCR_ENABLED — see parseBillImage above).
+  const stillTooLittle = trimmed.length < TEXT_FALLBACK_THRESHOLD && parseMethod !== 'ocr';
+  if (stillTooLittle) {
+    return makeEmptyBill({
+      ocr_text_excerpt: text.slice(0, 4000),
+      ocr_text_full:    text,
+      parse_method:     'image_only_pdf_no_ocr',
+      parse_errors:     [{
+        field: 'all',
+        code:  'pdf_image_only_ocr_unavailable',
+        reason: `PDF appears to be image-based (only ${trimmed.length} chars of extractable text${RETAILERS.some(r=>r.match(trimmed))?'':'; no retailer markers found'}). ` +
+                `Please open the PDF, take a screenshot of each page, and re-upload as JPG or PNG. Our image OCR handles photos directly.`,
+      }],
+      file_name:        fileName || null,
+      file_size_bytes:  buffer.length,
+    });
+  }
+
   if (!text.trim()) {
     return makeEmptyBill({
       ocr_text_excerpt: '',
@@ -361,6 +381,7 @@ function makeEmptyBill(overrides = {}) {
     service_postcode: null,           // 4-digit NZ postcode (drives region resolution)
     icp_number: null,                 // NZ Installation Control Point
     network_distributor: null,        // Vector / Counties / Powerco / etc.
+    customer_name: null,              // Account holder name, extracted from bill header
     tariff_components: [],            // per-rate breakdown if TOU/free-hours plan
     payment_date: null,
     due_date: null,
@@ -462,6 +483,151 @@ function isElectricityBill(text) {
   // Default: assume electricity unless proven otherwise (avoid false negatives
   // on residential bills with unusual phrasing).
   return true;
+}
+
+// ── Solar export / buyback extraction (cross-retailer) ─────────────────────
+//
+// For customers who ALREADY have solar, the bill shows their export rate
+// (cents per kWh exported back to the grid) and the credit amount. This
+// matters for proposal accuracy:
+//   • Current buyback rate is part of "what the customer is doing now"
+//     baseline — without it we use 9¢/kWh default and over- or under-state
+//     the value of switching retailers.
+//   • Returns: { kwh_exported, export_credit_nzd } or { kwh_exported: null }
+//
+// Tries 4 known label conventions in NZ retailers:
+//   "Solar export", "Solar buyback", "Solar feed", "Export credit", "Buy-back"
+//
+// Pattern requires a kWh number AND a dollar amount within 200 chars.
+// If only one is found, returns nulls (better no data than guess).
+function extractExport(text) {
+  if (!text) return { kwh_exported: null, export_credit_nzd: null };
+  const patterns = [
+    /(?:Solar\s+(?:export|buyback|feed[-\s]?in)|Export\s+credit|Buy[-\s]?back\s+(?:credit|rate)?)[\s\S]{0,200}?([\d,]+(?:\.\d+)?)\s*kWh[\s\S]{0,100}?\$?\s*([\d,]+\.\d{2})/i,
+    // Some retailers reverse the order — $ first, then kWh
+    /(?:Solar\s+(?:export|buyback|feed[-\s]?in)|Export\s+credit|Buy[-\s]?back\s+(?:credit|rate)?)[\s\S]{0,200}?\$?\s*([\d,]+\.\d{2})\s*(?:credit|cr)?[\s\S]{0,100}?([\d,]+(?:\.\d+)?)\s*kWh/i,
+  ];
+  for (let i = 0; i < patterns.length; i++) {
+    const m = text.match(patterns[i]);
+    if (m) {
+      const a = parseNum(m[1]); const b = parseNum(m[2]);
+      // Pattern 0 captures kWh-first ($a is kWh, $b is dollars).
+      // Pattern 1 captures $-first ($a is dollars, $b is kWh).
+      const kwh = i === 0 ? a : b;
+      const dollars = i === 0 ? b : a;
+      // Sanity: kWh < 5000 (a residential month rarely exports more), dollars > 0
+      if (kwh > 0 && kwh < 5000 && dollars > 0) {
+        return { kwh_exported: kwh, export_credit_nzd: dollars };
+      }
+    }
+  }
+  return { kwh_exported: null, export_credit_nzd: null };
+}
+
+// ── Customer name extractor (cross-retailer) ───────────────────────────────
+//
+// Bills always print the account holder's name at the top, near the service
+// address. Capturing it lets the wizard pre-fill `contacts.name` so the rep
+// doesn't have to retype it from the bill.
+//
+// Patterns recognised across NZ retailers (Feb 2025 – Jun 2026 corpus):
+//   • "MR/MRS/MS/MISS/DR <NAME> <SURNAME>" (most reliable; Mercury/Genesis)
+//   • "Account name: <Name>" / "Account holder: <Name>" (Contact, some Mercury)
+//   • "Statement to: <Name>" / "Bill prepared for <Name>" (Ecotricity, Pulse)
+//   • "Dear <FirstName>" (any retailer cover letter)
+//   • Top-of-bill ALL CAPS name lines (1-3 caps lines BEFORE the address)
+//
+// Strong noise filter — never returns:
+//   • Retailer names (GENESIS, MERCURY, CONTACT, etc.)
+//   • City/suburb/street tokens (FLAT BUSH, NEW WINDSOR, AUCKLAND, ROAD…)
+//   • Generic words (ACCOUNT, INVOICE, STATEMENT, NUMBER, BALANCE, AMOUNT)
+//   • Single-word matches < 4 chars
+//
+// Returns the best-matched string, or null.
+const NAME_NOISE_TOKENS = new Set([
+  'GENESIS','MERCURY','CONTACT','PULSE','ECOTRICITY','MERIDIAN','POWERSHOP',
+  'VECTOR','COUNTIES','POWERCO','UNISON','TOP','ENERGY','ELECTRICITY','POWER',
+  'CUSTOMER','ACCOUNT','HOLDER','STATEMENT','INVOICE','BILL','NUMBER','BALANCE',
+  'AMOUNT','TOTAL','TAX','GST','OPENING','CLOSING','DUE','REFERENCE','ACTUAL',
+  'PAGE','PO','BOX','PRIVATE','BAG','MAIL','CENTRE','NEW','ZEALAND','SUMMARY',
+  'AUCKLAND','WELLINGTON','CHRISTCHURCH','HAMILTON','DUNEDIN','TAURANGA',
+  'PUKEKOHE','MANUREWA','PAPATOETOE','HENDERSON','GLENFIELD','HOWICK',
+  'ALBANY','HEIGHTS','BAY','BEACH','HILL','VALLEY','POINT','WINDSOR','BUSH',
+  'KELSTON','MANGERE','OTAHUHU','PAKURANGA','BLOCKHOUSE','FLAT','MOUNT',
+  'ROAD','RD','STREET','ST','AVENUE','AVE','PLACE','PL','COURT','CT','LANE',
+  'LN','DRIVE','DR','WAY','HIGHWAY','HWY','TERRACE','CRESCENT','CLOSE',
+  'LIMITED','LTD','COMPANY','GROUP','TRUST','SERVICES','SOLUTIONS','SUPPLY',
+  'NETWORK','SUPPORT','THANK','THANKS','DEAR','YOUR','OUR','FROM','FOR',
+  'TAX','INVOICE','STATEMENT','METER','READING','DATE','PAYMENT','PERIOD',
+]);
+function isNameNoise(s) {
+  if (!s) return true;
+  const tokens = s.toUpperCase().split(/\s+/);
+  // First word is a noise token = reject
+  if (NAME_NOISE_TOKENS.has(tokens[0])) return true;
+  // ALL words are noise tokens (street-only line) = reject
+  if (tokens.every(t => NAME_NOISE_TOKENS.has(t))) return true;
+  // Contains a digit or street suffix = reject
+  if (/\d/.test(s)) return true;
+  return false;
+}
+
+function extractCustomerName(text) {
+  if (!text) return null;
+  const head = text.slice(0, 3000);
+
+  // 1. Title prefix — case-INSENSITIVE, accepts single-word surnames too:
+  //   "MR SUNIL REDDY VADICHERLA"  (Mercury all-caps, 3-word name)
+  //   "Mr M Javed"                 (Contact mixed-case, middle initial + 1-word surname)
+  //   "Mrs Sarah Wong"             (2-word name)
+  const titled = head.match(/\b(Mr|Mrs|Ms|Miss|Dr)\.?\s+((?:[A-Z]\.?\s+)?[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,4})\b/i);
+  if (titled && !isNameNoise(titled[2])) return titled[2].replace(/\s+/g, ' ').trim();
+
+  // 2. Labelled account holder (Contact + some Mercury)
+  for (const re of [
+    /Account\s+(?:name|holder)[\s:]+([A-Z][A-Za-z\s\-'\.]{4,60}?)(?=\s*\n|\s+\d|\s*[,:])/i,
+    /(?:Statement|Bill)\s+(?:to|prepared\s+for)[\s:]+([A-Z][A-Za-z\s\-']{4,60}?)(?=\s*\n|\s+\d|\s*[,:])/i,
+  ]) {
+    const m = head.match(re);
+    if (m && !isNameNoise(m[1])) return m[1].replace(/\s+/g, ' ').trim();
+  }
+
+  // 3. "Dear FirstName" — cover letter style
+  const dear = head.match(/Dear\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})\b/);
+  if (dear && !isNameNoise(dear[1])) return dear[1].replace(/\s+/g, ' ').trim();
+
+  // 4. Title-case name line (Ecotricity pattern: "Faraz Ahmed" with no title):
+  //    2-3 title-case words immediately before something that LOOKS LIKE an
+  //    address fragment (digits + caps, OR caps suburb, OR street + digits).
+  const lines = head.split('\n').map(l => l.trim()).filter(Boolean);
+  const looksLikeAddressFragment = (s) =>
+       /^\d+[A-Za-z]?\s+[A-Z]/.test(s)             // "75 MAHIA"
+    || /[A-Z][A-Z\s]+\s+\d+\s*$/.test(s)            // "MAHIA ROAD 75"
+    || /^[A-Z][A-Z\s,]+\s+\d{4}\s*$/.test(s)        // "AUCKLAND 2102"
+    || /^(MANUREWA|PUKEKOHE|HAMILTON|WELLINGTON|AUCKLAND|CHRISTCHURCH|DUNEDIN|TAURANGA)$/i.test(s); // bare suburb line
+  for (let i = 0; i < Math.min(lines.length, 60) - 1; i++) {
+    const line = lines[i];
+    const next = lines[i + 1] || '';
+    if (!/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$/.test(line)) continue;
+    if (line.length < 6 || line.length > 50) continue;
+    if (isNameNoise(line)) continue;
+    if (!looksLikeAddressFragment(next)) continue;
+    return line.replace(/\s+/g, ' ').trim();
+  }
+
+  // 5. ALL CAPS name line (Mercury / Genesis pattern):
+  //    First non-noise caps line in first 35 lines that's 2-4 words.
+  for (let i = 0; i < Math.min(lines.length, 40); i++) {
+    const line = lines[i];
+    if (!/^[A-Z][A-Z\s'\-&]+$/.test(line)) continue;
+    if (line.length < 6 || line.length > 60) continue;
+    const wordCount = line.split(/\s+/).length;
+    if (wordCount < 2 || wordCount > 5) continue;
+    if (isNameNoise(line)) continue;
+    return line.replace(/\s+/g, ' ').trim();
+  }
+
+  return null;
 }
 
 // NZ ICP format: 10-15 alphanumeric chars, sometimes with hyphens.
@@ -721,6 +887,35 @@ function runCrossFieldValidators(parsed) {
     }
   }
 
+  // (4b) Variable rate-vs-market sanity.
+  // NZ residential variable rates in 2026 fall in ~$0.18-$0.35/kWh inc GST
+  // depending on retailer + region + plan. We use 0.10-0.50 as a wider band
+  // to flag obvious outliers without false-positives on edge plans:
+  //   • Low (< $0.10): probably commercial bulk tariff misclassified as
+  //     residential, OR parser missed the bulk of variable charges (which
+  //     check 3 + 4 should also catch but rate-level signal is faster).
+  //   • High (> $0.50): probably bad parse (missing kWh, double-counted $),
+  //     specialty TOU peak-only rates, or a fraudulent edit.
+  if (parsed.kwh_total != null && parsed.kwh_total > 0
+      && parsed.variable_charge_nzd != null && parsed.variable_charge_nzd > 0) {
+    const rate = parsed.variable_charge_nzd / parsed.kwh_total;
+    if (rate < 0.10) {
+      parse_warnings.push({
+        field: 'variable_charge_nzd',
+        code:  'variable_rate_below_residential_range',
+        reason: `Variable rate works out to $${rate.toFixed(3)}/kWh — below typical NZ residential ($0.18–$0.35). Likely commercial bulk tariff or parser missed a variable-charge row.`,
+        suspect: true,
+      });
+    } else if (rate > 0.50) {
+      parse_warnings.push({
+        field: 'variable_charge_nzd',
+        code:  'variable_rate_above_residential_range',
+        reason: `Variable rate works out to $${rate.toFixed(3)}/kWh — above typical NZ residential ($0.18–$0.35). Likely TOU peak-only rate, parser double-counted $, or modified bill.`,
+        suspect: true,
+      });
+    }
+  }
+
   // (5b) Daily kWh in a residential sane range.
   // NZ residential consumption is typically 7-100 kWh/day. Outside 5-200
   // strongly suggests parser error: missing rate row, double-count, or
@@ -803,12 +998,19 @@ function enrichWithCrossRetailerFields(parsed, text) {
   const servicePostcode   = parsed.service_postcode   || extractPostcode(serviceAddress);
   const icpNumber         = parsed.icp_number         || extractICP(text);
   const networkDistributor= parsed.network_distributor|| extractDistributor(text);
+  const customerName      = parsed.customer_name      || extractCustomerName(text);
+  // Solar export / buyback — only run if the retailer's parser didn't
+  // already populate (Mercury captures this in-parser).
+  const exp = (parsed.kwh_exported != null) ? null : extractExport(text);
   return {
     ...parsed,
     service_address:     serviceAddress,
     service_postcode:    servicePostcode,
     icp_number:          icpNumber,
     network_distributor: networkDistributor,
+    customer_name:       customerName,
+    kwh_exported:        parsed.kwh_exported     ?? exp?.kwh_exported     ?? null,
+    export_credit_nzd:   parsed.export_credit_nzd ?? exp?.export_credit_nzd ?? null,
   };
 }
 
