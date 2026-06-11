@@ -134,19 +134,25 @@ function splitNzAddress(addr) {
 //   • SKIPS fields that are already populated on the contact — never
 //     overwrites rep-entered data with parser output
 // ────────────────────────────────────────────────────────────────────────────
-async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode, service_address }) {
+async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode, service_address, customer_name }) {
   if (!supabaseAdmin || !contactId) return;
-  if (!region && !postcode && !service_address) return;
+  if (!region && !postcode && !service_address && !customer_name) return;
   try {
     const { data: existing } = await supabaseAdmin
       .from('contacts')
-      .select('id, region, postcode, street, suburb, city')
+      .select('id, name, postcode, street, suburb, city')
       .eq('id', contactId)
       .maybeSingle();
     if (!existing) return;
     const updates = {};
-    if (region   && !existing.region)   updates.region   = region;
     if (postcode && !existing.postcode) updates.postcode = postcode;
+    // P5 (A2)+(A3) Customer name — capture from bill header. Only writes if
+    // contact has a placeholder or empty name; never overwrites rep-entered.
+    // Placeholders we replace: empty, "Unknown", a quote_ref-style ID.
+    const looksPlaceholder = !existing.name
+                          || /^unknown$/i.test(existing.name)
+                          || /^[A-Z]{2,4}-\d{4}/.test(existing.name);
+    if (customer_name && looksPlaceholder) updates.name = customer_name;
     if (service_address) {
       const split = splitNzAddress(service_address);
       if (split.street   && !existing.street)   updates.street   = split.street;
@@ -462,14 +468,38 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       }
     }
 
-    // We need at least one bill with kWh + total to run the analysis
-    const usableBills = parsedBills.filter(b => b.kwh_total != null && b.total_nzd != null);
+    // Batch B #5 — Hard-fail on bills with missing critical fields.
+    // A bill with no kwh_total or no total_nzd cannot produce usable
+    // analysis output. Previously these were persisted to bill_uploads
+    // anyway (with parse_errors) and only filtered out at aggregation
+    // time, which cluttered the DB and risked leaks if aggregation logic
+    // ever changes. Now: only usable bills get persisted. Rejected bills
+    // are surfaced in the response with a clear reason so the rep can
+    // re-upload them after fixing (or switch to manual entry).
+    const billsWithSources = parsedBills.map((bill, i) => ({ bill, source: sourceFiles[i] }));
+    const usable   = billsWithSources.filter(x => x.bill.kwh_total != null && x.bill.total_nzd != null);
+    const rejected = billsWithSources.filter(x => !(x.bill.kwh_total != null && x.bill.total_nzd != null));
+    const usableBills      = usable.map(x => x.bill);
+    const usableSourceFiles = usable.map(x => x.source);
+    const rejectedBills = rejected.map(x => {
+      const errs = x.bill.parse_errors || [];
+      const reason =
+        errs.find(e => e.code === 'pdf_image_only_ocr_unavailable')?.reason ||
+        errs.find(e => e.field === 'bill_type')?.reason ||
+        errs.find(e => e.field === 'kwh_total')?.reason ||
+        errs.find(e => e.field === 'all')?.reason ||
+        'kWh or total amount could not be extracted from this bill.';
+      return {
+        file: x.bill.file_name || x.source?.originalname || 'unknown',
+        retailer: x.bill.retailer || null,
+        reason,
+      };
+    });
+
     if (usableBills.length === 0) {
       return res.status(400).json({
-        error: 'Couldn\'t extract enough numbers from any of those PDFs to run the analysis. They may be image-scanned or use an unrecognised retailer layout.',
-        parse_summary: parsedBills.map(b => ({
-          retailer: b.retailer, ocr_confidence: b.ocr_confidence, parse_errors: b.parse_errors,
-        })),
+        error: 'Couldn\'t extract enough numbers from any of those PDFs to run the analysis. They may be image-scanned, gas bills, or use an unrecognised retailer layout.',
+        rejected_bills: rejectedBills,
         ocr_errors: ocrErrors,
       });
     }
@@ -497,11 +527,13 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       .single();
     if (insErr) throw insErr;
 
-    // P5 (A2) + Address-writethrough v2 — propagate region/postcode AND the
-    // parsed street/suburb/city from the first usable bill back to the contact.
+    // P5 (A2) + Address-writethrough v2 + Customer-name writethrough — propagate
+    // region/postcode + the parsed street/suburb/city + the customer name from
+    // the first usable bill back to the contact.
     writeAddressThroughToContact(supabaseAdmin, partialContactId, {
       region, postcode: req.body.postcode,
-      service_address: parsedBills.find(b => b.service_address)?.service_address || null,
+      service_address: usableBills.find(b => b.service_address)?.service_address || null,
+      customer_name:   usableBills.find(b => b.customer_name)?.customer_name     || null,
     });
 
     // Fire-and-forget escalation when review_required + partial linked.
@@ -513,7 +545,9 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       reqBody: req.body,
     });
 
-    const uploadRows = buildUploadRows(parsedBills, inserted.id);
+    // Batch B #5 — only persist USABLE bills to bill_uploads (rejected
+    // ones are surfaced in the response instead so the rep can re-upload).
+    const uploadRows = buildUploadRows(usableBills, inserted.id);
     const { data: insertedUploads, error: uplErr } = await supabaseAdmin
       .from('bill_uploads')
       .insert(uploadRows)
@@ -521,15 +555,15 @@ router.post('/', upload.array('files', 12), async (req, res) => {
     if (uplErr) console.error('Bill uploads insert failed (non-fatal):', uplErr.message);
 
     // ── Store original bill PDFs/images to Supabase Storage ────────────────
-    // Per business decision (Path A): store every bill so sales has the
-    // source artifact when reviewing flagged bills + future re-analysis.
+    // Per business decision (Path A): store every USABLE bill so sales has
+    // the source artifact when reviewing flagged bills + future re-analysis.
+    // Rejected bills are NOT stored — they're returned to the rep with a
+    // clear error so they can re-upload (clearer copy / different format).
     // Bucket name + setup script: server/scripts/setup-bill-storage.js.
-    // Failure here is non-fatal — the analysis still completes; sales will
-    // just not have the original PDF to look at for this customer.
-    if (insertedUploads?.length === parsedBills.length) {
-      for (let i = 0; i < parsedBills.length; i++) {
+    if (insertedUploads?.length === usableBills.length) {
+      for (let i = 0; i < usableBills.length; i++) {
         const uploadId = insertedUploads[i].id;
-        const file     = sourceFiles[i];
+        const file     = usableSourceFiles[i];
         // CSV-derived synthesised bills have no source-PDF/image to upload.
         if (!file) continue;
         const ext      = (file.originalname.match(/\.([a-z0-9]+)$/i)?.[1] || 'bin').toLowerCase();
@@ -556,16 +590,17 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       }
     }
 
-    // 4. Normalise into customer_profiles (Phase 1.5) — non-blocking
-    const normResult = await normaliseFromBillAnalysis(inserted.id, { ...analysis, region }, parsedBills);
+    // 4. Normalise into customer_profiles (Phase 1.5) — non-blocking.
+    //    Only usable bills contribute (rejected bills have no values to normalise).
+    const normResult = await normaliseFromBillAnalysis(inserted.id, { ...analysis, region }, usableBills);
 
     // source_door reflects how the data arrived — CSV uploads land in their
     // own bucket so analytics can split bill-upload customers from smart-meter
     // customers.
     const csvCount = csvSummaries.length;
-    const pdfImgCount = parsedBills.length - csvSummaries.reduce((s, c) => s + (c.month_count || 0), 0);
+    const pdfImgCount = usableBills.length - csvSummaries.reduce((s, c) => s + (c.month_count || 0), 0);
     const sourceDoor = csvCount > 0 && pdfImgCount === 0 ? 'smart_meter_csv'
-                     : parsedBills.length >= 6 ? 'bill_upload_12'
+                     : usableBills.length >= 6 ? 'bill_upload_12'
                      : 'bill_upload_partial';
     res.status(201).json({
       id: inserted.id,
@@ -573,7 +608,7 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       source_door: sourceDoor,
       confidence_band: normResult.profile?.confidence_band || 'medium',
       profile_normalised: normResult.ok,
-      parse_summary: parsedBills.map(b => ({
+      parse_summary: usableBills.map(b => ({
         retailer:        b.retailer,
         period_start:    b.period_start,
         period_end:      b.period_end,
@@ -585,6 +620,10 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       csv_summary: csvSummaries.length ? csvSummaries : undefined,
       ocr_errors: ocrErrors,
       skipped_duplicates: skippedDuplicates.length ? skippedDuplicates : undefined,
+      // Batch B #5 — bills that couldn't be parsed (e.g. image-only PDFs, gas
+      // bills, missing kWh). NOT persisted to bill_uploads. The rep should
+      // re-upload these as clearer copies, or use manual entry on the quote.
+      rejected_bills: rejectedBills.length ? rejectedBills : undefined,
     });
   } catch (e) {
     console.error('Bill analysis error:', e.message);
@@ -1019,10 +1058,31 @@ router.post('/:id/promote-to-quote', async (req, res) => {
       .not('service_address', 'is', null)
       .limit(1)
       .maybeSingle();
+    // Customer name is not stored as a column on bill_uploads — re-extract
+    // from OCR text excerpt at link time using the shared helper.
+    const { data: ocrRow } = await supabaseAdmin
+      .from('bill_uploads')
+      .select('ocr_text_excerpt, ocr_text_full')
+      .eq('analysis_id', req.params.id)
+      .limit(1)
+      .maybeSingle();
+    let claimedCustomerName = null;
+    try {
+      const { default: ocrSvc } = await import('../services/billOcrService.js');
+      // extractCustomerName is internal — use the parser entrypoint instead
+      if (ocrRow?.ocr_text_excerpt || ocrRow?.ocr_text_full) {
+        const { parseBillText } = await import('../services/billOcrService.js');
+        const reparsed = parseBillText(ocrRow.ocr_text_full || ocrRow.ocr_text_excerpt);
+        claimedCustomerName = reparsed.customer_name || null;
+      }
+    } catch (e) {
+      console.warn('Customer-name re-extract failed (non-fatal):', e.message);
+    }
     writeAddressThroughToContact(supabaseAdmin, contactId, {
       region: analysis.region,
       postcode: analysis.postcode,
       service_address: addrRow?.service_address || null,
+      customer_name:   claimedCustomerName,
     });
 
     // 5. Sales follow-up task (high priority, due tomorrow)
