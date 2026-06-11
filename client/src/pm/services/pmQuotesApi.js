@@ -22,6 +22,14 @@ export const pmCatalogueAPI = {
   costPicker: () => api.get('/pm/catalogue/cost-picker'),
 };
 
+// Option 2 — engine-side recommendations. Server reads the live catalogue
+// (including mppt_v_min from Option 1) and runs the envelope-search string
+// designer to recommend a layout for the given panel + inverter + count.
+export const pmProposalEngineAPI = {
+  recommendStringLayout: (body) =>
+    api.post('/pm/proposal-engine/recommend-string-layout', body),
+};
+
 export const pmQuotesAPI = {
   // CRUD
   list:        (params) => api.get('/pm/quotes', { params }),

@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Field, TextInput, NumberInput, Select, SectionGrid, SectionHeading, CheckBox } from './_shared';
-import { REFERENCE } from '../../services/pmQuotesApi';
+import { REFERENCE, pmProposalEngineAPI } from '../../services/pmQuotesApi';
 import useCatalogueOptions from '../../hooks/useCatalogueOptions';
 
 export default function SystemSection({ spec, update, errors = {} }) {
@@ -39,6 +40,40 @@ export default function SystemSection({ spec, update, errors = {} }) {
   const stringMismatch = sys.panel?.count && stringTotal && stringTotal !== sys.panel?.count;
 
   const autoSizeNote = sys.__auto_size_note;
+
+  // Option 2 — engine-recommended string layout (envelope-search algorithm)
+  const [recState, setRecState] = useState({ loading: false, error: null, layout: null });
+  const canRecommend = !!(sys.panel?.sku && sys.inverter?.sku && sys.panel?.count);
+
+  const runRecommend = async () => {
+    setRecState({ loading: true, error: null, layout: null });
+    try {
+      const { data } = await pmProposalEngineAPI.recommendStringLayout({
+        panel_sku:    sys.panel.sku,
+        inverter_sku: sys.inverter.sku,
+        panel_count:  sys.panel.count,
+        region:       spec.customer?.address?.region,
+      });
+      const layout = data.layout;
+      setRecState({ loading: false, error: null, layout });
+      // Apply the recommendation to the spec when it's a valid layout.
+      if (layout?.reason_code === 'optimal' || layout?.reason_code === 'asymmetric_fallback') {
+        update(s => ({
+          ...s,
+          system: {
+            ...s.system,
+            string_topology: layout.topology,
+            string_design: {
+              panels_per_string: layout.panels_per_string,
+              string_count:      layout.string_count,
+            },
+          },
+        }));
+      }
+    } catch (e) {
+      setRecState({ loading: false, error: e.response?.data?.error || e.message, layout: null });
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -125,7 +160,16 @@ export default function SystemSection({ spec, update, errors = {} }) {
 
       {/* String design */}
       <div>
-        <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide mb-3">String topology</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">String topology</h3>
+          <button
+            type="button"
+            onClick={runRecommend}
+            disabled={!canRecommend || recState.loading}
+            className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed">
+            {recState.loading ? 'Computing…' : 'Recommend layout'}
+          </button>
+        </div>
         <SectionGrid columns={3}>
           <Field label="Topology" required>
             <Select value={sys.string_topology} onChange={v => setSys('string_topology', v)}
@@ -145,6 +189,46 @@ export default function SystemSection({ spec, update, errors = {} }) {
         {stringMismatch && (
           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
             ⚠ String design ({stringTotal}) doesn't match panel count ({sys.panel?.count}). Save will fail.
+          </div>
+        )}
+        {recState.error && (
+          <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800">
+            Engine error: {recState.error}
+          </div>
+        )}
+        {recState.layout && (
+          <div className={`mt-3 p-3 rounded text-xs border ${
+            recState.layout.reason_code === 'optimal'             ? 'bg-emerald-50 border-emerald-200 text-emerald-900' :
+            recState.layout.reason_code === 'asymmetric_fallback' ? 'bg-amber-50 border-amber-200 text-amber-900' :
+                                                                    'bg-rose-50 border-rose-200 text-rose-900'
+          }`}>
+            <div className="font-semibold mb-1">
+              Engine recommendation: {recState.layout.string_count} × {recState.layout.panels_per_string}
+              {recState.layout.asymmetric_string && ` + 1 × ${recState.layout.asymmetric_string.panels_per_string}`}
+              {' '}({recState.layout.topology})
+            </div>
+            <div className="leading-relaxed">{recState.layout.reason}</div>
+            <div className="mt-1 text-[10px] opacity-80">
+              Voc cold {recState.layout.string_voc_cold}V · Vmp hot {recState.layout.string_vmp_hot}V
+              {recState.layout.mppt_current_per_mppt && ` · MPPT current ${recState.layout.mppt_current_per_mppt}A`}
+            </div>
+            {recState.layout.violations?.length > 0 && (
+              <ul className="mt-2 list-disc list-inside space-y-0.5">
+                {recState.layout.violations.map((v, i) => (
+                  <li key={i}>{v.message}</li>
+                ))}
+              </ul>
+            )}
+            {recState.layout.alternatives?.length > 0 && (
+              <div className="mt-2 opacity-80">
+                Alternatives:{' '}
+                {recState.layout.alternatives.map((a, i) => (
+                  <span key={i} className="ml-2">
+                    {a.string_count}×{a.panels_per_string} ({a.topology})
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

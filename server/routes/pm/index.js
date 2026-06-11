@@ -18,6 +18,7 @@ import quotesRoutes from './quotes.js';
 import quoteActionsRoutes from './quote-actions.js';
 import contactsLookupRoutes from './contacts.js';
 import catalogueRoutes from './catalogue.js';
+import proposalEngineRoutes from './proposal-engine.js';
 
 const router = Router();
 
@@ -61,6 +62,10 @@ router.use('/quotes', quoteActionsRoutes);
 // MVP1_003 — products catalogue dropdown options (panels / inverters / batteries /
 // BMS / smart meters / EV chargers) from live products table with field aliasing.
 router.use('/catalogue', catalogueRoutes);
+
+// Option 2 — engine-side recommendations (string layout etc.) reading the live
+// catalogue with current mppt_v_min / Voc / Vmp values.
+router.use('/proposal-engine', proposalEngineRoutes);
 
 router.get('/health', (req, res) => res.json({ status: 'ok', tool: 'pm', phase: 'A.4' }));
 
