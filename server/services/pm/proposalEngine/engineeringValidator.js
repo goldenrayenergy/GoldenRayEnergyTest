@@ -36,12 +36,30 @@ export const STANDARDS_REFERENCED = {
 
 const r2 = (n) => +(+n).toFixed(2);
 
+// NZ summer back-of-cell hot temperature for Vmp lower-envelope checks.
+// Industry default — NOCT 45°C + STC 1000 W/m² irradiance lifts cell to ~70°C.
+const HOT_PANEL_CELSIUS = 70;
+
+// 10% headroom above inverter mppt_v_min before the MPPT can't track.
+// Below this floor harvest collapses; flag as borderline.
+const MPPT_V_MIN_BUFFER = 1.10;
+
 // Cold-temperature Voc correction formula (AS/NZS 5033).
 // Voc_cold = Voc_stc × (1 + |Tcoef| × (T_stc − T_min))
 function vocAtColdTemp(panelData, tMinCelsius) {
   const Tstc = 25;
   const correction = 1 + Math.abs(panelData.voltage_temp_coef_pct_per_c) / 100 * (Tstc - tMinCelsius);
   return r2(panelData.voc_stc * correction);
+}
+
+// Hot-temperature Vmp correction (mirror of vocAtColdTemp, sign inverted).
+// Vmp_hot = Vmp_stc × (1 − |Tcoef| × (T_hot − T_stc))
+// Note: voltage_temp_coef is reused (Vmp and Voc share the same coefficient
+// for monocrystalline panels — within 0.01%/°C for the panels in catalogue).
+function vmpAtHotTemp(panelData, tHotCelsius) {
+  const Tstc = 25;
+  const correction = 1 - Math.abs(panelData.voltage_temp_coef_pct_per_c) / 100 * (tHotCelsius - Tstc);
+  return r2(panelData.vmp_stc * correction);
 }
 
 // ── Main validator ────────────────────────────────────────────────────────
@@ -92,6 +110,43 @@ export function validateEngineering(spec, options = {}) {
       passes.push({
         rule: 'AS/NZS 5033 §3 — Voc cold check',
         message: `String Voc ${stringVocCold}V at ${region.t_min_celsius}°C ≤ ${inverter.uoc_max_v}V Uoc max ✓`,
+      });
+    }
+  }
+
+  // ── MVP-1 §2.10 — Vmp lower envelope (MPPT tracking floor) ──────────
+  // String Vmp at hot operating temperature must stay above the inverter's
+  // mppt_v_min, with a 10% buffer. Below the floor the MPPT can't track
+  // and harvest collapses; in the buffer band we warn rather than block.
+  if (panel && inverter && panelsPerString && inverter.mppt_v_min != null) {
+    const vmpHot = vmpAtHotTemp(panel, HOT_PANEL_CELSIUS);
+    const stringVmpHot = r2(vmpHot * panelsPerString);
+    const vmpFloorHard = inverter.mppt_v_min;
+    const vmpFloorBuffered = r2(inverter.mppt_v_min * MPPT_V_MIN_BUFFER);
+
+    if (stringVmpHot < vmpFloorHard) {
+      hard_fails.push({
+        rule: 'MVP-1 §2.10 — Vmp lower envelope',
+        message: `String Vmp at ${HOT_PANEL_CELSIUS}°C = ${stringVmpHot}V is below ` +
+                 `inverter MPPT minimum ${vmpFloorHard}V. MPPT cannot track; ` +
+                 `harvest collapses on warm days. Add panels to the string or ` +
+                 `pick an inverter with a lower MPPT floor.`,
+        details: { string_vmp_hot: stringVmpHot, mppt_v_min: vmpFloorHard },
+      });
+    } else if (stringVmpHot < vmpFloorBuffered) {
+      soft_warnings.push({
+        rule: 'MVP-1 §2.10 — Vmp borderline',
+        message: `String Vmp at ${HOT_PANEL_CELSIUS}°C = ${stringVmpHot}V is within ` +
+                 `10% of inverter MPPT minimum ${vmpFloorHard}V. Tracking works ` +
+                 `but with no thermal headroom; consider a longer string.`,
+        details: { string_vmp_hot: stringVmpHot, mppt_v_min: vmpFloorHard,
+                   buffered_floor: vmpFloorBuffered },
+      });
+    } else {
+      passes.push({
+        rule: 'MVP-1 §2.10 — Vmp lower envelope',
+        message: `String Vmp ${stringVmpHot}V at ${HOT_PANEL_CELSIUS}°C ≥ ` +
+                 `${vmpFloorBuffered}V (mppt_v_min ${vmpFloorHard}V × 1.10) ✓`,
       });
     }
   }

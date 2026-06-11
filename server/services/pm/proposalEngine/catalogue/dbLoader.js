@@ -109,6 +109,7 @@ function mapInverter(row) {
     is_plus_variant,
     battery_capable,
     uoc_max_v:         num(s.uoc_max_v),
+    mppt_v_min:        num(s.mppt_v_min ?? s.mpp_v_min ?? s.mppt_voltage_min),
     idc_max_a_per_mppt: num(s.idc_max_a_per_mppt),
     isc_max_a_mppt1:   num(s.isc_max_a_mppt1),
     isc_max_a_mppt2:   num(s.isc_max_a_mppt2 ?? s.isc_max_a_mppt1),
