@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import crypto from 'crypto';
 import { supabaseAdmin } from '../config/supabase.js';
 import { parseBillPdf, parseBillImage } from '../services/billOcrService.js';
 import { analyzeBills } from '../services/billAnalysisService.js';
@@ -85,28 +86,74 @@ async function escalatePartialOnReview({ contactId, enquiryId, analysisId, analy
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Split a NZ service-address string into street / suburb / city / postcode.
+// Handles common formats:
+//   "31A HILLVIEW AVENUE, NEW WINDSOR, AUCKLAND 0600"
+//   "4/11 HATFIELD PLACE, ALBANY HEIGHTS, AUCKLAND"
+//   "75 MAHIA ROAD, AUCKLAND" (no suburb)
+//   "31A HILLVIEW AVENUE NEW WINDSOR AUCKLAND 0600" (no commas)
+//
+// Returns {street, suburb, city, postcode} with nulls for any segment that
+// couldn't be confidently identified.
+function splitNzAddress(addr) {
+  if (!addr || typeof addr !== 'string') return {};
+  const cleaned = addr.replace(/\s+/g, ' ').trim();
+  // Pull a trailing 4-digit postcode if present.
+  let postcode = null;
+  const pcMatch = cleaned.match(/\b(\d{4})\s*$/);
+  let body = cleaned;
+  if (pcMatch) { postcode = pcMatch[1]; body = body.slice(0, pcMatch.index).trim(); }
+  // Comma-separated case (most reliable)
+  if (body.includes(',')) {
+    const parts = body.split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length >= 3) {
+      return { street: parts[0], suburb: parts[1], city: parts[2], postcode };
+    }
+    if (parts.length === 2) {
+      return { street: parts[0], suburb: null, city: parts[1], postcode };
+    }
+    if (parts.length === 1) {
+      return { street: parts[0], suburb: null, city: null, postcode };
+    }
+  }
+  // No commas — splitting suburb-from-city ambiguously (e.g. "NEW WINDSOR
+  // AUCKLAND" could be suburb="NEW" city="WINDSOR AUCKLAND" or suburb="NEW
+  // WINDSOR" city="AUCKLAND"). Writing wrong data is worse than writing
+  // less, so put everything into `street` and let the rep enter suburb/city
+  // manually. Postcode is still peeled off if present.
+  return { street: body, suburb: null, city: null, postcode };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // P5 (A2) — Address write-through to contacts row.
 //
 // After a bill analysis successfully inserts (or links), propagate the
-// detected region + postcode back to the contact's record. Two safety
-// guards:
+// detected region + postcode + street/suburb/city back to the contact's
+// record. Two safety guards:
 //   • Only writes when a contact_id is present
 //   • SKIPS fields that are already populated on the contact — never
 //     overwrites rep-entered data with parser output
 // ────────────────────────────────────────────────────────────────────────────
-async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode }) {
+async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode, service_address }) {
   if (!supabaseAdmin || !contactId) return;
-  if (!region && !postcode) return;
+  if (!region && !postcode && !service_address) return;
   try {
     const { data: existing } = await supabaseAdmin
       .from('contacts')
-      .select('id, region, postcode')
+      .select('id, region, postcode, street, suburb, city')
       .eq('id', contactId)
       .maybeSingle();
     if (!existing) return;
     const updates = {};
     if (region   && !existing.region)   updates.region   = region;
     if (postcode && !existing.postcode) updates.postcode = postcode;
+    if (service_address) {
+      const split = splitNzAddress(service_address);
+      if (split.street   && !existing.street)   updates.street   = split.street;
+      if (split.suburb   && !existing.suburb)   updates.suburb   = split.suburb;
+      if (split.city     && !existing.city)     updates.city     = split.city;
+      if (split.postcode && !existing.postcode && !updates.postcode) updates.postcode = split.postcode;
+    }
     if (Object.keys(updates).length === 0) return;
     await supabaseAdmin.from('contacts').update(updates).eq('id', contactId);
   } catch (e) {
@@ -296,7 +343,7 @@ function buildUploadRows(parsedBills, analysisId) {
     analysis_id:          analysisId,
     file_name:            b.file_name,
     file_size_bytes:      b.file_size_bytes,
-    file_hash:            null,
+    file_hash:            b.file_hash || null,
     ocr_text_excerpt:     b.ocr_text_excerpt,
     ocr_confidence:       b.ocr_confidence,
     retailer:             b.retailer,
@@ -366,6 +413,10 @@ router.post('/', upload.array('files', 12), async (req, res) => {
     const sourceFiles = [];                          // parallel to parsedBills for PDF/image
     const ocrErrors = [];
     const csvSummaries = [];                         // per-CSV summary for the response
+    // Within-batch dedup: hash each PDF/image and skip duplicates silently.
+    // (CSV files are not deduped — they synthesise multiple bills.)
+    const seenHashes = new Set();
+    const skippedDuplicates = [];
     for (const f of req.files) {
       try {
         if (isCsvFile(f)) {
@@ -394,7 +445,15 @@ router.post('/', upload.array('files', 12), async (req, res) => {
             warnings:     csvResult.warnings,
           });
         } else {
+          // Hash the file bytes for dedup + later persistence
+          const fileHash = crypto.createHash('sha256').update(f.buffer).digest('hex');
+          if (seenHashes.has(fileHash)) {
+            skippedDuplicates.push({ file: f.originalname, file_hash: fileHash });
+            continue;                                // silent skip within batch
+          }
+          seenHashes.add(fileHash);
           const parsed = await parseUploadedFile(f);
+          parsed.file_hash = fileHash;               // surface to buildUploadRows
           parsedBills.push(parsed);
           sourceFiles.push(f);
         }
@@ -438,9 +497,12 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       .single();
     if (insErr) throw insErr;
 
-    // P5 (A2) — write parsed region/postcode through to the contact row.
-    writeAddressThroughToContact(supabaseAdmin, partialContactId,
-      { region, postcode: req.body.postcode });
+    // P5 (A2) + Address-writethrough v2 — propagate region/postcode AND the
+    // parsed street/suburb/city from the first usable bill back to the contact.
+    writeAddressThroughToContact(supabaseAdmin, partialContactId, {
+      region, postcode: req.body.postcode,
+      service_address: parsedBills.find(b => b.service_address)?.service_address || null,
+    });
 
     // Fire-and-forget escalation when review_required + partial linked.
     escalatePartialOnReview({
@@ -522,6 +584,7 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       })),
       csv_summary: csvSummaries.length ? csvSummaries : undefined,
       ocr_errors: ocrErrors,
+      skipped_duplicates: skippedDuplicates.length ? skippedDuplicates : undefined,
     });
   } catch (e) {
     console.error('Bill analysis error:', e.message);
@@ -946,9 +1009,21 @@ router.post('/:id/promote-to-quote', async (req, res) => {
       expires_at: null,
     }).eq('id', req.params.id);
 
-    // P5 (A2) — propagate parsed region/postcode to the now-linked contact
-    writeAddressThroughToContact(supabaseAdmin, contactId,
-      { region: analysis.region, postcode: analysis.postcode });
+    // P5 (A2) + Address-writethrough v2 — propagate region/postcode AND the
+    // service_address captured per-bill back to the now-linked contact.
+    // Pull the first non-null service_address from this analysis's bill_uploads.
+    const { data: addrRow } = await supabaseAdmin
+      .from('bill_uploads')
+      .select('service_address')
+      .eq('analysis_id', req.params.id)
+      .not('service_address', 'is', null)
+      .limit(1)
+      .maybeSingle();
+    writeAddressThroughToContact(supabaseAdmin, contactId, {
+      region: analysis.region,
+      postcode: analysis.postcode,
+      service_address: addrRow?.service_address || null,
+    });
 
     // 5. Sales follow-up task (high priority, due tomorrow)
     await supabaseAdmin.from('tasks').insert({

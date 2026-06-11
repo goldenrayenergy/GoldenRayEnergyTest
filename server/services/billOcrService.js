@@ -140,6 +140,19 @@ export async function parseBillImage(buffer, { fileName, mimeType } = {}) {
     });
   }
 
+  // Refuse non-electricity bills (gas / LPG / broadband / mobile) upfront —
+  // these would otherwise fall through to GENERIC and produce garbage.
+  if (!isElectricityBill(text)) {
+    return makeEmptyBill({
+      ocr_text_excerpt: text.slice(0, 4000),
+      ocr_text_full:    text,
+      parse_method:     'rejected',
+      parse_errors:     [{ field: 'bill_type', reason: 'Not an electricity bill — looks like natural gas, LPG, broadband, or mobile. Only electricity bills are accepted for proposal generation.' }],
+      file_name:        fileName || null,
+      file_size_bytes:  buffer.length,
+    });
+  }
+
   // Re-use the same retailer detection + parsing as PDFs
   const retailer = RETAILERS.find(r => r.match(text)) || GENERIC;
   let parsed;
@@ -236,6 +249,17 @@ export async function parseBillPdf(buffer, { fileName } = {}) {
   }
 
   // ── Stage 3: retailer detection + per-retailer parsing ──
+  // Reject non-electricity bills upfront (gas / LPG / broadband / mobile).
+  if (!isElectricityBill(text)) {
+    return makeEmptyBill({
+      ocr_text_excerpt: text.slice(0, 4000),
+      ocr_text_full:    text,
+      parse_method:     'rejected',
+      parse_errors:     [{ field: 'bill_type', reason: 'Not an electricity bill — looks like natural gas, LPG, broadband, or mobile. Only electricity bills are accepted for proposal generation.' }],
+      file_name:        fileName || null,
+      file_size_bytes:  buffer.length,
+    });
+  }
   const retailer = RETAILERS.find(r => r.match(text)) || GENERIC;
 
   let parsed;
@@ -411,6 +435,34 @@ function daysBetween(startStr, endStr) {
 // populate fields the retailer parsers don't extract today (address, ICP,
 // distributor). They're conservative: extract only if a high-confidence
 // pattern matches, else leave null.
+
+// ── Bill type guard — refuse non-electricity bills upfront ────────────────
+//
+// NZ retailers (Genesis, Mercury, Contact, etc.) issue bills for: electricity,
+// natural gas, LPG, broadband, mobile. Our engine only models electricity —
+// other types parse into garbage values that downstream code can't sanity-check
+// after the fact (we've seen 167.5100 c/day extracted as $167.51).
+//
+// This guard returns false when the bill is clearly NOT electricity. Used by
+// each retailer's match() function to skip routing.
+function isElectricityBill(text) {
+  if (!text) return false;
+  // Strong NEGATIVE markers — bill explicitly identifies as non-electricity.
+  if (/your\s+natural\s+gas\s+account\b/i.test(text)) return false;
+  if (/current\s+natural\s+gas\s+usage\b/i.test(text)) return false;
+  if (/your\s+lpg\s+account\b/i.test(text)) return false;
+  if (/(?:^|\W)broadband\s+(?:account|invoice|service)\b/i.test(text)) return false;
+  if (/(?:^|\W)mobile\s+(?:account|invoice|service|plan)\b/i.test(text)) return false;
+  // Gas-only structural markers — bill mentions M3 / calorific value but no
+  // electricity-specific markers like ICP / kWh@c/unit / Vector / lines charge.
+  const hasGasUnits = /\b(M3|calorific\s+value)\b/i.test(text);
+  const hasElectricityMarkers =
+       /\b(?:ICP|installation\s+control\s+point|electricity\s+(?:account|invoice|charges|usage|supply)|kWh\s*@|c\/unit|lines?\s+charges?|vector\b)\b/i.test(text);
+  if (hasGasUnits && !hasElectricityMarkers) return false;
+  // Default: assume electricity unless proven otherwise (avoid false negatives
+  // on residential bills with unusual phrasing).
+  return true;
+}
 
 // NZ ICP format: 10-15 alphanumeric chars, sometimes with hyphens.
 // Reference: Electricity Authority ICP standard.
@@ -669,6 +721,22 @@ function runCrossFieldValidators(parsed) {
     }
   }
 
+  // (5b) Daily kWh in a residential sane range.
+  // NZ residential consumption is typically 7-100 kWh/day. Outside 5-200
+  // strongly suggests parser error: missing rate row, double-count, or
+  // wrong bill type (commercial / industrial would also blow past 200).
+  if (parsed.kwh_total != null && parsed.days_in_period && parsed.days_in_period > 0) {
+    const kwhPerDay = parsed.kwh_total / parsed.days_in_period;
+    if (kwhPerDay < 5 || kwhPerDay > 200) {
+      parse_warnings.push({
+        field: 'kwh_total',
+        code:  'kwh_per_day_outside_residential_range',
+        reason: `kWh/day = ${kwhPerDay.toFixed(1)} (${parsed.kwh_total} kWh / ${parsed.days_in_period} days). Residential range is 5-200 kWh/day. Out-of-range usually means a rate row was missed (low) or kWh was double-counted (high).`,
+        suspect: true,
+      });
+    }
+  }
+
   // (6) Non-negative invariants (rules 4.4, 4.5)
   for (const [field, value] of Object.entries({
     kwh_total: parsed.kwh_total, kwh_peak: parsed.kwh_peak,
@@ -748,7 +816,9 @@ function enrichWithCrossRetailerFields(parsed, text) {
 
 const MERCURY = {
   name: 'Mercury',
-  match: (t) => /\bmercury\b/i.test(t) && /\b(NZ Energy|Mercury NZ|mercury\.co\.nz|electricity)\b/i.test(t),
+  match: (t) => isElectricityBill(t)
+             && /\bmercury\b/i.test(t)
+             && /\b(NZ Energy|Mercury NZ|mercury\.co\.nz|electricity)\b/i.test(t),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Mercury', plan_name: null };
@@ -797,7 +867,7 @@ const MERCURY = {
     // kWh x 20.96 cents ..."). matchAll captures every Anytime/Day/Night/Off-
     // Peak/Variable row in the elec slice and we sum them. Falls back to
     // single-figure formats only when none of the rate-line pattern matches.
-    const rateLines = [...elec.matchAll(/(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+([\d,]+(?:\.\d+)?)\s*kWh\s+x/gi)];
+    const rateLines = [...elec.matchAll(/(?:Anytime|Inclusive|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night)\s+([\d,]+(?:\.\d+)?)\s*kWh\s+x/gi)];
     if (rateLines.length) {
       out.kwh_total = +rateLines.reduce((sum, m) => sum + parseNum(m[1]), 0);
     } else {
@@ -857,7 +927,7 @@ const MERCURY = {
     // never see broken out elsewhere, but it IS part of variable spend. The
     // kwh_total regex above deliberately omits EA Levy because it references
     // the SAME kWh (would double-count if included there).
-    const variableLines = [...elec.matchAll(/(?:Anytime|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night|Electricity\s+Authority\s+Levy|EA\s+Levy)\s+[\d,]+(?:\.\d+)?\s*kWh\s+x\s+[\d.]+\s*cents\s+\$([\d,]+\.\d{2})/gi)];
+    const variableLines = [...elec.matchAll(/(?:Anytime|Inclusive|Variable\s+Usage\s+Charge|Off[- ]?Peak|Day|Night|Electricity\s+Authority\s+Levy|EA\s+Levy)\s+[\d,]+(?:\.\d+)?\s*kWh\s+x\s+[\d.]+\s*cents\s+\$([\d,]+\.\d{2})/gi)];
     if (variableLines.length) {
       out.variable_charge_nzd = +variableLines.reduce((sum, m) => sum + parseNum(m[1]), 0).toFixed(2);
     } else {
@@ -948,7 +1018,8 @@ const MERCURY = {
 
 const GENESIS = {
   name: 'Genesis',
-  match: (t) => /\bgenesis\s+energy\b/i.test(t) || /\bgenesisenergy\.co\.nz\b/i.test(t),
+  match: (t) => isElectricityBill(t)
+             && (/\bgenesis\s+energy\b/i.test(t) || /\bgenesisenergy\.co\.nz\b/i.test(t)),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Genesis', plan_name: null };
@@ -1092,7 +1163,8 @@ const GENESIS = {
 
 const CONTACT = {
   name: 'Contact Energy',
-  match: (t) => /\bcontact\s+energy\b/i.test(t) || /\bcontactenergy\.co\.nz\b/i.test(t) || /\bcontact\.co\.nz\b/i.test(t),
+  match: (t) => isElectricityBill(t)
+             && (/\bcontact\s+energy\b/i.test(t) || /\bcontactenergy\.co\.nz\b/i.test(t) || /\bcontact\.co\.nz\b/i.test(t)),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Contact Energy', plan_name: null };
@@ -1275,7 +1347,8 @@ const CONTACT = {
 
 const MERIDIAN = {
   name: 'Meridian Energy',
-  match: (t) => /\bmeridian\s+energy\b/i.test(t) || /\bmeridianenergy\.co\.nz\b/i.test(t),
+  match: (t) => isElectricityBill(t)
+             && (/\bmeridian\s+energy\b/i.test(t) || /\bmeridianenergy\.co\.nz\b/i.test(t)),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Meridian Energy', plan_name: null };
@@ -1314,9 +1387,11 @@ const PULSE = {
   // Pulse PDFs sometimes mangle "Pulse Energy" into "0ULSE %NERGY" due to font
   // encoding, so match on multiple fingerprints — domain, plain name, and
   // a couple of unambiguous strings that survive the encoding issue.
-  match: (t) => /\bpulse\s+energy\b/i.test(t)
-             || /\bpulseenergy\.co\.nz\b/i.test(t)
-             || /pulse\s+energy\s+alliance/i.test(t),
+  match: (t) => isElectricityBill(t) && (
+                  /\bpulse\s+energy\b/i.test(t)
+               || /\bpulseenergy\.co\.nz\b/i.test(t)
+               || /pulse\s+energy\s+alliance/i.test(t)
+               ),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Pulse Energy', plan_name: null };
@@ -1491,10 +1566,12 @@ const PULSE = {
 // ═══════════════════════════════════════════════════════════════════════════
 const ECOTRICITY = {
   name: 'Ecotricity',
-  match: (t) => /\becotricity\b/i.test(t)
-             || /\becotricity\.co\.nz\b/i.test(t)
-             || /\bbring\.change@ecotricity\b/i.test(t)
-             || /Ecotricity\s+Limited\s+Partnership/i.test(t),
+  match: (t) => isElectricityBill(t) && (
+                  /\becotricity\b/i.test(t)
+               || /\becotricity\.co\.nz\b/i.test(t)
+               || /\bbring\.change@ecotricity\b/i.test(t)
+               || /Ecotricity\s+Limited\s+Partnership/i.test(t)
+               ),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Ecotricity', plan_name: null };
@@ -1639,7 +1716,7 @@ const ECOTRICITY = {
 
 const POWERSHOP = {
   name: 'Powershop',
-  match: (t) => /\bpowershop\b/i.test(t),
+  match: (t) => isElectricityBill(t) && /\bpowershop\b/i.test(t),
   parse: (t) => {
     const errors = [];
     const out = { retailer: 'Powershop', plan_name: null };
@@ -1711,6 +1788,15 @@ const RETAILERS = [MERCURY, GENESIS, CONTACT, PULSE, ECOTRICITY, MERIDIAN, POWER
 // testing without real PDFs and for systems where text extraction happens
 // elsewhere — e.g. Tesseract OCR done client-side).
 export function parseBillText(text, opts = {}) {
+  // Reject non-electricity bills upfront.
+  if (!isElectricityBill(text || '')) {
+    return makeEmptyBill({
+      ocr_text_excerpt: (text || '').slice(0, 4000),
+      ocr_text_full:    text || '',
+      parse_method:     'rejected',
+      parse_errors:     [{ field: 'bill_type', reason: 'Not an electricity bill — looks like natural gas, LPG, broadband, or mobile. Only electricity bills are accepted for proposal generation.' }],
+    });
+  }
   const retailer = RETAILERS.find(r => r.match(text)) || GENERIC;
   let parsed;
   try { parsed = retailer.parse(text); }
