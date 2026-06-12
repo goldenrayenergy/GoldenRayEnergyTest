@@ -8,7 +8,7 @@ import {
   panelsPerStringHint, stringCountHint, phaseHint,
 } from '../../utils/fieldHints';
 
-export default function SystemSection({ spec, update, errors = {} }) {
+export default function SystemSection({ spec, update, errors = {}, billRecommendation = null }) {
   const sys = spec.system || {};
   const setSys = (key, val) => update(s => ({ ...s, system: { ...s.system, [key]: val } }));
   const setSub = (parent, key, val) => update(s => ({
@@ -251,7 +251,7 @@ export default function SystemSection({ spec, update, errors = {} }) {
             <Select value={sys.panel?.sku} onChange={v => setSub('panel', 'sku', v)} options={panelOpts} />
           </Field>
           <Field label="Panel count" required
-                 hint={panelCountHint(spec, panelWatts, spec?.system?.__bill_recommended_kw)}
+                 hint={panelCountHint(spec, panelWatts, billRecommendation?.recommended_system_kw)}
                  error={errors['system.panel.count']}>
             <NumberInput value={sys.panel?.count} onChange={v => setSub('panel', 'count', v)} placeholder="20" />
           </Field>
@@ -356,7 +356,7 @@ export default function SystemSection({ spec, update, errors = {} }) {
                       options={batteryOpts} />
             </Field>
             <Field label="Module count" required
-                   hint={batteryModuleCountHint(spec, moduleKwh, spec?.system?.__bill_recommended_battery_kwh, battery?.series)}
+                   hint={batteryModuleCountHint(spec, moduleKwh, billRecommendation?.recommended_battery_kwh, battery?.series)}
                    error={errors['system.battery.module_count']}>
               <NumberInput value={sys.battery?.module_count}
                            onChange={v => setSub('battery', 'module_count', v)} placeholder="5" />

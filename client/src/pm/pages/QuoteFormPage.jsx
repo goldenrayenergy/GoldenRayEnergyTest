@@ -47,6 +47,10 @@ export default function QuoteFormPage() {
   // Option 4c (b) — tier strip recompose state + settings
   const [recomposing, setRecomposing] = useState(false);
   const [tierSettings, setTierSettings] = useState(null);
+  // L1 field hints — bill-analysis recommendation feeds the System tab's
+  // engine-pick line ("Engine: ~17 panels (8.0 kWp ÷ 475W)"). Null when no
+  // analysis on file — hints fall back to range + typical band only.
+  const [billRec, setBillRec] = useState(null);
 
   // Option 4c (b) — fetch tier strip settings once on mount
   useEffect(() => {
@@ -72,6 +76,22 @@ export default function QuoteFormPage() {
       });
     return () => { cancelled = true; };
   }, [id]);
+
+  // L1 field hints — fetch the latest bill analysis for this contact (if any)
+  // so System tab hints can show the engine-derived recommended kWp + battery
+  // kWh. Silent on 204 (no analysis on file) and on error (hints just degrade
+  // gracefully to range + typical band).
+  useEffect(() => {
+    if (!quote?.contact_id) return;
+    let cancelled = false;
+    pmContactsAPI.latestBillAnalysis(quote.contact_id)
+      .then(r => {
+        if (cancelled || !r?.data) return;
+        setBillRec(r.data.system_recommendation || null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [quote?.contact_id]);
 
   // P6 — Live validation preview: debounce 500ms after spec changes, then
   // hit /preview-validate. Cancels stale requests when the spec changes again
@@ -356,13 +376,25 @@ export default function QuoteFormPage() {
             ))}
           </div>
 
-          {/* Active section — engineSnapshot prefers live preview over last-saved */}
+          {/* Active section — engineSnapshot prefers live preview over last-saved.
+              billRecommendation feeds System tab L1 hints with engine-derived
+              recommended kWp / battery kWh from the latest bill analysis.
+              costSnapshot is the active tier's cost block (or root cost for
+              single-tier) — fixes the multi-tier margin display path and powers
+              Pricing tab L1 hints. */}
           {SectionComponent && (
             <SectionComponent
               spec={sectionViewSpec}
               update={sectionUpdate}
               errors={errorMap}
               engineSnapshot={previewResult || saveResult}
+              billRecommendation={billRec}
+              costSnapshot={(() => {
+                const eng = (previewResult || saveResult)?.engine;
+                if (!eng) return null;
+                if (eng.is_multi_tier) return eng.tiers?.[safeActiveIdx]?.cost || null;
+                return eng.cost || null;
+              })()}
               quote={quote}
             />
           )}
