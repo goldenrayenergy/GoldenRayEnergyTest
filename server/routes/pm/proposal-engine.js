@@ -18,10 +18,22 @@ import { recommendLayout } from '../../services/pm/proposalEngine/stringDesigner
 import { selectInverter } from '../../services/pm/proposalEngine/inverterSelector.js';
 import { selectPanel } from '../../services/pm/proposalEngine/panelSelector.js';
 import { selectBattery } from '../../services/pm/proposalEngine/batterySelector.js';
-import { REGIONS, BMS_RULES, COMPATIBILITY } from '../../services/pm/proposalEngine/data/engineeringRules.js';
+import { composeSystem } from '../../services/pm/proposalEngine/systemComposer.js';
+import { REGIONS, BMS_RULES, COMPATIBILITY, TIER_STRIP_SETTINGS } from '../../services/pm/proposalEngine/data/engineeringRules.js';
 
 const router = Router();
 router.use(authenticate);
+
+// ────────────────────────────────────────────────────────────────────────────
+// GET /tier-settings — Option 4c tier-strip configuration
+//
+// Returns the default size mode + tiered-size multipliers + labels for the
+// client autoSizeThreeTiers to use. Read-only for now; admin UI will edit
+// when promoted to company_settings.tier_strip_settings jsonb column.
+// ────────────────────────────────────────────────────────────────────────────
+router.get('/tier-settings', (req, res) => {
+  res.json(TIER_STRIP_SETTINGS);
+});
 
 router.post('/recommend-string-layout', async (req, res) => {
   try {
@@ -199,6 +211,61 @@ router.post('/recommend-battery', async (req, res) => {
         catalogue_batteries_count: Object.keys(catalogue.BATTERIES).length,
       },
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// POST /compose-system — Option 4c — full-system orchestration in one call
+//
+// Body: {
+//   target_dc_kwp:             10.5,        // required
+//   phase:                     1 | 3,       // required
+//   target_battery_usable_kwh: 11 | null,   // null = no battery in this tier
+//   has_ev:                    false,
+//   region:                    "auckland_vector",
+// }
+//
+// Returns a complete tier-ready system:
+//   { panel, inverter, battery, string_design, wattpilot_included,
+//     reasons, warnings, inputs_resolved }
+//
+// Failure mode: a missing sub-selector returns null for that field +
+// a warning. Tier still renders so the rep sees the gap.
+// ────────────────────────────────────────────────────────────────────────────
+router.post('/compose-system', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    const {
+      target_dc_kwp, phase,
+      target_battery_usable_kwh, has_ev = false, region,
+    } = req.body || {};
+
+    if (!target_dc_kwp || target_dc_kwp <= 0) {
+      return res.status(400).json({ error: 'target_dc_kwp required (> 0)' });
+    }
+    if (!phase || (Number(phase) !== 1 && Number(phase) !== 3)) {
+      return res.status(400).json({ error: 'phase must be 1 or 3' });
+    }
+
+    const catalogue = await loadCatalogueFromDb(supabaseAdmin);
+    const regionData = REGIONS[region] || REGIONS.auckland_vector;
+
+    const out = composeSystem({
+      targetDcKwp: Number(target_dc_kwp),
+      phase: Number(phase),
+      targetBatteryUsableKwh: target_battery_usable_kwh != null
+        ? Number(target_battery_usable_kwh) : null,
+      hasEv: !!has_ev,
+      region: regionData,
+      catalogue,
+      COMPATIBILITY,
+      BMS_RULES,
+    });
+
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

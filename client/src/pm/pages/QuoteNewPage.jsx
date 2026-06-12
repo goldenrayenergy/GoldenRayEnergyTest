@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
-import { pmQuotesAPI, pmContactsAPI, emptySpec } from '../services/pmQuotesApi';
-import { autoSizeSystem } from '../utils/autoSizeSystem';
-import { autoSizeThreeTiers, autoSizeThreeTiersFromSpec } from '../utils/autoSizeThreeTiers';
+import { pmQuotesAPI, pmContactsAPI, pmProposalEngineAPI, emptySpec } from '../services/pmQuotesApi';
+import { autoSizeThreeTiers } from '../utils/autoSizeThreeTiers';
 
 // Step-1 of quote creation: pick a contact + name the engagement. The full
 // 6-section spec form opens after creation at /pm/quotes/:id/edit.
@@ -73,41 +72,37 @@ export default function QuoteNewPage() {
         if (a.region && !c?.region)     spec.customer.address.region   = a.region;
         if (a.postcode && !c?.postcode) spec.customer.address.postcode = a.postcode;
       }
-      // P5 — Option 3: auto-size system from bill-analysis recommendation
-      let autoSize = null;
+      // Option 4c — top-level spec.system stays with null SKUs. Tier
+      // populates via /compose-system (engine-recommended SKUs). When the
+      // rep activates a tier, the tier's system_overrides flow into the
+      // working view. No hardcoded fallback SKUs.
+      //
+      // We still record the bill-analysis link for downstream reference.
       if (billAnalysis?.system_recommendation?.recommended_system_kw) {
-        autoSize = autoSizeSystem(billAnalysis.system_recommendation);
-        if (autoSize) {
-          spec.system.panel.count = autoSize.panel_count;
-          spec.system.string_topology = autoSize.string_topology;
-          spec.system.string_design = {
-            panels_per_string: autoSize.panels_per_string,
-            string_count: autoSize.string_count,
-          };
-          if (autoSize.include_battery) {
-            spec.system.battery = {
-              sku: spec.system.battery?.sku || 'BYD-BAT-276-HVM',
-              module_count: autoSize.battery_module_count,
-            };
-          } else {
-            spec.system.battery = null;
-          }
-          // Record the source for the System tab inline note (engine ignores it)
-          spec.system.__auto_sized_from_bill_analysis_id = billAnalysis.analysis_id;
-          spec.system.__auto_size_note = autoSize.note;
-        }
+        spec.system.__auto_sized_from_bill_analysis_id = billAnalysis.analysis_id;
       }
       spec.pricing.stage = stage;
 
-      // P4.5 — Multi-tier default: every new Stage-1 quote opens with 3 tiers.
-      // Tier configs come from the bill-analysis recommendation when present,
-      // or from the auto-sized base spec otherwise. Rep edits in the form.
-      const tiers = billAnalysis?.system_recommendation?.recommended_system_kw
-        ? autoSizeThreeTiers(billAnalysis.system_recommendation)
-        : autoSizeThreeTiersFromSpec(spec);
+      // P4.5 + 4c — Multi-tier default: every Stage-1 quote opens with 3 tiers.
+      // With bills → engine composes per tier (panel + inverter + battery +
+      // layout) via /api/pm/proposal-engine/compose-system. Without bills →
+      // 3 empty shells; rep clicks Recommend or picks from dropdowns.
+      let tierSettings = null;
+      try {
+        const ts = await pmProposalEngineAPI.tierSettings();
+        tierSettings = ts.data;
+      } catch (_) { /* fall through to defaults */ }
+      const sizeMode = spec.tier_strip?.size_mode || tierSettings?.default_size_mode || 'same_size';
+      const tiers = await autoSizeThreeTiers({
+        billAnalysis: billAnalysis?.system_recommendation,
+        phase: Number(spec.system.phase) || 1,
+        sizeMode,
+        tierSettings,
+        region: billAnalysis?.address_prefill?.region || spec.customer.address.region,
+      });
       if (tiers) {
         spec.tiers = tiers;
-        // Sync each tier's pricing.stage to match the quote's stage.
+        spec.tier_strip = { size_mode: sizeMode };
         for (const t of spec.tiers) t.pricing.stage = stage;
       }
 

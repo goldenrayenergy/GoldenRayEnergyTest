@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { pmQuotesAPI } from '../services/pmQuotesApi';
+import { pmQuotesAPI, pmContactsAPI, pmProposalEngineAPI } from '../services/pmQuotesApi';
 import { useAuth } from '../../context/AuthContext';
 
 import CustomerSection from '../components/quote-sections/CustomerSection';
@@ -11,7 +11,7 @@ import PricingSection from '../components/quote-sections/PricingSection';
 import PreferencesSection from '../components/quote-sections/PreferencesSection';
 import SiteSurveySection from '../components/quote-sections/SiteSurveySection';
 import TierStrip from '../components/TierStrip';
-import { autoSizeThreeTiersFromSpec } from '../utils/autoSizeThreeTiers';
+import { autoSizeThreeTiers, autoSizeThreeTiersFromSpec } from '../utils/autoSizeThreeTiers';
 import { flattenEngineErrors, refusalFromPreview } from '../utils/engineErrorHints';
 
 // Sections that scope to the active tier (System, Costs, Pricing). All others shared.
@@ -188,6 +188,50 @@ export default function QuoteFormPage() {
     });
     setActiveTierIdx(spec.tiers?.length || 0);
   }
+  // Option 4c — size mode toggle (re-runs compose for all 3 tiers)
+  const [recomposing, setRecomposing] = useState(false);
+  const [tierSettings, setTierSettings] = useState(null);
+
+  useEffect(() => {
+    pmProposalEngineAPI.tierSettings()
+      .then(r => setTierSettings(r.data))
+      .catch(() => {});
+  }, []);
+
+  async function handleSizeModeChange(newMode) {
+    if (newMode === (spec?.tier_strip?.size_mode || 'same_size')) return;
+    // Update mode immediately + recompose all 3 tiers from bill analysis
+    setSpec(prev => ({ ...prev, tier_strip: { ...(prev.tier_strip || {}), size_mode: newMode } }));
+    await recomposeTiers(newMode);
+  }
+
+  async function recomposeTiers(forceMode) {
+    if (!quote?.contact_id) return;
+    setRecomposing(true);
+    try {
+      const billResp = await pmContactsAPI.latestBillAnalysis(quote.contact_id);
+      const billRec = billResp?.data?.system_recommendation;
+      const phase = Number(spec?.system?.phase) || 1;
+      const sizeMode = forceMode || spec?.tier_strip?.size_mode || 'same_size';
+      const region = billResp?.data?.address_prefill?.region
+                  || spec?.customer?.address?.region;
+      const newTiers = await autoSizeThreeTiers({
+        billAnalysis: billRec, phase, sizeMode, tierSettings, region,
+      });
+      setSpec(prev => ({
+        ...prev,
+        tiers: newTiers,
+        tier_strip: { ...(prev.tier_strip || {}), size_mode: sizeMode },
+      }));
+    } catch (e) {
+      console.warn('Recompose tiers failed:', e?.message);
+    } finally {
+      setRecomposing(false);
+    }
+  }
+
+  const canRecompose = !!quote?.contact_id;
+
   function handleTierDelete(idx) {
     setSpec(prev => {
       if (!prev.tiers || prev.tiers.length <= 1) {
@@ -264,11 +308,16 @@ export default function QuoteFormPage() {
           tiers={spec.tiers}
           activeIndex={safeActiveIdx}
           stage={spec.pricing?.stage}
+          sizeMode={spec.tier_strip?.size_mode || 'same_size'}
+          canRecompose={canRecompose}
+          recomposing={recomposing}
           onPickActive={setActiveTierIdx}
           onRename={handleTierRename}
           onMarkRec={handleTierMarkRec}
           onAdd={handleTierAdd}
           onDelete={handleTierDelete}
+          onSizeModeChange={handleSizeModeChange}
+          onRecompose={() => recomposeTiers()}
         />
       )}
 

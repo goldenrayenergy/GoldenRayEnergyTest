@@ -299,7 +299,11 @@ export default function SystemSection({ spec, update, errors = {} }) {
         <div className="mb-3">
           <CheckBox checked={hasBattery}
                     onChange={v => {
-                      if (v) setSys('battery', { sku: 'BYD-BAT-276-HVM', module_count: 5 });
+                      // Option 4c — no hardcoded SKU. Checking "Include battery"
+                      // enables the battery section with null SKU + null
+                      // module_count; rep clicks "Recommend battery" (engine
+                      // picks per §3.1) or picks from dropdown.
+                      if (v) setSys('battery', { sku: null, module_count: null });
                       else setSys('battery', null);
                     }}
                     label="Include battery in this quote" />

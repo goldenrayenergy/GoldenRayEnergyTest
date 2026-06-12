@@ -1,126 +1,226 @@
 // ────────────────────────────────────────────────────────────────────────────
-// Auto-populate 3 tiers from a single bill-analysis recommendation.
+// Auto-populate 3 tiers — Option 4c rewrite.
 //
-// Stage 1 quotes default to 3 tiers (per locked rule). This util takes the
-// bill analyser's `recommended_system_kw` + `recommended_battery_kwh` and
-// produces three differentiated bundles that all cover the customer's full
-// energy need but vary on battery / EV-readiness — per the project memory
-// rule "Tier differentiation by features, not coverage".
+// HARDCODED SKUs ARE GONE. Every tier's panel + inverter + battery + string
+// layout is engine-recommended via POST /pm/proposal-engine/compose-system.
 //
-//   Tier 1: Solar only — recommended kW, no battery
-//   Tier 2: Solar + recommended battery — auto-flagged as RECOMMENDED
-//   Tier 3: Solar + larger battery + EV-ready (Wattpilot included)
+// Two size modes (per session decision — rep picks per quote):
+//   • 'same_size'    — §2.22 default. All 3 tiers same kWp. Differ on
+//                      battery / EV. Composer called 3× with same target_dc_kwp.
+//   • 'tiered_sizes' — Starter / Right-size / Future-proof. Composer called
+//                      3× with different target_dc_kwp (rec × multipliers).
 //
-// Returns an array of 3 partial tier objects ready to assign to spec.tiers
-// (caller adds tier_id via ensureTierIds() server-side at first persist).
+// Gate for auto-populate (the "cleanly-parsed bills" rule):
+//   • bill analysis exists AND recommended_system_kw > 0
+//   • If !recommended_battery_kwh, Tier 2/3 still attempt a battery using
+//     a fallback target derived from system size; rep can clear if undesired.
 //
-// All three tier prices come back as suggested starting points; the rep
-// adjusts after eyeballing the engine's per-tier margins.
+// Failure mode:
+//   • If gate fails OR any tier composes with warnings, return tier shells
+//     with source = 'empty' or 'engine_partial'. Rep sees the gap.
+//
+// Each tier object includes:
+//   • source: 'engine_auto' | 'engine_partial' | 'empty' | 'rep_override'
+//   • engine_warnings: [{ code, message }]
+//   • label, system_overrides, pricing, cost_overrides, is_recommended
+//
+// Caller does NOT need to worry about hardcoded SKUs anywhere.
 // ────────────────────────────────────────────────────────────────────────────
 
-import { autoSizeSystem } from './autoSizeSystem.js';
+import { pmProposalEngineAPI } from '../services/pmQuotesApi';
 
-const PANEL_WATTS_DEFAULT = 595;
-const HVM_KWH_PER_MODULE = 2.76;
-
-// Cost-per-kW ballparks for setting suggested customer prices when the rep
-// has no other reference. These are intentionally on the slightly-high side
-// so the first save's margin shows healthy — the rep is more likely to
-// negotiate DOWN to a real number than UP. Adjust later via admin settings.
-const PRICE_PER_KW_SOLAR_ONLY = 2700;        // $/kW installed
-const PRICE_PER_KW_WITH_BATTERY = 3400;
+// Suggested customer prices — kept as ballparks until the rep eyeballs the
+// engine's per-tier margins and adjusts. The rep is more likely to negotiate
+// DOWN than UP, so these err slightly high. Adjust via admin settings later.
+const PRICE_PER_KW_SOLAR_ONLY          = 2700;
+const PRICE_PER_KW_WITH_BATTERY        = 3400;
 const PRICE_PER_KW_WITH_BATTERY_AND_EV = 3800;
 
-export function autoSizeThreeTiers({
-  recommended_system_kw,
-  recommended_battery_kwh,
+const round500 = n => Math.round(n / 500) * 500;
+const emptyDiscount = { applied_nzd: 0, owner_approved: false, reason: null };
+const emptyCostOverrides = { labour: [], compliance: [], custom: [] };
+
+// ── Empty tier shell — used when bills missing or compose fails ────────────
+function makeEmptyTier({ label, isRecommended = false }) {
+  return {
+    label,
+    source: 'empty',
+    engine_warnings: [],
+    system_overrides: null,        // null SKUs — rep clicks Recommend X or
+                                   // edits dropdowns. NO hardcoded fallback.
+    pricing: {
+      customer_price_inc_gst: 0,
+      stage: 'stage_1_estimate',
+      final_mode: true,
+      discount: { ...emptyDiscount },
+    },
+    cost_overrides: { ...emptyCostOverrides },
+    is_recommended: isRecommended,
+  };
+}
+
+// ── Helper: build a populated tier from a composer response ────────────────
+function makeTierFromCompose({ composed, label, pricePerKw, isRecommended, includeEv }) {
+  const hasWarnings = composed?.warnings?.length > 0;
+  const source = composed?.panel?.sku
+    ? (hasWarnings ? 'engine_partial' : 'engine_auto')
+    : 'empty';
+
+  // Derive systemKw for pricing
+  const systemKw = composed?.panel?.count && composed.inputs_resolved?.target_dc_kwp
+    ? composed.inputs_resolved.target_dc_kwp
+    : 0;
+
+  return {
+    label,
+    source,
+    engine_warnings: composed?.warnings || [],
+    engine_reasons:  composed?.reasons  || {},
+    system_overrides: {
+      panel:    composed?.panel    || null,
+      inverter: composed?.inverter || null,
+      battery:  composed?.battery  || null,
+      string_topology: composed?.string_design?.topology || null,
+      string_design:   composed?.string_design ? {
+        panels_per_string: composed.string_design.panels_per_string,
+        string_count:      composed.string_design.string_count,
+      } : null,
+      wattpilot_included: !!includeEv,
+    },
+    pricing: {
+      customer_price_inc_gst: round500(systemKw * pricePerKw),
+      stage: 'stage_1_estimate',
+      final_mode: true,
+      discount: { ...emptyDiscount },
+    },
+    cost_overrides: { ...emptyCostOverrides },
+    is_recommended: isRecommended,
+  };
+}
+
+// ── Helper: detect the "cleanly-parsed bills" gate ─────────────────────────
+export function readyForAutoPopulate(billAnalysis) {
+  return !!(
+    billAnalysis &&
+    Number(billAnalysis.recommended_system_kw) > 0
+  );
+}
+
+// ── Main entry — async, mode-aware ──────────────────────────────────────
+//
+// Inputs:
+//   billAnalysis    — { recommended_system_kw, recommended_battery_kwh } (or null)
+//   phase           — 1 or 3 (from spec.system.phase or smart_meter)
+//   sizeMode        — 'same_size' (default) | 'tiered_sizes'
+//   tierSettings    — { tiered_size_multipliers, tier_labels } from API
+//   region          — engine region key
+//
+// Returns an array of 3 tier objects (never null — always returns 3 shells).
+// ────────────────────────────────────────────────────────────────────────────
+export async function autoSizeThreeTiers({
+  billAnalysis,
+  phase = 1,
+  sizeMode = 'same_size',
+  tierSettings,
+  region = null,
 }) {
-  if (!recommended_system_kw || recommended_system_kw <= 0) return null;
+  const labels   = tierSettings?.tier_labels?.[sizeMode] || {};
+  const mults    = tierSettings?.tiered_size_multipliers || {
+    tier_1_starter: 0.70, tier_2_right_size: 1.00, tier_3_future_proof: 1.30,
+  };
 
-  // Base solar sizing (same panel count across all tiers — feature
-  // differentiation, NOT coverage differentiation per locked rule).
-  const baseSize = autoSizeSystem({
-    recommended_system_kw,
-    recommended_battery_kwh: 0,    // ignore for the shared base
-    panelWattsDefault: PANEL_WATTS_DEFAULT,
-  });
-  if (!baseSize) return null;
-  const systemKw = baseSize.derived_kw;
+  // ── Gate: no bills → 3 empty shells ───────────────────────────────────
+  if (!readyForAutoPopulate(billAnalysis)) {
+    return [
+      makeEmptyTier({ label: labels.tier_1 || 'Solar only',                isRecommended: false }),
+      makeEmptyTier({ label: labels.tier_2 || 'Solar + battery',           isRecommended: true  }),
+      makeEmptyTier({ label: labels.tier_3 || 'Solar + battery + EV-ready', isRecommended: false }),
+    ];
+  }
 
-  // Tier 2 battery = analyser's recommended kWh, clamped to HVM range [3-8]
-  const tier2Modules = recommended_battery_kwh
-    ? Math.max(3, Math.min(8, Math.round(recommended_battery_kwh / HVM_KWH_PER_MODULE)))
-    : 4;       // sensible default if analyser didn't suggest battery
-  const tier2BatteryKwh = +(tier2Modules * HVM_KWH_PER_MODULE).toFixed(2);
+  const recKw  = Number(billAnalysis.recommended_system_kw);
+  const recBat = Number(billAnalysis.recommended_battery_kwh) || null;
 
-  // Tier 3 = tier 2 + 1 module (one step larger) capped at 8
-  const tier3Modules = Math.min(8, tier2Modules + 1);
-  const tier3BatteryKwh = +(tier3Modules * HVM_KWH_PER_MODULE).toFixed(2);
+  // ── Per-mode kWp targets ──────────────────────────────────────────────
+  const tierKwp = sizeMode === 'tiered_sizes'
+    ? {
+        t1: +(recKw * mults.tier_1_starter).toFixed(2),
+        t2: +(recKw * mults.tier_2_right_size).toFixed(2),
+        t3: +(recKw * mults.tier_3_future_proof).toFixed(2),
+      }
+    : { t1: recKw, t2: recKw, t3: recKw };
 
-  // Suggested customer prices — rounded to nearest $500
-  const round500 = n => Math.round(n / 500) * 500;
-  const price1 = round500(systemKw * PRICE_PER_KW_SOLAR_ONLY);
-  const price2 = round500(systemKw * PRICE_PER_KW_WITH_BATTERY);
-  const price3 = round500(systemKw * PRICE_PER_KW_WITH_BATTERY_AND_EV);
+  // ── Tier 3 battery: rec + ~1 BYD HVM module headroom (2.76 kWh) ───────
+  // (Not a hardcoded SKU — just a sizing nudge. Composer picks the actual
+  //  battery SKU from catalogue. If recBat is null we use a reasonable
+  //  resilience default of 14 kWh.)
+  const tier2BatteryTarget = recBat || 11;     // sensible default if rec is null
+  const tier3BatteryTarget = (recBat || 11) + 2.76;
 
-  const emptyDiscount = { applied_nzd: 0, owner_approved: false, reason: null };
+  // ── Three parallel composer calls ─────────────────────────────────────
+  let composes;
+  try {
+    composes = await Promise.all([
+      pmProposalEngineAPI.composeSystem({
+        target_dc_kwp: tierKwp.t1, phase,
+        target_battery_usable_kwh: null, has_ev: false, region,
+      }).then(r => r.data),
+      pmProposalEngineAPI.composeSystem({
+        target_dc_kwp: tierKwp.t2, phase,
+        target_battery_usable_kwh: tier2BatteryTarget, has_ev: false, region,
+      }).then(r => r.data),
+      pmProposalEngineAPI.composeSystem({
+        target_dc_kwp: tierKwp.t3, phase,
+        target_battery_usable_kwh: tier3BatteryTarget, has_ev: true, region,
+      }).then(r => r.data),
+    ]);
+  } catch (e) {
+    // Network failure on any tier → return empty shells; rep clicks Recommend
+    console.warn('autoSizeThreeTiers compose failed — returning empty tiers:', e?.message);
+    return [
+      makeEmptyTier({ label: labels.tier_1 || 'Solar only',                isRecommended: false }),
+      makeEmptyTier({ label: labels.tier_2 || 'Solar + battery',           isRecommended: true  }),
+      makeEmptyTier({ label: labels.tier_3 || 'Solar + battery + EV-ready', isRecommended: false }),
+    ];
+  }
 
   return [
-    {
-      label: 'Solar only',
-      system_overrides: { battery: null },
-      pricing: {
-        customer_price_inc_gst: price1,
-        stage: 'stage_1_estimate',
-        final_mode: true,
-        discount: { ...emptyDiscount },
-      },
-      cost_overrides: { labour: [], compliance: [], custom: [] },
-      is_recommended: false,
-    },
-    {
-      label: `Solar + ${tier2BatteryKwh} kWh battery`,
-      system_overrides: {
-        battery: { sku: 'BYD-BAT-276-HVM', module_count: tier2Modules },
-      },
-      pricing: {
-        customer_price_inc_gst: price2,
-        stage: 'stage_1_estimate',
-        final_mode: true,
-        discount: { ...emptyDiscount },
-      },
-      cost_overrides: { labour: [], compliance: [], custom: [] },
-      is_recommended: true,        // ← auto-flag the middle tier
-    },
-    {
-      label: `Solar + ${tier3BatteryKwh} kWh battery + EV-ready`,
-      system_overrides: {
-        battery: { sku: 'BYD-BAT-276-HVM', module_count: tier3Modules },
-        wattpilot_included: true,
-      },
-      pricing: {
-        customer_price_inc_gst: price3,
-        stage: 'stage_1_estimate',
-        final_mode: true,
-        discount: { ...emptyDiscount },
-      },
-      cost_overrides: { labour: [], compliance: [], custom: [] },
-      is_recommended: false,
-    },
+    makeTierFromCompose({
+      composed: composes[0],
+      label: labels.tier_1 || (sizeMode === 'tiered_sizes'
+        ? `Starter ${tierKwp.t1} kW`
+        : 'Solar only'),
+      pricePerKw: PRICE_PER_KW_SOLAR_ONLY,
+      isRecommended: false,
+      includeEv: false,
+    }),
+    makeTierFromCompose({
+      composed: composes[1],
+      label: labels.tier_2 || (sizeMode === 'tiered_sizes'
+        ? `Right-size ${tierKwp.t2} kW`
+        : `Solar + battery`),
+      pricePerKw: PRICE_PER_KW_WITH_BATTERY,
+      isRecommended: true,
+      includeEv: false,
+    }),
+    makeTierFromCompose({
+      composed: composes[2],
+      label: labels.tier_3 || (sizeMode === 'tiered_sizes'
+        ? `Future-proof ${tierKwp.t3} kW`
+        : `Solar + battery + EV-ready`),
+      pricePerKw: PRICE_PER_KW_WITH_BATTERY_AND_EV,
+      isRecommended: false,
+      includeEv: true,
+    }),
   ];
 }
 
-// Convenience: produce 3 tiers from an emptySpec()'s top-level pricing/system
-// when no bill analysis is available. The rep starts from a sensible default.
-export function autoSizeThreeTiersFromSpec(spec) {
-  // Derive a "recommended kW" from the existing spec.system.panel.count
-  const panelCount = spec.system?.panel?.count || 20;
-  const recommendedSystemKw = +(panelCount * PANEL_WATTS_DEFAULT / 1000).toFixed(2);
-  const recommendedBatteryKwh = spec.system?.battery?.module_count
-    ? +(spec.system.battery.module_count * HVM_KWH_PER_MODULE).toFixed(2)
-    : 11.04;        // sensible default = 4-module BYD HVM
-  return autoSizeThreeTiers({
-    recommended_system_kw: recommendedSystemKw,
-    recommended_battery_kwh: recommendedBatteryKwh,
-  });
+// ── Sync fallback — used when no bill analysis exists ──────────────────
+// Returns 3 empty tier shells with default labels. No SKUs.
+export function autoSizeThreeTiersFromSpec() {
+  return [
+    makeEmptyTier({ label: 'Solar only',                isRecommended: false }),
+    makeEmptyTier({ label: 'Solar + battery',           isRecommended: true  }),
+    makeEmptyTier({ label: 'Solar + battery + EV-ready', isRecommended: false }),
+  ];
 }

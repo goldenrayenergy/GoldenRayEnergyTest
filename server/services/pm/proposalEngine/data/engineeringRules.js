@@ -215,6 +215,38 @@ export const FINANCIAL_DEFAULTS = {
   default_total_losses_pct: 14.0,
 };
 
+// ── Tier-strip sizing (Option 4c) ───────────────────────────────────────────
+// Multipliers applied to bill-analysis `recommended_system_kw` when the rep
+// chooses `tiered_sizes` mode. Default mode (`same_size`) ignores these and
+// uses recommended_system_kw for all 3 tiers per §2.22.
+//
+// Tier 1 multiplier  — "Starter" (cost-sensitive)
+// Tier 2 multiplier  — "Right-size" (§2.2 default 85-90% coverage)
+// Tier 3 multiplier  — "Future-proof" (EV + heat-pump headroom)
+//
+// TODO: promote to company_settings.tier_strip_settings jsonb column when
+// admin UI is built so owner can tune per market segment without a deploy.
+export const TIER_STRIP_SETTINGS = {
+  default_size_mode: 'same_size',  // 'same_size' | 'tiered_sizes'
+  tiered_size_multipliers: {
+    tier_1_starter:      0.70,
+    tier_2_right_size:   1.00,
+    tier_3_future_proof: 1.30,
+  },
+  tier_labels: {
+    same_size: {
+      tier_1: 'Solar only',
+      tier_2: 'Solar + battery',
+      tier_3: 'Solar + battery + EV-ready',
+    },
+    tiered_sizes: {
+      tier_1: 'Starter',
+      tier_2: 'Right-size',
+      tier_3: 'Future-proof',
+    },
+  },
+};
+
 export function selfConsumptionFraction(batteryKwhUsable, hasDiverter) {
   if (batteryKwhUsable === 0 && hasDiverter) return 0.55;
   for (const tier of FINANCIAL_DEFAULTS.self_consumption_by_battery_kwh) {
