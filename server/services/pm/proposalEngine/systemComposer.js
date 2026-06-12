@@ -129,15 +129,12 @@ export function composeSystem({
     reasons.string = layoutResult.reason;
     if (layoutResult.reason_code === 'optimal' ||
         layoutResult.reason_code === 'asymmetric_fallback') {
+      // Canonical string_design uses `groups[]` as the source of truth.
+      // Single-group symmetric layouts have one entry; the (previously
+      // "asymmetric") two-group case carries both entries here.
       stringDesign = {
-        panels_per_string: layoutResult.panels_per_string,
-        string_count:      layoutResult.string_count,
-        topology:          layoutResult.topology,
-        // Forward asymmetric tail so the tier card can render the full
-        // layout (e.g. "1 × 10 + 1 × 7" instead of just "1 × 10"). The
-        // string designer already validated the tail against the envelope.
-        asymmetric: !!layoutResult.asymmetric,
-        asymmetric_string: layoutResult.asymmetric_string || null,
+        topology: layoutResult.topology,
+        groups:   layoutResult.groups,
       };
     } else {
       warnings.push({ code: 'string_' + layoutResult.reason_code, message: layoutResult.reason });

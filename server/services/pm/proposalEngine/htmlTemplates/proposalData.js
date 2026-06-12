@@ -22,6 +22,7 @@
 
 import { getCatalogue } from '../catalogue/index.js';
 import { REGIONS, WARRANTY_TERMS, requiredBmsCount } from '../data/engineeringRules.js';
+import { normalizeStringDesign } from '../stringDesignShape.js';
 
 const fmt$ = n => '$' + Math.round(n).toLocaleString('en-NZ');
 const fmtNum = n => Math.round(n).toLocaleString('en-NZ');
@@ -162,6 +163,11 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
     assumptions: headline.assumptions,
   };
 
+  // Normalize string design so the proposal PDF surfaces a clean groups[]
+  // and a first-group { panels_per_string, string_count } for legacy
+  // templates. Handles both legacy + canonical shapes.
+  const stringGroupsForPdf = normalizeStringDesign(spec.system.string_design).groups;
+
   return {
     meta: {
       quote_ref: options.quote_ref || quoteRef(spec.customer.full_name, year, options.sequence || 1),
@@ -210,8 +216,13 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
       battery_label: batteryLabel(catalogue, spec.system?.battery?.sku, spec.system?.battery?.module_count),
       usable_battery_kwh: usableKwh,
       topology: spec.system.string_topology || 'series',
-      panels_per_string: spec.system.string_design?.panels_per_string,
-      string_count: spec.system.string_design?.string_count,
+      // Read from canonical groups[] — falls back to legacy fields via the
+      // normalizer. The proposal PDF surfaces the first group at the top
+      // level (most common case is a single group) and exposes the full
+      // groups array for multi-group templates.
+      panels_per_string: stringGroupsForPdf[0]?.panels_per_string ?? null,
+      string_count:      stringGroupsForPdf[0]?.string_count ?? null,
+      string_groups:     stringGroupsForPdf,
       phase: spec.system.phase || 1,
       cable_run_metres: spec.system.cable_run_metres_estimate,
       region: spec.customer.address.region,

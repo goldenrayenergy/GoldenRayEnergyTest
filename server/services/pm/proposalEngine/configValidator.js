@@ -11,6 +11,18 @@
 
 import { getCatalogue } from './catalogue/index.js';
 import { REGIONS, COMPATIBILITY } from './data/engineeringRules.js';
+import { normalizeStringDesign } from './stringDesignShape.js';
+import { getHardRange } from './fieldLimits.js';
+
+// Pull the hard ranges from the shared limits config so changing a number in
+// one place updates BOTH the validator and the inline UI hints simultaneously.
+const PANEL_COUNT_RANGE    = getHardRange('system.panel.count');
+const BATTERY_MODULE_RANGE = getHardRange('system.battery.module_count');
+const CABLE_RUN_RANGE      = getHardRange('system.cable_run_metres_estimate');
+const PS_RANGE             = getHardRange('system.string_design.groups.panels_per_string');
+const SC_RANGE             = getHardRange('system.string_design.groups.string_count');
+const BILLS_ANNUAL_KWH_RANGE   = getHardRange('bills.annual_kwh');
+const BILLS_ANNUAL_SPEND_RANGE = getHardRange('bills.annual_spend');
 
 const STAGES = ['stage_1_estimate', 'stage_2_firm'];
 const STRING_TOPOLOGIES = ['series', 'parallel'];
@@ -90,8 +102,12 @@ function validateBills(b, errors) {
     });
   }
   if (hasManual) {
-    checkRange(b.manual_entry.annual_kwh, 1000, 60000, 'bills.manual_entry.annual_kwh', errors);
-    checkRange(b.manual_entry.annual_spend, 100, 20000, 'bills.manual_entry.annual_spend', errors);
+    checkRange(b.manual_entry.annual_kwh,
+               BILLS_ANNUAL_KWH_RANGE.min, BILLS_ANNUAL_KWH_RANGE.max,
+               'bills.manual_entry.annual_kwh', errors);
+    checkRange(b.manual_entry.annual_spend,
+               BILLS_ANNUAL_SPEND_RANGE.min, BILLS_ANNUAL_SPEND_RANGE.max,
+               'bills.manual_entry.annual_spend', errors);
   }
 }
 
@@ -110,7 +126,7 @@ function validateSystem(s, errors, catalogue) {
     }
     requireField(s.panel.count, 'system.panel.count', errors);
     checkType(s.panel.count, 'integer', 'system.panel.count', errors);
-    checkRange(s.panel.count, 4, 60, 'system.panel.count', errors);
+    checkRange(s.panel.count, PANEL_COUNT_RANGE.min, PANEL_COUNT_RANGE.max, 'system.panel.count', errors);
   }
 
   // Inverter
@@ -132,7 +148,7 @@ function validateSystem(s, errors, catalogue) {
     }
     requireField(s.battery.module_count, 'system.battery.module_count', errors);
     checkType(s.battery.module_count, 'integer', 'system.battery.module_count', errors);
-    checkRange(s.battery.module_count, 1, 24, 'system.battery.module_count', errors);
+    checkRange(s.battery.module_count, BATTERY_MODULE_RANGE.min, BATTERY_MODULE_RANGE.max, 'system.battery.module_count', errors);
 
     // Compatibility check (battery requires Plus inverter)
     if (s.inverter && s.inverter.sku && COMPATIBILITY[s.inverter.sku]) {
@@ -160,32 +176,44 @@ function validateSystem(s, errors, catalogue) {
     checkEnum(s.string_topology, STRING_TOPOLOGIES, 'system.string_topology', errors);
   }
 
-  // String design
+  // String design — accepts BOTH the legacy shape
+  // ({ panels_per_string, string_count, asymmetric_string? }) and the
+  // canonical shape ({ groups: [{ panels_per_string, string_count }, ...] }).
+  // normalizeStringDesign yields a uniform { groups: [...] } we can iterate.
   if (s.string_design) {
-    checkType(s.string_design.panels_per_string, 'integer', 'system.string_design.panels_per_string', errors);
-    checkType(s.string_design.string_count, 'integer', 'system.string_design.string_count', errors);
-    checkRange(s.string_design.panels_per_string, 2, 30, 'system.string_design.panels_per_string', errors);
-    checkRange(s.string_design.string_count, 1, 8, 'system.string_design.string_count', errors);
+    const norm = normalizeStringDesign(s.string_design);
+    if (norm.groups.length === 0) {
+      err(errors, 'system.string_design',
+        'string_design has no usable groups — either supply { panels_per_string, string_count } ' +
+        '(legacy) OR { groups: [{ panels_per_string, string_count }, ...] } (canonical).');
+    }
+    norm.groups.forEach((g, idx) => {
+      // Group index inserted into the path so the UI can pinpoint the offending row
+      const groupPath = `system.string_design.groups[${idx}]`;
+      checkType(g.panels_per_string, 'integer', `${groupPath}.panels_per_string`, errors);
+      checkType(g.string_count, 'integer', `${groupPath}.string_count`, errors);
+      checkRange(g.panels_per_string, PS_RANGE.min, PS_RANGE.max, `${groupPath}.panels_per_string`, errors);
+      checkRange(g.string_count, SC_RANGE.min, SC_RANGE.max, `${groupPath}.string_count`, errors);
+    });
 
-    if (s.panel?.count && s.string_design.panels_per_string && s.string_design.string_count) {
-      const symTotal = s.string_design.panels_per_string * s.string_design.string_count;
-      // Option 2 §2.10 — asymmetric layouts add a tail string (e.g. 1×10 + 1×7).
-      const asym = s.string_design.asymmetric_string;
-      const asymContrib = asym
-        ? (Number(asym.panels_per_string) || 0) * (Number(asym.string_count) || 1)
-        : 0;
-      const declaredTotal = symTotal + asymContrib;
+    if (s.panel?.count && norm.groups.length > 0) {
+      const declaredTotal = norm.groups.reduce(
+        (sum, g) => sum + (g.panels_per_string || 0) * (g.string_count || 0),
+        0,
+      );
       if (declaredTotal !== s.panel.count) {
-        const asymPart = asym ? ` + ${asym.string_count || 1} × ${asym.panels_per_string}` : '';
+        const expr = norm.groups
+          .map(g => `${g.string_count} × ${g.panels_per_string}`)
+          .join(' + ');
         err(errors, 'system.string_design',
-          `panels_per_string × string_count${asymPart} (${declaredTotal}) must equal panel count (${s.panel.count})`);
+          `string layout ${expr} (${declaredTotal} panels) must equal panel count (${s.panel.count}).`);
       }
     }
   }
 
   // Cable run estimate
   if (s.cable_run_metres_estimate != null) {
-    checkRange(s.cable_run_metres_estimate, 5, 200, 'system.cable_run_metres_estimate', errors);
+    checkRange(s.cable_run_metres_estimate, CABLE_RUN_RANGE.min, CABLE_RUN_RANGE.max, 'system.cable_run_metres_estimate', errors);
   }
 }
 

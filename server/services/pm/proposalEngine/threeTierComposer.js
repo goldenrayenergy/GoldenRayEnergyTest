@@ -78,8 +78,8 @@ function priceTierFromCatalogue(tier, catalogue) {
       battery:  sov.battery || null,
       string_topology: sov.string_topology || 'series',
       string_design:   sov.string_design || {
-        panels_per_string: sov.panel.count,
-        string_count: 1,
+        topology: sov.string_topology || 'series',
+        groups: [{ panels_per_string: sov.panel.count, string_count: 1 }],
       },
       cable_run_metres_estimate: 24,
       phase: 1,
@@ -157,11 +157,11 @@ function tierFromCompose(composed, { label, includeEv, isRecommended }) {
       inverter: composed?.inverter || null,
       battery:  composed?.battery  || null,
       string_topology: composed?.string_design?.topology || null,
+      // Canonical: { topology, groups: [...] }. Composer's stringDesigner
+      // emits groups[] directly; we just forward it.
       string_design:   composed?.string_design ? {
-        panels_per_string: composed.string_design.panels_per_string,
-        string_count:      composed.string_design.string_count,
-        asymmetric:        composed.string_design.asymmetric || false,
-        asymmetric_string: composed.string_design.asymmetric_string || null,
+        topology: composed.string_design.topology,
+        groups:   composed.string_design.groups || [],
       } : null,
       wattpilot_included: !!includeEv,
     },

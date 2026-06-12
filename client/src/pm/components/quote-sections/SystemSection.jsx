@@ -2,6 +2,11 @@ import { useState } from 'react';
 import { Field, TextInput, NumberInput, Select, SectionGrid, SectionHeading, CheckBox } from './_shared';
 import { REFERENCE, pmProposalEngineAPI } from '../../services/pmQuotesApi';
 import useCatalogueOptions from '../../hooks/useCatalogueOptions';
+import { groupsForEditing } from '../../utils/stringDesignShape';
+import {
+  panelCountHint, batteryModuleCountHint, cableRunHint,
+  panelsPerStringHint, stringCountHint, phaseHint,
+} from '../../utils/fieldHints';
 
 export default function SystemSection({ spec, update, errors = {} }) {
   const sys = spec.system || {};
@@ -35,17 +40,43 @@ export default function SystemSection({ spec, update, errors = {} }) {
 
   const hasBattery = !!sys.battery?.sku;
 
-  // String design consistency — asymmetric-aware. When the engine picks an
-  // asymmetric layout (e.g. main 1 × 10 + tail 1 × 7 for a 17-panel prime
-  // count), the panels-per-string × string-count math only captures the main.
-  // The tail panel-count must be added so the total matches sys.panel.count.
-  const stringMainTotal = (sys.string_design?.panels_per_string || 0) * (sys.string_design?.string_count || 0);
-  const asymTail = sys.string_design?.asymmetric_string;
-  const stringAsymTotal = asymTail
-    ? (Number(asymTail.panels_per_string) || 0) * (Number(asymTail.string_count) || 1)
-    : 0;
-  const stringTotal = stringMainTotal + stringAsymTotal;
+  // String design as a list of groups (canonical shape). The normalizer
+  // accepts both legacy ({ panels_per_string, string_count, asymmetric_string })
+  // and canonical ({ groups: [...] }) so older quotes still render. The UI
+  // always writes canonical going forward.
+  const stringGroups = groupsForEditing(sys.string_design, sys.panel?.count);
+  const stringTotal = stringGroups.reduce(
+    (sum, g) => sum + (Number(g.panels_per_string) || 0) * (Number(g.string_count) || 0),
+    0,
+  );
   const stringMismatch = sys.panel?.count && stringTotal && stringTotal !== sys.panel?.count;
+
+  // Helpers for editing groups[]. Each write replaces the entire string_design
+  // with the canonical shape — never carries the legacy fields forward.
+  const writeStringDesign = (groups) => update(s => ({
+    ...s,
+    system: {
+      ...s.system,
+      string_design: {
+        topology: s.system?.string_topology || 'series',
+        groups: groups.map(g => ({
+          panels_per_string: Number(g.panels_per_string) || 0,
+          string_count:      Number(g.string_count) || 0,
+        })),
+      },
+    },
+  }));
+  const updateGroup = (idx, key, val) => {
+    const next = stringGroups.map((g, i) =>
+      i === idx ? { ...g, [key]: val } : g
+    );
+    writeStringDesign(next);
+  };
+  const addGroup = () => writeStringDesign([...stringGroups, { panels_per_string: 4, string_count: 1 }]);
+  const removeGroup = (idx) => {
+    const next = stringGroups.filter((_, i) => i !== idx);
+    writeStringDesign(next.length > 0 ? next : [{ panels_per_string: 0, string_count: 0 }]);
+  };
 
   const autoSizeNote = sys.__auto_size_note;
 
@@ -219,7 +250,9 @@ export default function SystemSection({ spec, update, errors = {} }) {
           <Field label="Panel model" required>
             <Select value={sys.panel?.sku} onChange={v => setSub('panel', 'sku', v)} options={panelOpts} />
           </Field>
-          <Field label="Panel count" required error={errors['system.panel.count']}>
+          <Field label="Panel count" required
+                 hint={panelCountHint(spec, panelWatts, spec?.system?.__bill_recommended_kw)}
+                 error={errors['system.panel.count']}>
             <NumberInput value={sys.panel?.count} onChange={v => setSub('panel', 'count', v)} placeholder="20" />
           </Field>
           <Field label="System size"
@@ -323,7 +356,7 @@ export default function SystemSection({ spec, update, errors = {} }) {
                       options={batteryOpts} />
             </Field>
             <Field label="Module count" required
-                   hint="BYD HVM 3-8 modules · HVS 2-5 · Reserva 2-5 (4-5 needs 2 BMS)"
+                   hint={batteryModuleCountHint(spec, moduleKwh, spec?.system?.__bill_recommended_battery_kwh, battery?.series)}
                    error={errors['system.battery.module_count']}>
               <NumberInput value={sys.battery?.module_count}
                            onChange={v => setSub('battery', 'module_count', v)} placeholder="5" />
@@ -386,27 +419,71 @@ export default function SystemSection({ spec, update, errors = {} }) {
             {recState.loading ? 'Computing…' : 'Recommend layout'}
           </button>
         </div>
-        <SectionGrid columns={3}>
+        <div className="mb-3">
           <Field label="Topology" required>
             <Select value={sys.string_topology} onChange={v => setSys('string_topology', v)}
                     options={REFERENCE.topologies} />
           </Field>
-          <Field label="Panels per string" required
-                 hint="Fronius minimum 4 — Voc-cold-checked vs inverter Uoc max">
-            <NumberInput value={sys.string_design?.panels_per_string}
-                         onChange={v => setSub('string_design', 'panels_per_string', v)} placeholder="5" />
-          </Field>
-          <Field label="String count" required
-                 hint={`Total = ${sys.string_design?.string_count || 0} × ${sys.string_design?.panels_per_string || 0}${
-                   asymTail ? ` + ${asymTail.string_count || 1} × ${asymTail.panels_per_string} (asymmetric tail)` : ''
-                 } = ${stringTotal} panels`}>
-            <NumberInput value={sys.string_design?.string_count}
-                         onChange={v => setSub('string_design', 'string_count', v)} placeholder="4" />
-          </Field>
-        </SectionGrid>
+        </div>
+
+        {/* String groups list. Each row is one (panels_per_string × string_count)
+            group, e.g. "1 × 10" main + "1 × 7" asymmetric tail = 17 panels total.
+            Add a group for multi-MPPT / multi-orientation layouts. */}
+        <div className="rounded-md border border-slate-200 bg-slate-50/50 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-slate-700 uppercase tracking-wide">String groups</div>
+            <div className="text-xs text-slate-500">
+              Total: <b className={stringMismatch ? 'text-amber-700' : 'text-slate-800'}>{stringTotal}</b> /
+              panel count <b>{sys.panel?.count || 0}</b>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {stringGroups.map((g, idx) => (
+              <div key={idx} className="flex items-end gap-2">
+                <Field label={idx === 0 ? 'String count' : ''}
+                       hint={idx === 0 ? stringCountHint() : null}
+                       className="w-28">
+                  <NumberInput value={g.string_count}
+                               onChange={v => updateGroup(idx, 'string_count', v)}
+                               placeholder="1" />
+                </Field>
+                <div className="text-slate-400 pb-2.5">×</div>
+                <Field label={idx === 0 ? 'Panels per string' : ''}
+                       hint={idx === 0 ? panelsPerStringHint() : null}
+                       className="flex-1">
+                  <NumberInput value={g.panels_per_string}
+                               onChange={v => updateGroup(idx, 'panels_per_string', v)}
+                               placeholder="6" />
+                </Field>
+                <div className="text-xs text-slate-500 pb-2.5 whitespace-nowrap">
+                  = {(Number(g.string_count) || 0) * (Number(g.panels_per_string) || 0)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeGroup(idx)}
+                  disabled={stringGroups.length === 1}
+                  className="mb-1.5 px-2 py-1 text-xs text-slate-500 hover:text-rose-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={stringGroups.length === 1 ? 'At least one group is required' : 'Remove this string group'}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={addGroup}
+            className="mt-2 text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
+            + Add string group
+          </button>
+          <div className="mt-2 text-[10px] text-slate-500 leading-relaxed">
+            Add a group when strings differ in length (asymmetric layout, e.g. 1×10 + 1×7 = 17 panels)
+            or when groups land on different MPPT inputs / orientations. Engine validates each group&apos;s
+            Voc/Vmp envelope independently.
+          </div>
+        </div>
         {stringMismatch && (
           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
-            ⚠ String design ({stringTotal}) doesn't match panel count ({sys.panel?.count}). Save will fail.
+            ⚠ String layout total ({stringTotal}) doesn&apos;t match panel count ({sys.panel?.count}). Save will fail.
           </div>
         )}
         {recState.error && (
@@ -470,12 +547,12 @@ export default function SystemSection({ spec, update, errors = {} }) {
                     options={meterOpts} />
           </Field>
           <Field label="Cable run estimate (m)"
-                 hint="Inverter → switchboard. Refined at site survey for Stage 2.">
+                 hint={cableRunHint()}>
             <NumberInput value={sys.cable_run_metres_estimate}
                          onChange={v => setSys('cable_run_metres_estimate', v)} placeholder="24" />
           </Field>
           <Field label="House phase"
-                 hint="1 = single-phase · 3 = three-phase. Must match smart meter.">
+                 hint={phaseHint()}>
             <NumberInput value={sys.phase} onChange={v => setSys('phase', v)} placeholder="1" />
           </Field>
         </SectionGrid>

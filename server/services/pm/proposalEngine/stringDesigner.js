@@ -139,11 +139,18 @@ function evaluate(candidate, panel, inverter, region, buffer) {
     });
   }
 
+  // Canonical output: groups[] is the source of truth. Two-group case carries
+  // the asymmetric tail; single-group case is just the main string config.
+  // No more separate `asymmetric` / `asymmetric_string` fields.
+  const groups = [{ panels_per_string: ps, string_count: sc }];
+  if (candidate.asymmetric_string) {
+    groups.push({
+      panels_per_string: candidate.asymmetric_string.panels_per_string,
+      string_count:      candidate.asymmetric_string.string_count || 1,
+    });
+  }
   return {
-    panels_per_string: ps,
-    string_count: sc,
-    asymmetric: candidate.asymmetric || false,
-    asymmetric_string: candidate.asymmetric_string || null,
+    groups,
     topology,
     strings_per_mppt: stringsPerMppt,
     string_voc_cold: r2(stringVocCold),
@@ -152,13 +159,21 @@ function evaluate(candidate, panel, inverter, region, buffer) {
     isc_safety_per_mppt:   r2(iscSafetyPerMppt),
     violations,
     passes: violations.length === 0,
+    // Compatibility convenience for legacy consumers — keep the first group's
+    // figures accessible at the top level. NEW code should read `groups`.
+    panels_per_string: ps,
+    string_count: sc,
   };
 }
 
-// Score: prefer fewer strings, then more panels per string.
+// Score: prefer fewer strings, then more panels per string (main group).
 // Negative for sorting ascending = best first.
 function scoreLayout(layout) {
-  return [layout.string_count, -layout.panels_per_string];
+  const mainGroup = layout.groups?.[0] || layout;
+  return [
+    (layout.groups || []).reduce((s, g) => s + (g.string_count || 0), 0) || layout.string_count || 0,
+    -(mainGroup.panels_per_string || 0),
+  ];
 }
 
 function compareLayouts(a, b) {
@@ -169,9 +184,7 @@ function compareLayouts(a, b) {
 
 function summarizeAlt(layout) {
   return {
-    panels_per_string: layout.panels_per_string,
-    string_count:      layout.string_count,
-    asymmetric:        layout.asymmetric,
+    groups:            layout.groups,
     topology:          layout.topology,
     string_voc_cold:   layout.string_voc_cold,
     string_vmp_hot:    layout.string_vmp_hot,
@@ -244,12 +257,16 @@ export function recommendLayout({ panel, inverter, panelCount, region, buffer })
     asymValid.sort(compareLayouts);
     const best = asymValid[0];
     const alternatives = asymValid.slice(1, 1 + MAX_ALTERNATIVES).map(summarizeAlt);
+    // Build reason text from groups[] (canonical) — the main group is [0],
+    // the asymmetric tail is [1].
+    const mainGroup = best.groups[0];
+    const tailGroup = best.groups[1];
     return {
       ...best,
       reason_code: 'asymmetric_fallback',
       reason: `No symmetric layout fits the envelope. ` +
-              `Asymmetric: ${best.string_count} × ${best.panels_per_string} ` +
-              `+ 1 × ${best.asymmetric_string.panels_per_string}.`,
+              `Asymmetric: ${mainGroup.string_count} × ${mainGroup.panels_per_string} ` +
+              `+ ${tailGroup.string_count} × ${tailGroup.panels_per_string}.`,
       alternatives,
     };
   }
