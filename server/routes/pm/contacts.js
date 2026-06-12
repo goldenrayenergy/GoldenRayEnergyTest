@@ -89,7 +89,7 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
       plan_name: data.plan_name || null,
       period_start: data.period_start,
       period_end: data.period_end,
-      months_covered: months,
+      months_covered: data.months_covered,
       analysed_at: data.created_at,
       region: data.region,                 // raw bill-analysis region tag
       engine_region: engineRegion,         // mapped to engine key (may be null)
