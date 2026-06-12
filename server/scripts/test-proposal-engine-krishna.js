@@ -112,7 +112,7 @@ console.log('  Krishna smoke test — proposal engine v' +
 console.log('━'.repeat(80));
 console.log();
 
-const result = runEngine(krishnaSpec);
+const result = await runEngine(krishnaSpec);
 
 if (!result.ok) {
   console.log('❌ Engine failed:');

@@ -80,7 +80,7 @@ async function main() {
 
   // 1. Run engine
   const t0 = Date.now();
-  const result = runEngine(spec);
+  const result = await runEngine(spec);
   if (!result.ok) {
     console.error('✗ Engine refused spec:');
     if (result.config_errors) for (const e of result.config_errors) console.error(`    ${e.path}: ${e.message}`);

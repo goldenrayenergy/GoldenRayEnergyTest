@@ -2,20 +2,28 @@
 // fieldHints.js — inline hint generators for editable spec fields.
 //
 // Each hint surfaces THREE layers of context to the rep:
-//   1. Hard allowed range  (engine rejects values outside this — see fieldLimits.js)
+//   1. Hard allowed range  (engine rejects values outside this — server-tunable)
 //   2. Typical NZ residential band  (informational best-practice — not enforced)
 //   3. Engine pick + one-line derivation  (when the engine can derive a value)
 //
-// Hard limits MUST match server/services/pm/proposalEngine/fieldLimits.js.
-// The duplication here is deliberate — client + server are separate bundles —
-// but the values are kept in sync by convention. The constants below mirror
-// fieldLimits.js exactly; bump in both places when changing.
+// Values flow:
+//   • Boot:  bootstrapFieldLimits() is called once from PmApp.jsx mount —
+//            fetches /api/pm/admin/field-limits and merges into the in-memory
+//            map. Hint generators below read from FIELD_LIMITS directly so
+//            this is a fire-and-forget.
+//   • Admin edit: when admin saves a limit, the server invalidates its cache
+//            AND the Admin page calls bootstrapFieldLimits() so this client
+//            picks up the new value immediately. Other open tabs pick it up
+//            on their next reload.
+//   • Fallback: if the fetch fails (network, RLS, server down), the hardcoded
+//            STATIC_DEFAULTS below are used. These mirror migration 030's seed
+//            so behaviour is identical pre/post boot in steady state.
 // ────────────────────────────────────────────────────────────────────────────
 
-// ── Mirrored from server/services/pm/proposalEngine/fieldLimits.js ─────────
-// (kept here so the client doesn't need to fetch /api for a hint — keeps form
-//  rendering instant. If a limit changes there, update here too.)
-export const FIELD_LIMITS = {
+// ── Static defaults (mirrors server/migrations/030 seed) ───────────────────
+// Kept here so the client never falls back to "no hint at all" on first paint
+// or when the API is unreachable. Bump in both places when the seed changes.
+const STATIC_DEFAULTS = {
   'system.panel.count':                                  { hard_min: 4,    hard_max: 60,    typical_min: 12,   typical_max: 24,   unit: 'panels' },
   'system.battery.module_count':                         { hard_min: 1,    hard_max: 24,    typical_min: 3,    typical_max: 8,    unit: 'modules' },
   'system.cable_run_metres_estimate':                    { hard_min: 5,    hard_max: 200,   typical_min: 15,   typical_max: 35,   unit: 'm' },
@@ -27,6 +35,40 @@ export const FIELD_LIMITS = {
   'bills.daily_fixed_charge_incl_gst':                   { hard_min: 0.50, hard_max: 5.00,  typical_min: 1.50, typical_max: 3.50,  unit: '$/day inc GST' },
   'bills.buyback_rate':                                  { hard_min: 0.00, hard_max: 0.20,  typical_min: 0.07, typical_max: 0.13,  unit: '$/kWh' },
 };
+
+// Live map — starts as a copy of STATIC_DEFAULTS. bootstrapFieldLimits()
+// merges in DB-backed values from /pm/admin/field-limits on app mount.
+// Generators below read from this directly so updates are picked up live.
+// Exported so a test runner can spy on it without going through the network.
+export const FIELD_LIMITS = { ...STATIC_DEFAULTS };
+
+// Fetch field_limits from the server + merge into FIELD_LIMITS. Silent on
+// error (the in-memory STATIC_DEFAULTS still cover every hint). Safe to call
+// repeatedly — replaces values rather than appending.
+//
+// Call from PmApp.jsx on mount. Also call again after admin edits so the
+// open tab picks up new values without reload.
+export async function bootstrapFieldLimits(api) {
+  if (!api?.get) return;
+  try {
+    const r = await api.get('/pm/admin/field-limits');
+    const rows = r?.data?.rows || [];
+    for (const row of rows) {
+      if (!row?.path) continue;
+      FIELD_LIMITS[row.path] = {
+        hard_min:    Number(row.hard_min),
+        hard_max:    Number(row.hard_max),
+        typical_min: Number(row.typical_min),
+        typical_max: Number(row.typical_max),
+        unit:        row.unit,
+      };
+    }
+    return { merged: rows.length, source: 'db' };
+  } catch (e) {
+    // Never throw — UI must keep rendering with static defaults.
+    return { merged: 0, source: 'static_fallback', error: e?.message };
+  }
+}
 
 // ── Format helpers ─────────────────────────────────────────────────────────
 function fmtNum(n) {

@@ -100,7 +100,7 @@ const spec = {
                  financing: { choice: 'cash' }},
 };
 
-const result = runEngine(spec);
+const result = await runEngine(spec);
 if (!result.ok) {
   console.log('❌ Engine refused spec — first-principles tests cannot run');
   if (result.config_errors) for (const e of result.config_errors) console.log(`    ${e.path}: ${e.message}`);
@@ -288,7 +288,7 @@ for (const c of fin.reconciliation.checks) {
 section('TEST 12 — Pure-function determinism');
 // ────────────────────────────────────────────────────────────────────────────
 // Same spec → same hash, same numbers, run twice
-const result2 = runEngine(spec);
+const result2 = await runEngine(spec);
 okExact('spec_sha256 identical across runs', result.spec_sha256, result2.spec_sha256);
 okExact('Engine identical totals across runs',
         result.cost.totals.total_cost_ex_gst, result2.cost.totals.total_cost_ex_gst);

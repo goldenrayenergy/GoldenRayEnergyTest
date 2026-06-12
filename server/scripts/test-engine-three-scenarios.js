@@ -69,7 +69,7 @@ const krishnaSpec = {
                  financing: { choice: 'cash' }},
 };
 
-const result = runEngine(krishnaSpec);
+const result = await runEngine(krishnaSpec);
 const scenarios = runThreeScenarios(krishnaSpec, result.cost);
 
 section('Three-scenario projection for Krishna');

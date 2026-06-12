@@ -62,7 +62,7 @@ console.log('━'.repeat(80));
 console.log(`  HTML template smoke — template v${TEMPLATE_VERSION}`);
 console.log('━'.repeat(80));
 
-const result = runEngine(krishnaSpec);
+const result = await runEngine(krishnaSpec);
 if (!result.ok) {
   console.log('Engine refused Krishna spec — cannot proceed:');
   if (result.config_errors) for (const e of result.config_errors) console.log(`  ${e.path}: ${e.message}`);

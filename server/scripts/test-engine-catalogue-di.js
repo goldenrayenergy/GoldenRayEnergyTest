@@ -58,7 +58,7 @@ const PANEL_COUNT = 20;
 
 // ── 1. Baseline run with default catalogue ────────────────────────────────
 section('Step 1 — baseline with default catalogue');
-const baseline = runEngine(spec());
+const baseline = await runEngine(spec());
 check('Baseline engine succeeded', baseline.ok && baseline.can_ship === true);
 const baselineHardwareCost = baseline.cost.sections.major_hardware.cost;
 const baselineTotalCost = baseline.cost.totals.total_cost_ex_gst;
@@ -82,7 +82,7 @@ console.log(`    Fixture panel cost:  $${panelDoubled.cost_nzd}`);
 
 // ── 3. Run engine with fixture catalogue ──────────────────────────────────
 section('Step 3 — engine run with fixture catalogue');
-const fixtured = runEngine(spec(), { catalogue: fixtureCatalogue });
+const fixtured = await runEngine(spec(), { catalogue: fixtureCatalogue });
 check('Fixture run engine succeeded', fixtured.ok);
 const fixturedHardwareCost = fixtured.cost.sections.major_hardware.cost;
 const fixturedTotalCost = fixtured.cost.totals.total_cost_ex_gst;
@@ -103,7 +103,7 @@ check(`Total cost increased by same amount`,
 check(`Engine reports fixture catalogue version`,
       fixturedCatVersion === 'fixture-2x-panels');
 check(`Default catalogue still works after the fixture run`,
-      runEngine(spec()).cost.totals.total_cost_ex_gst === baselineTotalCost);
+      (await runEngine(spec())).cost.totals.total_cost_ex_gst === baselineTotalCost);
 
 // ── 5. Threading through to financial model + scenarios ──────────────────
 section('Step 5 — fixture catalogue threads to financial model + scenarios');

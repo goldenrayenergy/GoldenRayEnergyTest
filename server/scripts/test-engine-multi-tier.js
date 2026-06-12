@@ -167,7 +167,7 @@ section('Step 5 — pickHeadlineTierId logic');
 
 // ── 6. Full engine run on a 3-tier spec ──────────────────────────────────
 section('Step 6 — Full engine: 3-tier spec produces per-tier results');
-const result3 = runEngine(threeTierSpec());
+const result3 = await runEngine(threeTierSpec());
 check('Result has is_multi_tier=true', result3.is_multi_tier === true);
 check('Result has 3 tier results', result3.tiers?.length === 3);
 check('Each tier has its own can_ship', result3.tiers.every(t => t.can_ship !== undefined));
@@ -191,7 +191,7 @@ section('Step 7 — Per-tier margin floor isolates blockers');
 {
   // Tier 1 priced too low → below floor
   const spec = threeTierSpec({ price1: 12000, price2: 42000, price3: 52000 });
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   check('Tier 1 (cheap) below floor', r.tiers[0].can_ship === false);
   check('Tier 2 (recommended) still ships', r.tiers[1].can_ship === true);
   check('Tier 3 (premium) still ships', r.tiers[2].can_ship === true);
@@ -204,7 +204,7 @@ section('Step 7 — Per-tier margin floor isolates blockers');
 section('Step 8 — Three-scenario financials applied per tier');
 {
   const spec = threeTierSpec();
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   // Run scenarios on each tier independently using its effective spec
   for (const tier of r.tiers) {
     const effSpec = buildEffectiveSpec(ensureTierIds(spec),
@@ -224,7 +224,7 @@ section('Step 9 — Single-tier (no spec.tiers) backward compatibility');
   const spec = baseSharedSpec();
   spec.pricing = { customer_price_inc_gst: 40000, stage: 'stage_1_estimate', final_mode: true,
                    discount: { applied_nzd: 0, owner_approved: false, reason: null }};
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   check('Single-tier result has NO is_multi_tier flag', !r.is_multi_tier);
   check('Single-tier result has top-level can_ship', r.can_ship !== undefined);
   check('Single-tier result has top-level cost', !!r.cost);

@@ -14,15 +14,10 @@ import { REGIONS, COMPATIBILITY } from './data/engineeringRules.js';
 import { normalizeStringDesign } from './stringDesignShape.js';
 import { getHardRange } from './fieldLimits.js';
 
-// Pull the hard ranges from the shared limits config so changing a number in
-// one place updates BOTH the validator and the inline UI hints simultaneously.
-const PANEL_COUNT_RANGE    = getHardRange('system.panel.count');
-const BATTERY_MODULE_RANGE = getHardRange('system.battery.module_count');
-const CABLE_RUN_RANGE      = getHardRange('system.cable_run_metres_estimate');
-const PS_RANGE             = getHardRange('system.string_design.groups.panels_per_string');
-const SC_RANGE             = getHardRange('system.string_design.groups.string_count');
-const BILLS_ANNUAL_KWH_RANGE   = getHardRange('bills.annual_kwh');
-const BILLS_ANNUAL_SPEND_RANGE = getHardRange('bills.annual_spend');
+// Hard ranges are looked up per-call (not memoised at module load) so admin
+// edits via /api/pm/admin/field-limits flow through immediately. runEngine
+// awaits ensureLoaded() once before calling validateSpec, so each lookup hits
+// the warm in-memory cache.
 
 const STAGES = ['stage_1_estimate', 'stage_2_firm'];
 const STRING_TOPOLOGIES = ['series', 'parallel'];
@@ -102,11 +97,13 @@ function validateBills(b, errors) {
     });
   }
   if (hasManual) {
+    const kwhRange   = getHardRange('bills.annual_kwh');
+    const spendRange = getHardRange('bills.annual_spend');
     checkRange(b.manual_entry.annual_kwh,
-               BILLS_ANNUAL_KWH_RANGE.min, BILLS_ANNUAL_KWH_RANGE.max,
+               kwhRange.min, kwhRange.max,
                'bills.manual_entry.annual_kwh', errors);
     checkRange(b.manual_entry.annual_spend,
-               BILLS_ANNUAL_SPEND_RANGE.min, BILLS_ANNUAL_SPEND_RANGE.max,
+               spendRange.min, spendRange.max,
                'bills.manual_entry.annual_spend', errors);
   }
 }
@@ -126,7 +123,8 @@ function validateSystem(s, errors, catalogue) {
     }
     requireField(s.panel.count, 'system.panel.count', errors);
     checkType(s.panel.count, 'integer', 'system.panel.count', errors);
-    checkRange(s.panel.count, PANEL_COUNT_RANGE.min, PANEL_COUNT_RANGE.max, 'system.panel.count', errors);
+    const panelRange = getHardRange('system.panel.count');
+    checkRange(s.panel.count, panelRange.min, panelRange.max, 'system.panel.count', errors);
   }
 
   // Inverter
@@ -148,7 +146,8 @@ function validateSystem(s, errors, catalogue) {
     }
     requireField(s.battery.module_count, 'system.battery.module_count', errors);
     checkType(s.battery.module_count, 'integer', 'system.battery.module_count', errors);
-    checkRange(s.battery.module_count, BATTERY_MODULE_RANGE.min, BATTERY_MODULE_RANGE.max, 'system.battery.module_count', errors);
+    const batteryRange = getHardRange('system.battery.module_count');
+    checkRange(s.battery.module_count, batteryRange.min, batteryRange.max, 'system.battery.module_count', errors);
 
     // Compatibility check (battery requires Plus inverter)
     if (s.inverter && s.inverter.sku && COMPATIBILITY[s.inverter.sku]) {
@@ -187,13 +186,15 @@ function validateSystem(s, errors, catalogue) {
         'string_design has no usable groups — either supply { panels_per_string, string_count } ' +
         '(legacy) OR { groups: [{ panels_per_string, string_count }, ...] } (canonical).');
     }
+    const psRange = getHardRange('system.string_design.groups.panels_per_string');
+    const scRange = getHardRange('system.string_design.groups.string_count');
     norm.groups.forEach((g, idx) => {
       // Group index inserted into the path so the UI can pinpoint the offending row
       const groupPath = `system.string_design.groups[${idx}]`;
       checkType(g.panels_per_string, 'integer', `${groupPath}.panels_per_string`, errors);
       checkType(g.string_count, 'integer', `${groupPath}.string_count`, errors);
-      checkRange(g.panels_per_string, PS_RANGE.min, PS_RANGE.max, `${groupPath}.panels_per_string`, errors);
-      checkRange(g.string_count, SC_RANGE.min, SC_RANGE.max, `${groupPath}.string_count`, errors);
+      checkRange(g.panels_per_string, psRange.min, psRange.max, `${groupPath}.panels_per_string`, errors);
+      checkRange(g.string_count, scRange.min, scRange.max, `${groupPath}.string_count`, errors);
     });
 
     if (s.panel?.count && norm.groups.length > 0) {
@@ -213,7 +214,8 @@ function validateSystem(s, errors, catalogue) {
 
   // Cable run estimate
   if (s.cable_run_metres_estimate != null) {
-    checkRange(s.cable_run_metres_estimate, CABLE_RUN_RANGE.min, CABLE_RUN_RANGE.max, 'system.cable_run_metres_estimate', errors);
+    const cableRange = getHardRange('system.cable_run_metres_estimate');
+    checkRange(s.cable_run_metres_estimate, cableRange.min, cableRange.max, 'system.cable_run_metres_estimate', errors);
   }
 }
 

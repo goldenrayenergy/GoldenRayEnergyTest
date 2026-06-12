@@ -148,7 +148,7 @@ async function evaluateSpec(spec) {
     console.warn('evaluateSpec: catalogue load failed, falling back to JS defaults:', e.message);
   }
   const options = catalogue ? { catalogue } : {};
-  const engine = runEngine(spec, options);
+  const engine = await runEngine(spec, options);
   if (!engine.ok) return { ok: false, engine };
   if (engine.is_multi_tier) {
     const tier_scenarios = engine.tiers.map((tierResult, i) => {

@@ -25,6 +25,7 @@ import { WARRANTY_TERMS_VERSION } from './data/engineeringRules.js';
 import {
   ensureTierIds, buildEffectiveSpec, validateTiers, pickHeadlineTierId,
 } from './tiers.js';
+import { ensureLoaded as ensureFieldLimitsLoaded } from './fieldLimits.js';
 import crypto from 'node:crypto';
 
 export const ENGINE_VERSION = '1.0.0';
@@ -36,7 +37,16 @@ function specHash(spec) {
     .digest('hex');
 }
 
-export function runEngine(spec, options = {}) {
+// runEngine is async so it can prime the field_limits cache from the DB before
+// validateSpec uses getHardRange(). Existing callers in routes were already
+// async (just add `await`); the test scripts that called it sync top-level
+// also work because ESM allows top-level await.
+export async function runEngine(spec, options = {}) {
+  // Prime the field_limits cache once per call. Safe to call repeatedly —
+  // returns the in-flight promise if a concurrent load is in progress, or
+  // the cached value if still inside TTL. Never throws (falls back to static).
+  await ensureFieldLimitsLoaded();
+
   const startedAt = Date.now();
   const catalogue = getCatalogue(options);
   // Thread the resolved catalogue + any other options to every child fn.

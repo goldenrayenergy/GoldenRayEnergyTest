@@ -59,7 +59,7 @@ console.log('━'.repeat(80));
 
 // ── Step 1: baseline (no overrides) ────────────────────────────────────────
 section('Step 1 — Baseline (no overrides)');
-const baseline = runEngine(base());
+const baseline = await runEngine(base());
 if (!baseline.ok) {
   console.log('  config_errors:', baseline.config_errors);
   console.log('  bom_error:', baseline.bom_error);
@@ -85,7 +85,7 @@ section('Step 2 — Override existing labour line: SUPERVISOR qty 2');
       { sku: 'LAB-SUPERVISOR', qty: 2, override_reason: 'Steep roof — needs 2 days supervision' },
     ],
   };
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   check('Engine ran ok with override', r.ok);
   const sup = r.cost.lines.find(l => l.sku === 'LAB-SUPERVISOR');
   check('Supervisor line found', !!sup);
@@ -104,7 +104,7 @@ section('Step 3 — Remove labour line: LAB-TRAVEL qty 0');
 {
   const spec = base();
   spec.cost_overrides = { labour: [{ sku: 'LAB-TRAVEL', qty: 0 }] };
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   check('Engine ok with line removal', r.ok);
   const travel = r.cost.lines.find(l => l.sku === 'LAB-TRAVEL');
   check('Travel line removed', !travel);
@@ -124,7 +124,7 @@ section('Step 4 — Add custom labour line (is_custom: true)');
         override_reason: 'Job is 80km out — extra day' },
     ],
   };
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   check('Engine ok with custom labour', r.ok);
   const custom = r.cost.lines.find(l => l.sku === 'LAB-RURAL-SURCHARGE');
   check('Custom labour line added', !!custom);
@@ -144,7 +144,7 @@ section('Step 5 — Custom hardware via cost_overrides.custom');
         cost_nzd: 1200, margin_pct: 30 },
     ],
   };
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   check('Engine ok with custom hardware', r.ok);
   const customHw = r.cost.lines.find(l => l.is_custom && l.group === 'hardware');
   check('Custom hardware line added', !!customHw);
@@ -162,7 +162,7 @@ section('Step 6 — Custom BoS add-on');
       { category: 'bos', name: 'Switchboard mod', qty: 1, cost_nzd: 380, margin_pct: 30 },
     ],
   };
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   check('Engine ok with custom BoS', r.ok);
   check('Custom BoS rolls into bos section',
         r.cost.sections.bos.cost === baseline.cost.sections.bos.cost + 380);
@@ -174,7 +174,7 @@ section('Step 7 — Unmatched override SKU → warning');
   const spec = base();
   spec.cost_overrides = { labour: [{ sku: 'LAB-DOES-NOT-EXIST', qty: 1 }] };
   const warnings = [];
-  const r = runEngine(spec, { override_warnings: warnings });
+  const r = await runEngine(spec, { override_warnings: warnings });
   check('Engine ok despite unmatched override', r.ok);
   check('Warning emitted', warnings.length === 1);
   check('Warning code = override_sku_not_in_defaults',
@@ -190,7 +190,7 @@ section('Step 8 — Override compliance margin (admin would gate this in API lay
       { sku: 'CMP-COC', margin_pct: 50, override_reason: 'Custom CoC requirement' },
     ],
   };
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   const coc = r.cost.lines.find(l => l.sku === 'CMP-COC');
   check('CoC margin = 50%', coc?.margin_pct === 50);
   check('CoC line_cost unchanged (only margin shifted)', coc?.line_cost === 150);
@@ -212,7 +212,7 @@ section('Step 9 — Multiple overrides simultaneously');
       { category: 'bos', name: 'Battery shelf', qty: 1, cost_nzd: 220, margin_pct: 30 },
     ],
   };
-  const r = runEngine(spec);
+  const r = await runEngine(spec);
   check('Engine ok with combined overrides', r.ok);
   // Verify each
   check('Supervisor qty 2',
