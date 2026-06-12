@@ -1,7 +1,8 @@
 import { Field, TextInput, NumberInput, Select, SectionGrid, SectionHeading, CheckBox } from './_shared';
 import { REFERENCE } from '../../services/pmQuotesApi';
+import { customerPriceHint, discountHint } from '../../utils/fieldHints';
 
-export default function PricingSection({ spec, update, errors = {}, engineSnapshot }) {
+export default function PricingSection({ spec, update, errors = {}, engineSnapshot, costSnapshot = null }) {
   const p = spec.pricing || {};
   const d = p.discount || { applied_nzd: 0 };
   const setP = (key, val) => update(s => ({ ...s, pricing: { ...s.pricing, [key]: val } }));
@@ -10,10 +11,16 @@ export default function PricingSection({ spec, update, errors = {}, engineSnapsh
     pricing: { ...s.pricing, discount: { ...(s.pricing?.discount || {}), [key]: val } },
   }));
 
-  // Engine snapshot from last validate/save shows margin status inline.
-  const margin = engineSnapshot?.engine?.cost?.totals?.project_margin_pct;
-  const status = engineSnapshot?.engine?.margin_floor_status
-              || engineSnapshot?.cost?.margin_floor_status
+  // Cost snapshot is the active tier's cost block (multi-tier) or root cost
+  // (single-tier) — pre-resolved by QuoteFormPage so this component doesn't
+  // need to know about tier mode. Falls back to the older engineSnapshot path
+  // only if QuoteFormPage hasn't been upgraded to pass costSnapshot yet.
+  const cost = costSnapshot
+            || engineSnapshot?.engine?.cost
+            || null;
+  const margin = cost?.totals?.project_margin_pct;
+  const status = cost?.margin_floor_status
+              || engineSnapshot?.engine?.margin_floor_status
               || engineSnapshot?.margin_floor_status;
   const statusColor = status === 'healthy' ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
                     : status === 'amber'   ? 'text-amber-700 bg-amber-50 border-amber-200'
@@ -27,7 +34,9 @@ export default function PricingSection({ spec, update, errors = {}, engineSnapsh
         subtitle="Customer-facing price + quote stage. Discount intake here — owner approves separately if margin drops below 10%." />
 
       <SectionGrid columns={2}>
-        <Field label="Customer price inc GST (NZD)" required error={errors['pricing.customer_price_inc_gst']}>
+        <Field label="Customer price inc GST (NZD)" required
+               hint={customerPriceHint(cost)}
+               error={errors['pricing.customer_price_inc_gst']}>
           <NumberInput value={p.customer_price_inc_gst}
                        onChange={v => setP('customer_price_inc_gst', v)} placeholder="45000" />
         </Field>
@@ -45,7 +54,7 @@ export default function PricingSection({ spec, update, errors = {}, engineSnapsh
         </span>
       </div>
 
-      {/* Live margin status (filled when caller passes engineSnapshot) */}
+      {/* Live margin status (filled when caller passes engineSnapshot/costSnapshot) */}
       {margin != null && (
         <div className={`p-3 border rounded-md text-sm ${statusColor}`}>
           <b>Project margin: {margin.toFixed(1)}%</b> · Floor status:{' '}
@@ -63,7 +72,8 @@ export default function PricingSection({ spec, update, errors = {}, engineSnapsh
           (admin-only) — until approved, the spec engine won't accept a non-zero applied amount.
         </p>
         <SectionGrid columns={2}>
-          <Field label="Discount applied (NZD inc GST)">
+          <Field label="Discount applied (NZD inc GST)"
+                 hint={discountHint(cost)}>
             <NumberInput value={d.applied_nzd} onChange={v => setD('applied_nzd', v)} placeholder="0" />
           </Field>
           <Field label="Reason" hint="Required if discount > 0">
