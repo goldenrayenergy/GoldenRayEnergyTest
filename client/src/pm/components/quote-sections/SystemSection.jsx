@@ -41,6 +41,91 @@ export default function SystemSection({ spec, update, errors = {} }) {
 
   const autoSizeNote = sys.__auto_size_note;
 
+  // Option 4b — engine-recommended panel (highest-wattage with full specs)
+  const [panRecState, setPanRecState] = useState({ loading: false, error: null, result: null });
+
+  const runRecommendPanel = async () => {
+    setPanRecState({ loading: true, error: null, result: null });
+    try {
+      const { data } = await pmProposalEngineAPI.recommendPanel({
+        target_kwp: sys.panel?.count && panelWatts ? (sys.panel.count * panelWatts / 1000) : null,
+      });
+      setPanRecState({ loading: false, error: null, result: data });
+      if (data.sku && data.reason_code === 'selected') {
+        update(s => ({
+          ...s,
+          system: { ...s.system, panel: { ...(s.system?.panel || {}), sku: data.sku } },
+        }));
+      }
+    } catch (e) {
+      setPanRecState({ loading: false, error: e.response?.data?.error || e.message, result: null });
+    }
+  };
+
+  // Option 4b — engine-recommended battery (§3.1 decision tree)
+  const [batRecState, setBatRecState] = useState({ loading: false, error: null, result: null });
+  const canRecommendBattery = !!(sys.inverter?.sku && hasBattery);
+
+  const runRecommendBattery = async () => {
+    setBatRecState({ loading: true, error: null, result: null });
+    try {
+      // Pull target_usable_kwh from spec; rep should have entered it via
+      // the Module count field OR via bill-analysis auto-fill. If neither
+      // is set, default to current battery capacity for re-evaluation.
+      const targetUsableKwh = sys.battery?.target_usable_kwh
+        || (sys.battery?.module_count ? sys.battery.module_count * moduleKwh : 10);
+      const { data } = await pmProposalEngineAPI.recommendBattery({
+        inverter_sku: sys.inverter.sku,
+        target_usable_kwh: targetUsableKwh,
+      });
+      setBatRecState({ loading: false, error: null, result: data });
+      if (data.sku && data.reason_code === 'selected') {
+        update(s => ({
+          ...s,
+          system: {
+            ...s.system,
+            battery: {
+              ...(s.system?.battery || {}),
+              sku: data.sku,
+              module_count: data.module_count,
+            },
+          },
+        }));
+      }
+    } catch (e) {
+      setBatRecState({ loading: false, error: e.response?.data?.error || e.message, result: null });
+    }
+  };
+
+  // Option 4a — engine-recommended inverter (§2.8 decision tree)
+  const [invRecState, setInvRecState] = useState({ loading: false, error: null, result: null });
+  const canRecommendInverter = !!(sys.panel?.sku && sys.panel?.count && sys.phase);
+
+  const runRecommendInverter = async () => {
+    setInvRecState({ loading: true, error: null, result: null });
+    try {
+      const { data } = await pmProposalEngineAPI.recommendInverter({
+        panel_sku:    sys.panel.sku,
+        panel_count:  sys.panel.count,
+        phase:        Number(sys.phase),
+        has_battery:  hasBattery,
+        has_ev:       !!sys.wattpilot_included,
+      });
+      setInvRecState({ loading: false, error: null, result: data });
+      if (data.sku && data.reason_code === 'selected') {
+        update(s => ({
+          ...s,
+          system: {
+            ...s.system,
+            inverter: { ...(s.system?.inverter || {}), sku: data.sku },
+          },
+        }));
+      }
+    } catch (e) {
+      setInvRecState({ loading: false, error: e.response?.data?.error || e.message, result: null });
+    }
+  };
+
   // Option 2 — engine-recommended string layout (envelope-search algorithm)
   const [recState, setRecState] = useState({ loading: false, error: null, layout: null });
   const canRecommend = !!(sys.panel?.sku && sys.inverter?.sku && sys.panel?.count);
@@ -101,7 +186,27 @@ export default function SystemSection({ spec, update, errors = {} }) {
 
       {/* Panels + inverter */}
       <div>
-        <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide mb-3">Panels & inverter</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">Panels & inverter</h3>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={runRecommendPanel}
+              disabled={panRecState.loading}
+              className="text-xs px-2.5 py-1 rounded border border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Engine picks the highest-wattage panel with full specs">
+              {panRecState.loading ? 'Computing…' : 'Recommend panel'}
+            </button>
+            <button
+              type="button"
+              onClick={runRecommendInverter}
+              disabled={!canRecommendInverter || invRecState.loading}
+              className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={!canRecommendInverter ? 'Pick panel + count + phase first' : 'Engine picks inverter per §2.8'}>
+              {invRecState.loading ? 'Computing…' : 'Recommend inverter'}
+            </button>
+          </div>
+        </div>
         <SectionGrid columns={2}>
           <Field label="Panel model" required>
             <Select value={sys.panel?.sku} onChange={v => setSub('panel', 'sku', v)} options={panelOpts} />
@@ -119,11 +224,78 @@ export default function SystemSection({ spec, update, errors = {} }) {
                     options={inverterOpts} />
           </Field>
         </SectionGrid>
+        {panRecState.error && (
+          <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800">
+            Engine error: {panRecState.error}
+          </div>
+        )}
+        {panRecState.result && (
+          <div className={`mt-3 p-3 rounded text-xs border ${
+            panRecState.result.reason_code === 'selected' ? 'bg-sky-50 border-sky-200 text-sky-900'
+                                                          : 'bg-rose-50 border-rose-200 text-rose-900'
+          }`}>
+            <div className="font-semibold mb-1">
+              Engine recommendation: {panRecState.result.panel?.name || panRecState.result.sku || '(no candidate)'}
+            </div>
+            <div className="leading-relaxed">{panRecState.result.reason}</div>
+            {panRecState.result.alternatives?.length > 0 && (
+              <div className="mt-2 opacity-80">
+                Alternatives:
+                <ul className="list-disc list-inside space-y-0.5 ml-2">
+                  {panRecState.result.alternatives.map((alt, i) => (
+                    <li key={i}>{alt.name} — {alt.watts}W · ${alt.dollars_per_kwp}/kWp{alt.panels_needed != null && ` · ${alt.panels_needed} panels`}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+        {invRecState.error && (
+          <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800">
+            Engine error: {invRecState.error}
+          </div>
+        )}
+        {invRecState.result && (
+          <div className={`mt-3 p-3 rounded text-xs border ${
+            invRecState.result.reason_code === 'selected'                ? 'bg-emerald-50 border-emerald-200 text-emerald-900' :
+            invRecState.result.reason_code === 'dc_ac_undersized'        ? 'bg-amber-50 border-amber-200 text-amber-900' :
+            invRecState.result.reason_code === 'dc_ac_out_of_envelope'   ? 'bg-rose-50 border-rose-200 text-rose-900' :
+                                                                          'bg-rose-50 border-rose-200 text-rose-900'
+          }`}>
+            <div className="font-semibold mb-1">
+              Engine recommendation: {invRecState.result.inverter?.name || invRecState.result.sku || '(no candidate)'}
+            </div>
+            <div className="leading-relaxed">{invRecState.result.reason}</div>
+            <div className="mt-1 text-[10px] opacity-80">
+              Target AC {invRecState.result.target_ac_kw} kW · DC/AC {invRecState.result.dc_ac_ratio} (target {invRecState.result.dc_ac_target})
+            </div>
+            {invRecState.result.alternatives?.length > 0 && (
+              <div className="mt-2 opacity-80">
+                Alternatives:
+                <ul className="list-disc list-inside space-y-0.5 ml-2">
+                  {invRecState.result.alternatives.map((alt, i) => (
+                    <li key={i}>{alt.name} — {alt.ac_kw} kW · DC/AC {alt.dc_ac_ratio}{alt.is_plus_variant ? ' · Plus' : ''}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Battery */}
       <div>
-        <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide mb-3">Battery (optional)</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">Battery (optional)</h3>
+          <button
+            type="button"
+            onClick={runRecommendBattery}
+            disabled={!canRecommendBattery || batRecState.loading}
+            className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={!canRecommendBattery ? 'Include battery + pick inverter first' : 'Engine picks battery per §3.1'}>
+            {batRecState.loading ? 'Computing…' : 'Recommend battery'}
+          </button>
+        </div>
         <div className="mb-3">
           <CheckBox checked={hasBattery}
                     onChange={v => {
@@ -154,6 +326,38 @@ export default function SystemSection({ spec, update, errors = {} }) {
           <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-700">
             ⚠ Battery requires <b>GEN24 Plus</b> variant. Switch the inverter above or remove the battery —
             engine will hard-fail save otherwise.
+          </div>
+        )}
+        {batRecState.error && (
+          <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800">
+            Engine error: {batRecState.error}
+          </div>
+        )}
+        {batRecState.result && (
+          <div className={`mt-3 p-3 rounded text-xs border ${
+            batRecState.result.reason_code === 'selected' ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                                                           : 'bg-rose-50 border-rose-200 text-rose-900'
+          }`}>
+            <div className="font-semibold mb-1">
+              Engine recommendation: {batRecState.result.battery?.name || batRecState.result.sku || '(no candidate)'}
+              {batRecState.result.module_count && ` × ${batRecState.result.module_count} modules`}
+            </div>
+            <div className="leading-relaxed">{batRecState.result.reason}</div>
+            {batRecState.result.total_usable_kwh && (
+              <div className="mt-1 text-[10px] opacity-80">
+                Target {batRecState.result.target_usable_kwh} kWh · Actual {batRecState.result.total_usable_kwh} kWh usable · ${batRecState.result.dollars_per_usable_kwh}/kWh
+              </div>
+            )}
+            {batRecState.result.alternatives?.length > 0 && (
+              <div className="mt-2 opacity-80">
+                Alternatives:
+                <ul className="list-disc list-inside space-y-0.5 ml-2">
+                  {batRecState.result.alternatives.map((alt, i) => (
+                    <li key={i}>{alt.name} — {alt.module_count} × {alt.series} = {alt.total_usable_kwh} kWh at ${alt.dollars_per_usable_kwh}/kWh ({alt.headroom_pct}% headroom)</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </div>

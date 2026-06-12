@@ -28,6 +28,15 @@ export const pmCatalogueAPI = {
 export const pmProposalEngineAPI = {
   recommendStringLayout: (body) =>
     api.post('/pm/proposal-engine/recommend-string-layout', body),
+  // Option 4a — §2.8 decision tree inverter selector
+  recommendInverter: (body) =>
+    api.post('/pm/proposal-engine/recommend-inverter', body),
+  // Option 4b — highest-wattage panel from live catalogue
+  recommendPanel: (body) =>
+    api.post('/pm/proposal-engine/recommend-panel', body),
+  // Option 4b — §3.1 battery selector + module count for backup target
+  recommendBattery: (body) =>
+    api.post('/pm/proposal-engine/recommend-battery', body),
 };
 
 export const pmQuotesAPI = {
