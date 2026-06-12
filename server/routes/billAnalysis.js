@@ -95,14 +95,42 @@ async function escalatePartialOnReview({ contactId, enquiryId, analysisId, analy
 //
 // Returns {street, suburb, city, postcode} with nulls for any segment that
 // couldn't be confidently identified.
+// NZ street-type tokens that mark the end of the street component. Order
+// matters only in that we test the longer multi-word ones first ("BOULEVARD"
+// before "BLVD" — actually they're checked as whole tokens so order doesn't
+// matter, but kept here for documentation of the supported set).
+const NZ_STREET_TYPES = new Set([
+  'STREET','ST','ROAD','RD','AVENUE','AVE','LANE','LN','DRIVE','DR',
+  'CRESCENT','CRES','CR','PLACE','PL','WAY','COURT','CT','TERRACE','TCE',
+  'BOULEVARD','BLVD','CLOSE','CL','GROVE','GR','PARK','SQUARE','SQ',
+  'GARDENS','GDNS','MEWS','PARADE','PDE','PROMENADE','QUAY','RISE','HEIGHTS','HTS',
+  'PARKWAY','PKWY','CIRCLE','CIR','LOOP','TRAIL','HIGHWAY','HWY',
+]);
+
+// Known NZ cities + main metro areas. When parsing "STREET-NAME ST SUBURB CITY"
+// without commas, the trailing one or two tokens are typically the city.
+const NZ_CITIES = new Set([
+  'AUCKLAND','WELLINGTON','CHRISTCHURCH','HAMILTON','TAURANGA','DUNEDIN',
+  'NAPIER','PALMERSTON NORTH','NELSON','ROTORUA','NEW PLYMOUTH','WHANGAREI',
+  'INVERCARGILL','WANGANUI','GISBORNE','TIMARU','HASTINGS','BLENHEIM',
+  'MASTERTON','LEVIN','TAUPO','PUKEKOHE','HAVELOCK NORTH','UPPER HUTT',
+  'LOWER HUTT','PORIRUA','PAPAKURA','MANUKAU','NORTH SHORE','WAITAKERE',
+  'QUEENSTOWN','WANAKA','OAMARU','ASHBURTON',
+]);
+
 function splitNzAddress(addr) {
   if (!addr || typeof addr !== 'string') return {};
-  const cleaned = addr.replace(/\s+/g, ' ').trim();
+  let cleaned = addr.replace(/\s+/g, ' ').trim();
+  // Strip "NEW ZEALAND" / "AOTEAROA" / "NZ" country suffix when present —
+  // otherwise the city slot picks up "ZEALAND" instead of the real city.
+  cleaned = cleaned.replace(/\b(NEW ZEALAND|AOTEAROA NEW ZEALAND|AOTEAROA|NZ)\b\.?\s*$/i, '').trim();
   // Pull a trailing 4-digit postcode if present.
   let postcode = null;
   const pcMatch = cleaned.match(/\b(\d{4})\s*$/);
   let body = cleaned;
   if (pcMatch) { postcode = pcMatch[1]; body = body.slice(0, pcMatch.index).trim(); }
+  // Country suffix could also come AFTER the postcode (rare). Strip again.
+  body = body.replace(/\b(NEW ZEALAND|AOTEAROA NEW ZEALAND|AOTEAROA|NZ)\b\.?\s*$/i, '').trim();
   // Comma-separated case (most reliable)
   if (body.includes(',')) {
     const parts = body.split(',').map(s => s.trim()).filter(Boolean);
@@ -116,11 +144,42 @@ function splitNzAddress(addr) {
       return { street: parts[0], suburb: null, city: null, postcode };
     }
   }
-  // No commas — splitting suburb-from-city ambiguously (e.g. "NEW WINDSOR
-  // AUCKLAND" could be suburb="NEW" city="WINDSOR AUCKLAND" or suburb="NEW
-  // WINDSOR" city="AUCKLAND"). Writing wrong data is worse than writing
-  // less, so put everything into `street` and let the rep enter suburb/city
-  // manually. Postcode is still peeled off if present.
+  // ── No-comma path (e.g. Genesis bill "31A HILLVIEW AVENUE NEW WINDSOR
+  //    AUCKLAND") — detect the street-type token to split street | rest, then
+  //    split rest into suburb | city using the known NZ_CITIES set. Falls
+  //    through to "everything into street" only when neither heuristic fires.
+  const tokens = body.split(/\s+/).filter(Boolean);
+  if (tokens.length >= 2) {
+    // Find the LAST street-type token (some addresses have e.g. "PARK AVE"
+    // where PARK alone would match — taking the last match keeps street type
+    // at the right boundary).
+    let streetTypeIdx = -1;
+    for (let i = 0; i < tokens.length; i++) {
+      if (NZ_STREET_TYPES.has(tokens[i].toUpperCase().replace(/[.,]/g, ''))) {
+        streetTypeIdx = i;
+      }
+    }
+    if (streetTypeIdx > 0 && streetTypeIdx < tokens.length - 1) {
+      const street = tokens.slice(0, streetTypeIdx + 1).join(' ');
+      const rest   = tokens.slice(streetTypeIdx + 1);
+      // City heuristic: longest trailing substring that matches a known city.
+      // Try the last 2 tokens first ("NORTH SHORE"), then last 1 ("AUCKLAND").
+      let city = null, suburb = null;
+      if (rest.length >= 2 && NZ_CITIES.has(rest.slice(-2).join(' ').toUpperCase())) {
+        city   = rest.slice(-2).join(' ');
+        suburb = rest.slice(0, -2).join(' ') || null;
+      } else if (rest.length >= 1 && NZ_CITIES.has(rest[rest.length - 1].toUpperCase())) {
+        city   = rest[rest.length - 1];
+        suburb = rest.slice(0, -1).join(' ') || null;
+      } else {
+        // Unknown trailing — assume last token is city (NZ residential default).
+        city   = rest[rest.length - 1] || null;
+        suburb = rest.slice(0, -1).join(' ') || null;
+      }
+      return { street, suburb: suburb || null, city: city || null, postcode };
+    }
+  }
+  // Fallback: no street-type token recognised. Whole thing → street.
   return { street: body, suburb: null, city: null, postcode };
 }
 

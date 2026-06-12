@@ -44,6 +44,16 @@ export default function QuoteFormPage() {
   // P6 — live preview state
   const [previewResult, setPreviewResult] = useState(null);
   const [previewing, setPreviewing] = useState(false);
+  // Option 4c (b) — tier strip recompose state + settings
+  const [recomposing, setRecomposing] = useState(false);
+  const [tierSettings, setTierSettings] = useState(null);
+
+  // Option 4c (b) — fetch tier strip settings once on mount
+  useEffect(() => {
+    pmProposalEngineAPI.tierSettings()
+      .then(r => setTierSettings(r.data))
+      .catch(() => {});
+  }, []);
 
   // Load quote + current spec
   useEffect(() => {
@@ -188,16 +198,7 @@ export default function QuoteFormPage() {
     });
     setActiveTierIdx(spec.tiers?.length || 0);
   }
-  // Option 4c — size mode toggle (re-runs compose for all 3 tiers)
-  const [recomposing, setRecomposing] = useState(false);
-  const [tierSettings, setTierSettings] = useState(null);
-
-  useEffect(() => {
-    pmProposalEngineAPI.tierSettings()
-      .then(r => setTierSettings(r.data))
-      .catch(() => {});
-  }, []);
-
+  // Option 4c (b) — size mode toggle (re-runs compose for all 3 tiers)
   async function handleSizeModeChange(newMode) {
     if (newMode === (spec?.tier_strip?.size_mode || 'same_size')) return;
     // Update mode immediately + recompose all 3 tiers from bill analysis
@@ -211,12 +212,16 @@ export default function QuoteFormPage() {
     try {
       const billResp = await pmContactsAPI.latestBillAnalysis(quote.contact_id);
       const billRec = billResp?.data?.system_recommendation;
+      const billAnalysisId = billResp?.data?.analysis_id;
       const phase = Number(spec?.system?.phase) || 1;
       const sizeMode = forceMode || spec?.tier_strip?.size_mode || 'same_size';
       const region = billResp?.data?.address_prefill?.region
                   || spec?.customer?.address?.region;
+      // Server-side compose with full fallback support — never returns null SKUs.
       const newTiers = await autoSizeThreeTiers({
-        billAnalysis: billRec, phase, sizeMode, tierSettings, region,
+        billAnalysisId,
+        billAnalysis: billRec,
+        phase, sizeMode, region,
       });
       setSpec(prev => ({
         ...prev,

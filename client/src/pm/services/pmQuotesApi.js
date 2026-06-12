@@ -41,6 +41,9 @@ export const pmProposalEngineAPI = {
   // 3-tier autosizer to populate Tier 1 / Tier 2 / Tier 3 from one input).
   composeSystem: (body) =>
     api.post('/pm/proposal-engine/compose-system', body),
+  // Option 4c (b) — server-side 3-tier composer with fallback handling
+  composeThreeTiers: (body) =>
+    api.post('/pm/proposal-engine/compose-three-tiers', body),
   // Option 4c — tier-strip multipliers + labels (read-only for now)
   tierSettings: () =>
     api.get('/pm/proposal-engine/tier-settings'),

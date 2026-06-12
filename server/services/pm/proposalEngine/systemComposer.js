@@ -69,10 +69,16 @@ export function composeSystem({
   }
   const panel = { sku: panelResult.sku, count: panelResult.panels_needed };
 
+  // Compute the ACTUAL array kWp from the rounded-up panel count. This may
+  // slightly exceed the bill-analysis target_dc_kwp (e.g. target 10 → 17 ×
+  // 595W = 10.115). Pass the actual to selectInverter so the standard-mode
+  // bonus / reduced-mode penalty fires correctly against the real load.
+  const actualDcKwp = panel.count * (panelResult.panel?.watts || 0) / 1000;
+
   // 2. Inverter — §2.8 decision tree
   const invResult = selectInverter({
-    targetDcKwp, phase,
-    hasBattery, hasEv,
+    targetDcKwp: actualDcKwp || targetDcKwp,
+    phase, hasBattery, hasEv,
     catalogue,
   });
   reasons.inverter = invResult.reason;

@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
-import { pmQuotesAPI, pmContactsAPI, pmProposalEngineAPI, emptySpec } from '../services/pmQuotesApi';
-import { autoSizeThreeTiers } from '../utils/autoSizeThreeTiers';
+import { pmQuotesAPI, pmContactsAPI, emptySpec } from '../services/pmQuotesApi';
 
 // Step-1 of quote creation: pick a contact + name the engagement. The full
 // 6-section spec form opens after creation at /pm/quotes/:id/edit.
@@ -72,39 +71,15 @@ export default function QuoteNewPage() {
         if (a.region && !c?.region)     spec.customer.address.region   = a.region;
         if (a.postcode && !c?.postcode) spec.customer.address.postcode = a.postcode;
       }
-      // Option 4c — top-level spec.system stays with null SKUs. Tier
-      // populates via /compose-system (engine-recommended SKUs). When the
-      // rep activates a tier, the tier's system_overrides flow into the
-      // working view. No hardcoded fallback SKUs.
-      //
-      // We still record the bill-analysis link for downstream reference.
+      // Option 4c (b) — Server-side composition.
+      // The /pm/quotes create endpoint reads the bill_analysis_id, runs
+      // composeThreeTiers internally, and returns a fully-populated spec
+      // (tiers + top-level system). The client just sends contact_id +
+      // bill_analysis_id + stage. No null SKUs ever reach the form.
       if (billAnalysis?.system_recommendation?.recommended_system_kw) {
         spec.system.__auto_sized_from_bill_analysis_id = billAnalysis.analysis_id;
       }
       spec.pricing.stage = stage;
-
-      // P4.5 + 4c — Multi-tier default: every Stage-1 quote opens with 3 tiers.
-      // With bills → engine composes per tier (panel + inverter + battery +
-      // layout) via /api/pm/proposal-engine/compose-system. Without bills →
-      // 3 empty shells; rep clicks Recommend or picks from dropdowns.
-      let tierSettings = null;
-      try {
-        const ts = await pmProposalEngineAPI.tierSettings();
-        tierSettings = ts.data;
-      } catch (_) { /* fall through to defaults */ }
-      const sizeMode = spec.tier_strip?.size_mode || tierSettings?.default_size_mode || 'same_size';
-      const tiers = await autoSizeThreeTiers({
-        billAnalysis: billAnalysis?.system_recommendation,
-        phase: Number(spec.system.phase) || 1,
-        sizeMode,
-        tierSettings,
-        region: billAnalysis?.address_prefill?.region || spec.customer.address.region,
-      });
-      if (tiers) {
-        spec.tiers = tiers;
-        spec.tier_strip = { size_mode: sizeMode };
-        for (const t of spec.tiers) t.pricing.stage = stage;
-      }
 
       const r = await pmQuotesAPI.create({
         contact_id: contactId,

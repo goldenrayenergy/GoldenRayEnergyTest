@@ -19,6 +19,7 @@ import { selectInverter } from '../../services/pm/proposalEngine/inverterSelecto
 import { selectPanel } from '../../services/pm/proposalEngine/panelSelector.js';
 import { selectBattery } from '../../services/pm/proposalEngine/batterySelector.js';
 import { composeSystem } from '../../services/pm/proposalEngine/systemComposer.js';
+import { composeThreeTiers } from '../../services/pm/proposalEngine/threeTierComposer.js';
 import { REGIONS, BMS_RULES, COMPATIBILITY, TIER_STRIP_SETTINGS } from '../../services/pm/proposalEngine/data/engineeringRules.js';
 
 const router = Router();
@@ -211,6 +212,49 @@ router.post('/recommend-battery', async (req, res) => {
         catalogue_batteries_count: Object.keys(catalogue.BATTERIES).length,
       },
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// POST /compose-three-tiers — Option 4c (b) — server-side 3-tier composer
+//
+// Body: {
+//   bill_analysis_id?: uuid,                  // optional — falls back if missing
+//   bill_analysis?: { recommended_system_kw, recommended_battery_kwh }, // direct
+//   phase: 1 | 3,
+//   region: 'auckland_vector' | ...,
+//   size_mode: 'same_size' | 'tiered_sizes',
+// }
+// Returns: { tiers: [...], recommended_index, fallback_used, fallback_reason,
+//            size_mode, warnings }
+// ────────────────────────────────────────────────────────────────────────────
+router.post('/compose-three-tiers', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    const { bill_analysis_id, bill_analysis: directBA, phase = 1,
+            region, size_mode = 'same_size' } = req.body || {};
+
+    let billAnalysis = directBA || null;
+    if (!billAnalysis && bill_analysis_id) {
+      const { data: ba } = await supabaseAdmin.from('bill_analyses')
+        .select('id, recommended_system_kw, recommended_battery_kwh, region, postcode')
+        .eq('id', bill_analysis_id).maybeSingle();
+      billAnalysis = ba || null;
+    }
+
+    const catalogue = await loadCatalogueFromDb(supabaseAdmin);
+    const regionData = REGIONS[region] || REGIONS.auckland_vector;
+
+    const out = composeThreeTiers({
+      billAnalysis, phase: Number(phase) || 1, region: regionData,
+      sizeMode: size_mode,
+      catalogue, COMPATIBILITY, BMS_RULES, TIER_STRIP_SETTINGS,
+    });
+
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

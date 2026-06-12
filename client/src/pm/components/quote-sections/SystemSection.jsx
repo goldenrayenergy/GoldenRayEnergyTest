@@ -35,8 +35,16 @@ export default function SystemSection({ spec, update, errors = {} }) {
 
   const hasBattery = !!sys.battery?.sku;
 
-  // String design consistency
-  const stringTotal = (sys.string_design?.panels_per_string || 0) * (sys.string_design?.string_count || 0);
+  // String design consistency — asymmetric-aware. When the engine picks an
+  // asymmetric layout (e.g. main 1 × 10 + tail 1 × 7 for a 17-panel prime
+  // count), the panels-per-string × string-count math only captures the main.
+  // The tail panel-count must be added so the total matches sys.panel.count.
+  const stringMainTotal = (sys.string_design?.panels_per_string || 0) * (sys.string_design?.string_count || 0);
+  const asymTail = sys.string_design?.asymmetric_string;
+  const stringAsymTotal = asymTail
+    ? (Number(asymTail.panels_per_string) || 0) * (Number(asymTail.string_count) || 1)
+    : 0;
+  const stringTotal = stringMainTotal + stringAsymTotal;
   const stringMismatch = sys.panel?.count && stringTotal && stringTotal !== sys.panel?.count;
 
   const autoSizeNote = sys.__auto_size_note;
@@ -389,7 +397,9 @@ export default function SystemSection({ spec, update, errors = {} }) {
                          onChange={v => setSub('string_design', 'panels_per_string', v)} placeholder="5" />
           </Field>
           <Field label="String count" required
-                 hint={`Total = ${sys.string_design?.panels_per_string || 0} × ${sys.string_design?.string_count || 0} = ${stringTotal} panels`}>
+                 hint={`Total = ${sys.string_design?.string_count || 0} × ${sys.string_design?.panels_per_string || 0}${
+                   asymTail ? ` + ${asymTail.string_count || 1} × ${asymTail.panels_per_string} (asymmetric tail)` : ''
+                 } = ${stringTotal} panels`}>
             <NumberInput value={sys.string_design?.string_count}
                          onChange={v => setSub('string_design', 'string_count', v)} placeholder="4" />
           </Field>

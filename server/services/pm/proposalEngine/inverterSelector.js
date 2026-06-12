@@ -56,8 +56,24 @@ function score(inv, targetDcKwp, targetAcKw, hasBattery, hasEv) {
   else if (dcAcRatio > DC_AC_SWEET_HIGH && dcAcRatio <= 1.43) s += 25;  // standard oversize
   // 1.43–1.50 = reduced-mode oversize — neutral
 
-  // 3. Plus variant bonus when battery requested.
+  // 2b. Reduced-mode oversizing penalty. When targetDcKwp > max_pv_kwp_standard,
+  //     Fronius requires reduced-mode operation which adds a string-Voc-STC
+  //     ≤ 450V constraint. With high-Voc panels (e.g. 595W Phono Voc 53V) and
+  //     normal string lengths, reduced-mode commonly hard-fails the engineering
+  //     validator downstream. Prefer inverters whose max_pv_kwp_standard
+  //     accommodates the target so the layout stays in standard mode.
+  if (inv.max_pv_kwp_standard != null) {
+    if (targetDcKwp <= inv.max_pv_kwp_standard) {
+      s += 40;          // standard mode bonus
+    } else {
+      s -= 100;         // reduced-mode penalty (favours next inverter up)
+    }
+  }
+
+  // 3. Plus variant bonus when battery requested; non-Plus bonus when not
+  //    (Plus costs ~$1k more — for solar-only tiers, save the cost).
   if (hasBattery && inv.is_plus_variant) s += 20;
+  else if (!hasBattery && !inv.is_plus_variant) s += 5;
 
   // 4. EV headroom bonus.
   if (hasEv && (inv.ac_kw - targetAcKw) >= EV_AC_HEADROOM_KW) s += 30;

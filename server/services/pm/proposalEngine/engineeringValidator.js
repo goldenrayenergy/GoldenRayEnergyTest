@@ -235,8 +235,15 @@ export function validateEngineering(spec, options = {}) {
 
   // ── Battery: Plus inverter requirement ──────────────────────────────
   if (hasBattery && inverter) {
+    // Prefer the catalogue's battery_capable / is_plus_variant flags (set by
+    // dbLoader from products.specs). Fall back to the legacy COMPATIBILITY
+    // map for the JS-fallback catalogue's 2 SKUs. Either source set TRUE
+    // means the inverter is battery-capable.
     const compat = COMPATIBILITY[inverterSku];
-    if (!compat?.battery_capable) {
+    const isCapable = inverter.battery_capable === true
+                  || inverter.is_plus_variant === true
+                  || compat?.battery_capable === true;
+    if (!isCapable) {
       hard_fails.push({
         rule: 'Battery interface — Plus inverter required',
         message: `Inverter ${inverter.name} is not battery-capable. ` +

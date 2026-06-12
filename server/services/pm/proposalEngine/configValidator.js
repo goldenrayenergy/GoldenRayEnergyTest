@@ -168,10 +168,17 @@ function validateSystem(s, errors, catalogue) {
     checkRange(s.string_design.string_count, 1, 8, 'system.string_design.string_count', errors);
 
     if (s.panel?.count && s.string_design.panels_per_string && s.string_design.string_count) {
-      const declaredTotal = s.string_design.panels_per_string * s.string_design.string_count;
+      const symTotal = s.string_design.panels_per_string * s.string_design.string_count;
+      // Option 2 §2.10 — asymmetric layouts add a tail string (e.g. 1×10 + 1×7).
+      const asym = s.string_design.asymmetric_string;
+      const asymContrib = asym
+        ? (Number(asym.panels_per_string) || 0) * (Number(asym.string_count) || 1)
+        : 0;
+      const declaredTotal = symTotal + asymContrib;
       if (declaredTotal !== s.panel.count) {
+        const asymPart = asym ? ` + ${asym.string_count || 1} × ${asym.panels_per_string}` : '';
         err(errors, 'system.string_design',
-          `panels_per_string × string_count (${declaredTotal}) must equal panel count (${s.panel.count})`);
+          `panels_per_string × string_count${asymPart} (${declaredTotal}) must equal panel count (${s.panel.count})`);
       }
     }
   }

@@ -20,12 +20,56 @@ import { supabaseAdmin as supabaseFromConfig } from '../../config/supabase.js';
 import { runEngine } from '../../services/pm/proposalEngine/index.js';
 import { runThreeScenarios } from '../../services/pm/proposalEngine/financialModel.js';
 import { getCachedCatalogue } from '../../services/pm/proposalEngine/catalogue/cachedDbLoader.js';
+import { composeThreeTiers, topLevelSystemFromTier }
+  from '../../services/pm/proposalEngine/threeTierComposer.js';
+import { REGIONS, BMS_RULES, COMPATIBILITY, TIER_STRIP_SETTINGS }
+  from '../../services/pm/proposalEngine/data/engineeringRules.js';
+import {
+  getFinancialSummary, getMarginFloorStatus, getEngineeringOutput,
+  getProjectMarginPct, getCanShip,
+} from '../../services/pm/proposalEngine/evaluatedShape.js';
 
 // Tiny seam so behaviour tests can inject a stub Supabase client. Production
 // path is unchanged — `sb()` always resolves to the real config export.
 let _supabaseAdmin = supabaseFromConfig;
 export function __setSupabaseForTests(client) { _supabaseAdmin = client; }
 const sb = () => _supabaseAdmin;
+
+// Map free-text region/location → REGIONS engine key. Same logic the test
+// scripts use; keeps the create endpoint resilient to varying bill-analysis
+// region tags.
+const REGION_MAP = {
+  auckland:      'auckland_vector',
+  counties:      'counties_franklin',
+  franklin:      'counties_franklin',
+  northland:     'northland',
+  whangarei:     'northland',
+  waikato:       'waikato',
+  hamilton:      'waikato',
+  bay_of_plenty: 'bop_tauranga',
+  bop:           'bop_tauranga',
+  tauranga:      'bop_tauranga',
+  taranaki:      'taranaki',
+  wairarapa:     'taranaki',
+  manawatu:      'taranaki',
+  palmerston:    'taranaki',
+  wellington:    'wellington',
+  canterbury:    'canterbury',
+  christchurch:  'canterbury',
+  otago:         'otago_queenstown',
+  queenstown:    'otago_queenstown',
+  southland:     'otago_queenstown',
+  invercargill:  'otago_queenstown',
+  dunedin:       'otago_queenstown',
+};
+function mapRegionKey(raw) {
+  if (!raw) return null;
+  const k = String(raw).toLowerCase().replace(/[^a-z]+/g, '_');
+  for (const [needle, key] of Object.entries(REGION_MAP)) {
+    if (k.includes(needle)) return key;
+  }
+  return null;
+}
 
 const router = Router();
 router.use(authenticate);
@@ -138,13 +182,64 @@ router.post('/', authorize('admin', 'sales_mgr', 'sales_exec', 'proposal_mgr'),
 
     // Resolve the contact for quote_ref generation.
     const { data: contact, error: contactErr } = await sb()
-      .from('contacts').select('id, name').eq('id', contact_id).maybeSingle();
+      .from('contacts').select('id, name, location, street, suburb, city, postcode')
+      .eq('id', contact_id).maybeSingle();
     if (contactErr || !contact) return res.status(404).json({ error: 'Contact not found.' });
 
+    // ── Option 4c (b) — Server-side three-tier composition ──────────────
+    // The spec sent by the client always has null SKUs. Server fetches the
+    // bill analysis (if any) and runs composeThreeTiers to populate every
+    // tier + top-level system. Spec is NEVER null in the response.
+    //
+    // Edge cases handled inside composeThreeTiers:
+    //   • bill_analysis_id missing OR analysis row missing OR recommended_kw=0
+    //       → all 3 tiers use catalogue-first fallback
+    //   • composeSystem fails for one tier (e.g. envelope cliff)
+    //       → that tier falls back; others stay engine-picked
+    let billAnalysis = null;
+    if (bill_analysis_id) {
+      const { data: ba } = await sb().from('bill_analyses')
+        .select('id, recommended_system_kw, recommended_battery_kwh, region, postcode')
+        .eq('id', bill_analysis_id).maybeSingle();
+      billAnalysis = ba || null;
+    }
+    // Determine phase + region. Phase defaults to 1 (residential); rep can
+    // change in the System tab if 3ph. Region uses bill-analysis region first,
+    // then contact location, then Auckland default.
+    const phase = Number(spec.system?.phase) || 1;
+    const regionKey = mapRegionKey(billAnalysis?.region) ||
+                      mapRegionKey(contact.location)     ||
+                      'auckland_vector';
+    const region = REGIONS[regionKey] || REGIONS.auckland_vector;
+    const sizeMode = spec.tier_strip?.size_mode || TIER_STRIP_SETTINGS.default_size_mode;
+
+    let composeResult = null;
+    try {
+      const catalogue = await getCachedCatalogue(sb());
+      composeResult = composeThreeTiers({
+        billAnalysis, phase, region, sizeMode,
+        catalogue, COMPATIBILITY, BMS_RULES, TIER_STRIP_SETTINGS,
+      });
+      // Populate spec.tiers + top-level system from the recommended tier.
+      spec.tiers = composeResult.tiers;
+      spec.tier_strip = { size_mode: composeResult.size_mode };
+      const recIdx = Math.max(0, Math.min(composeResult.recommended_index || 0, spec.tiers.length - 1));
+      spec.system = topLevelSystemFromTier(spec.tiers[recIdx], spec.system);
+      // Carry phase + smart_meter through (composer doesn't touch them)
+      spec.system.phase = phase;
+      // Sync each tier's pricing.stage with the quote's stage
+      for (const t of spec.tiers) t.pricing.stage = stage;
+    } catch (e) {
+      // Composer failed entirely (DB down, catalogue load error, etc.).
+      // Don't refuse the create — store what the client sent + flag.
+      console.warn('[quote-create] composeThreeTiers threw:', e?.message);
+      spec.__composer_error = e?.message || String(e);
+    }
+
     // Try to run the engine, but DON'T refuse on config errors at creation time.
-    // Reps need to be able to start a quote with a placeholder spec and fill it
-    // in via the edit form. The engine gates kick in on PATCH /spec (returns
-    // errors but stores nothing) and on POST /generate (refuses to ship).
+    // Reps need to be able to start a quote and fill it in via the edit form.
+    // The engine gates kick in on PATCH /spec (returns errors but stores nothing)
+    // and on POST /generate (refuses to ship).
     let evaluated = await evaluateSpec(spec);
 
     const year = new Date().getFullYear();
@@ -177,11 +272,8 @@ router.post('/', authorize('admin', 'sales_mgr', 'sales_exec', 'proposal_mgr'),
         quote_id: quote.id,
         version_number: 1,
         spec,
-        validator_output: evaluated.ok ? evaluated.engine.engineering : null,
-        financial_model_output: evaluated.ok ? {
-          summary: evaluated.scenarios.summary,
-          headline: evaluated.scenarios.expected.yr1,
-        } : null,
+        validator_output: getEngineeringOutput(evaluated),
+        financial_model_output: getFinancialSummary(evaluated),
         is_current: true,
       })
       .select('*')
@@ -196,19 +288,20 @@ router.post('/', authorize('admin', 'sales_mgr', 'sales_exec', 'proposal_mgr'),
     await writeAudit(req, { quote_id: quote.id, version_id: version.id,
       action: 'quote.created', after: { quote_ref, stage, final_mode } });
 
+    const finSummary = getFinancialSummary(evaluated);
     res.status(201).json({
       quote: { ...quote, current_version_id: version.id },
       version,
       engine: evaluated.ok ? {
-        can_ship: evaluated.engine.can_ship,
-        margin_floor_status: evaluated.engine.cost.margin_floor_status,
+        can_ship: getCanShip(evaluated),
+        margin_floor_status: getMarginFloorStatus(evaluated),
         block_reasons: evaluated.engine.block_reasons,
       } : {
         can_ship: false,
         config_errors: evaluated.engine.config_errors,
         note: 'Spec incomplete — fill in the form and Save to run the engine.',
       },
-      scenarios: evaluated.ok ? evaluated.scenarios.summary : null,
+      scenarios: finSummary?.summary || null,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -354,6 +447,31 @@ router.patch('/:id/spec', authorize('admin', 'sales_mgr', 'sales_exec', 'proposa
       return res.status(400).json(body);
     }
 
+    // ── Pricing rule (memory: feedback_pricing_always_from_cost_engine) ──
+    // Overwrite each tier's customer_price_inc_gst from the engine's LIST
+    // price (BoM × margins + labour + compliance + GST). Every save →
+    // fresh price reflecting the live catalogue. Margin floor compliant by
+    // construction. Discount workflow continues to apply on top via
+    // tier.pricing.discount.applied_nzd.
+    //
+    // Edge case — when the rep has explicitly set a discount, we still
+    // overwrite the base list price; the discount stays in spec.pricing.discount
+    // and the customer-facing total = list - discount.
+    if (evaluated.engine.is_multi_tier && Array.isArray(evaluated.engine.tiers) && Array.isArray(spec.tiers)) {
+      for (let i = 0; i < spec.tiers.length; i++) {
+        const tr = evaluated.engine.tiers[i];
+        const enginePrice = tr?.cost?.totals?.total_list_inc_gst;
+        if (enginePrice != null && Number.isFinite(enginePrice)) {
+          if (!spec.tiers[i].pricing) spec.tiers[i].pricing = {};
+          spec.tiers[i].pricing.customer_price_inc_gst = Math.round(enginePrice);
+        }
+      }
+    } else if (evaluated.engine.cost?.totals?.total_list_inc_gst != null) {
+      // Single-tier path
+      if (!spec.pricing) spec.pricing = {};
+      spec.pricing.customer_price_inc_gst = Math.round(evaluated.engine.cost.totals.total_list_inc_gst);
+    }
+
     const oldCurrent = await getCurrentVersion(quote.id);
     const nextVersionNum = (oldCurrent?.version_number || 0) + 1;
 
@@ -370,11 +488,8 @@ router.patch('/:id/spec', authorize('admin', 'sales_mgr', 'sales_exec', 'proposa
         quote_id: quote.id,
         version_number: nextVersionNum,
         spec,
-        validator_output: evaluated.engine.engineering,
-        financial_model_output: {
-          summary: evaluated.scenarios.summary,
-          headline: evaluated.scenarios.expected.yr1,
-        },
+        validator_output: getEngineeringOutput(evaluated),
+        financial_model_output: getFinancialSummary(evaluated),
         is_current: true,
       })
       .select('*')
@@ -583,19 +698,17 @@ router.post('/:id/validate', async (req, res) => {
       });
     } else {
       await sb().from('quote_versions').update({
-        validator_output: evaluated.engine.engineering,
-        financial_model_output: {
-          summary: evaluated.scenarios.summary,
-          headline: evaluated.scenarios.expected.yr1,
-        },
+        validator_output: getEngineeringOutput(evaluated),
+        financial_model_output: getFinancialSummary(evaluated),
       }).eq('id', current.id);
 
+      const aggEngineering = getEngineeringOutput(evaluated);
       await writeAudit(req, {
         quote_id: req.params.id, version_id: current.id, action: 'validate.run',
         after: {
-          can_ship: evaluated.engine.can_ship,
-          margin_floor_status: evaluated.engine.cost.margin_floor_status,
-          hard_fail_count: evaluated.engine.engineering.hard_fails.length,
+          can_ship: getCanShip(evaluated),
+          margin_floor_status: getMarginFloorStatus(evaluated),
+          hard_fail_count: aggEngineering?.hard_fails?.length || 0,
         },
       });
     }
@@ -636,7 +749,8 @@ router.post('/:id/discount-request',
     if (!evaluated.ok) {
       return res.status(400).json({ error: 'Spec failed engine validation with requested discount.' });
     }
-    const newMarginPct = evaluated.engine.cost.totals.project_margin_pct;
+    // Multi-tier-aware: worst-case (lowest) margin across tiers.
+    const newMarginPct = getProjectMarginPct(evaluated);
 
     const { data, error } = await sb()
       .from('discount_approvals')
@@ -736,11 +850,8 @@ router.post('/:id/discount-approve', authorize('admin'),
       // because this is a finalisation step, not a spec change).
       await sb().from('quote_versions').update({
         spec: updatedSpec,
-        validator_output: evaluated.engine.engineering,
-        financial_model_output: {
-          summary: evaluated.scenarios.summary,
-          headline: evaluated.scenarios.expected.yr1,
-        },
+        validator_output: getEngineeringOutput(evaluated),
+        financial_model_output: getFinancialSummary(evaluated),
       }).eq('id', current.id);
 
       await sb().from('quotes')
