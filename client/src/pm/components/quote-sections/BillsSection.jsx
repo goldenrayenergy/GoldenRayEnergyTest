@@ -1,4 +1,8 @@
 import { Field, TextInput, NumberInput, SectionGrid, SectionHeading } from './_shared';
+import {
+  annualKwhHint, annualSpendHint, variableRateHint,
+  dailyFixedHint, buybackHint,
+} from '../../utils/fieldHints';
 
 export default function BillsSection({ spec, update, errors = {}, quote }) {
   const m = spec.bills?.manual_entry || {};
@@ -65,10 +69,12 @@ export default function BillsSection({ spec, update, errors = {}, quote }) {
         <Field label="Retailer" hint="Mercury, Genesis, Contact, Frank, Electric Kiwi …">
           <TextInput value={m.retailer} onChange={v => setM('retailer', v)} placeholder="Mercury" />
         </Field>
-        <Field label="Annual usage (kWh)" required error={errors['bills.manual_entry.annual_kwh']}>
+        <Field label="Annual usage (kWh)" required hint={annualKwhHint()}
+               error={errors['bills.manual_entry.annual_kwh']}>
           <NumberInput value={m.annual_kwh} onChange={v => setM('annual_kwh', v)} placeholder="12000" />
         </Field>
-        <Field label="Annual spend (NZD inc GST)" required error={errors['bills.manual_entry.annual_spend']}>
+        <Field label="Annual spend (NZD inc GST)" required hint={annualSpendHint()}
+               error={errors['bills.manual_entry.annual_spend']}>
           <NumberInput value={m.annual_spend} onChange={v => setM('annual_spend', v)} placeholder="3500" />
         </Field>
         <Field label="Effective blended rate"
@@ -77,19 +83,19 @@ export default function BillsSection({ spec, update, errors = {}, quote }) {
                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm text-slate-500" />
         </Field>
         <Field label="Variable rate inc GST ($/kWh)"
-               hint="From the bill — use to project new bill post-install"
+               hint={variableRateHint()}
                error={errors['bills.manual_entry.variable_rate_per_kwh_incl_gst']}>
           <NumberInput step="0.001" value={m.variable_rate_per_kwh_incl_gst}
                        onChange={v => setM('variable_rate_per_kwh_incl_gst', v)} placeholder="0.230" />
         </Field>
         <Field label="Daily fixed charge inc GST ($)"
-               hint="The fixed line/network charge per day"
+               hint={dailyFixedHint()}
                error={errors['bills.manual_entry.daily_fixed_charge_incl_gst']}>
           <NumberInput step="0.01" value={m.daily_fixed_charge_incl_gst}
                        onChange={v => setM('daily_fixed_charge_incl_gst', v)} placeholder="2.50" />
         </Field>
         <Field label="Buyback rate ($/kWh)"
-               hint="Current rate the retailer pays for exported solar"
+               hint={buybackHint()}
                error={errors['bills.manual_entry.buyback_rate']}>
           <NumberInput step="0.001" value={m.buyback_rate}
                        onChange={v => setM('buyback_rate', v)} placeholder="0.090" />

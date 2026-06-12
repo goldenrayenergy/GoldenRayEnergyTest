@@ -22,6 +22,7 @@
 import { getCatalogue } from './catalogue/index.js';
 import { REGIONS, COMPATIBILITY, requiredBmsCount, BMS_RULES,
          FINANCIAL_DEFAULTS } from './data/engineeringRules.js';
+import { normalizeStringDesign, totalStringCount } from './stringDesignShape.js';
 
 export const VALIDATOR_VERSION = '1.0.0';
 
@@ -36,12 +37,30 @@ export const STANDARDS_REFERENCED = {
 
 const r2 = (n) => +(+n).toFixed(2);
 
+// NZ summer back-of-cell hot temperature for Vmp lower-envelope checks.
+// Industry default — NOCT 45°C + STC 1000 W/m² irradiance lifts cell to ~70°C.
+const HOT_PANEL_CELSIUS = 70;
+
+// 10% headroom above inverter mppt_v_min before the MPPT can't track.
+// Below this floor harvest collapses; flag as borderline.
+const MPPT_V_MIN_BUFFER = 1.10;
+
 // Cold-temperature Voc correction formula (AS/NZS 5033).
 // Voc_cold = Voc_stc × (1 + |Tcoef| × (T_stc − T_min))
 function vocAtColdTemp(panelData, tMinCelsius) {
   const Tstc = 25;
   const correction = 1 + Math.abs(panelData.voltage_temp_coef_pct_per_c) / 100 * (Tstc - tMinCelsius);
   return r2(panelData.voc_stc * correction);
+}
+
+// Hot-temperature Vmp correction (mirror of vocAtColdTemp, sign inverted).
+// Vmp_hot = Vmp_stc × (1 − |Tcoef| × (T_hot − T_stc))
+// Note: voltage_temp_coef is reused (Vmp and Voc share the same coefficient
+// for monocrystalline panels — within 0.01%/°C for the panels in catalogue).
+function vmpAtHotTemp(panelData, tHotCelsius) {
+  const Tstc = 25;
+  const correction = 1 - Math.abs(panelData.voltage_temp_coef_pct_per_c) / 100 * (tHotCelsius - Tstc);
+  return r2(panelData.vmp_stc * correction);
 }
 
 // ── Main validator ────────────────────────────────────────────────────────
@@ -62,42 +81,99 @@ export function validateEngineering(spec, options = {}) {
   const inverter = INVERTERS[inverterSku];
   const panelCount = spec.system.panel.count;
   const stringTopology = spec.system.string_topology || 'series';
-  const panelsPerString = spec.system.string_design?.panels_per_string;
-  const stringCount = spec.system.string_design?.string_count;
+  // String design is normalized into { groups: [{ panels_per_string, string_count }] }
+  // so legacy + canonical specs flow through the same code path. Each group is
+  // validated against Voc cold + Vmp hot independently; MPPT current + Isc
+  // checks sum strings across groups.
+  const sdNorm = normalizeStringDesign(spec.system.string_design);
+  const stringGroups = sdNorm.groups;
+  const stringCount = totalStringCount(spec.system.string_design);
+  // Largest panels_per_string across groups — used for fall-throughs that
+  // weren't loop-converted (e.g. reduced-mode Voc check uses the worst case).
+  const largestPanelsPerString = stringGroups.reduce(
+    (max, g) => Math.max(max, g.panels_per_string || 0), 0);
   const region = REGIONS[spec.customer.address.region];
   const hasBattery = spec.system?.battery?.sku != null;
 
   // ── AS/NZS 5033 §3 — Voc at cold morning temperature ─────────────────
-  if (panel && inverter && panelsPerString && region) {
+  // Run per group so the LONGEST string wins (worst-case Voc). Groups with
+  // distinct panels_per_string get reported in the same row when they share
+  // a verdict, or separate rows when they don't.
+  if (panel && inverter && stringGroups.length > 0 && region) {
     const vocCold = vocAtColdTemp(panel, region.t_min_celsius);
-    const stringVocCold = r2(vocCold * panelsPerString);
-    const stringVocStc = r2(panel.voc_stc * panelsPerString);
-
-    if (stringVocCold > inverter.uoc_max_v) {
+    let worstStringVocCold = 0;
+    for (const g of stringGroups) {
+      const stringVocCold = r2(vocCold * g.panels_per_string);
+      if (stringVocCold > worstStringVocCold) worstStringVocCold = stringVocCold;
+    }
+    if (worstStringVocCold > inverter.uoc_max_v) {
       hard_fails.push({
         rule: 'AS/NZS 5033 §3 — Voc max',
-        message: `String Voc at ${region.t_min_celsius}°C = ${stringVocCold}V exceeds ` +
+        message: `String Voc at ${region.t_min_celsius}°C = ${worstStringVocCold}V exceeds ` +
                  `inverter Uoc max ${inverter.uoc_max_v}V. Reduce panels per string or ` +
                  `switch inverter.`,
-        details: { string_voc_cold: stringVocCold, voc_max: inverter.uoc_max_v },
+        details: { string_voc_cold: worstStringVocCold, voc_max: inverter.uoc_max_v },
       });
-    } else if (stringVocCold > 450 && spec.system.dc_ac_ratio_observed > 1.43) {
+    } else if (worstStringVocCold > 450 && spec.system.dc_ac_ratio_observed > 1.43) {
       // Reduced-mode oversizing requires Voc < 450V STC
       soft_warnings.push({
         rule: 'AS/NZS 5033 §3 — Voc reduced mode',
-        message: `String Voc at cold morning ${stringVocCold}V exceeds 450V required ` +
+        message: `String Voc at cold morning ${worstStringVocCold}V exceeds 450V required ` +
                  `for Fronius reduced-mode oversizing. DC/AC ratio must stay ≤ 1.43.`,
       });
     } else {
       passes.push({
         rule: 'AS/NZS 5033 §3 — Voc cold check',
-        message: `String Voc ${stringVocCold}V at ${region.t_min_celsius}°C ≤ ${inverter.uoc_max_v}V Uoc max ✓`,
+        message: `String Voc ${worstStringVocCold}V at ${region.t_min_celsius}°C ≤ ${inverter.uoc_max_v}V Uoc max ✓`,
+      });
+    }
+  }
+
+  // ── MVP-1 §2.10 — Vmp lower envelope (MPPT tracking floor) ──────────
+  // Per group: SHORTEST string is the worst case (lowest Vmp). If any group's
+  // string vmp_hot falls below mppt_v_min × 1.10, the layout flags.
+  if (panel && inverter && stringGroups.length > 0 && inverter.mppt_v_min != null) {
+    const vmpHot = vmpAtHotTemp(panel, HOT_PANEL_CELSIUS);
+    const vmpFloorHard = inverter.mppt_v_min;
+    const vmpFloorBuffered = r2(inverter.mppt_v_min * MPPT_V_MIN_BUFFER);
+    let worstStringVmpHot = Infinity;
+    for (const g of stringGroups) {
+      const v = r2(vmpHot * g.panels_per_string);
+      if (v < worstStringVmpHot) worstStringVmpHot = v;
+    }
+
+    if (worstStringVmpHot < vmpFloorHard) {
+      hard_fails.push({
+        rule: 'MVP-1 §2.10 — Vmp lower envelope',
+        message: `Shortest string Vmp at ${HOT_PANEL_CELSIUS}°C = ${worstStringVmpHot}V is below ` +
+                 `inverter MPPT minimum ${vmpFloorHard}V. MPPT cannot track; ` +
+                 `harvest collapses on warm days. Add panels to the shortest string or ` +
+                 `pick an inverter with a lower MPPT floor.`,
+        details: { string_vmp_hot: worstStringVmpHot, mppt_v_min: vmpFloorHard },
+      });
+    } else if (worstStringVmpHot < vmpFloorBuffered) {
+      soft_warnings.push({
+        rule: 'MVP-1 §2.10 — Vmp borderline',
+        message: `Shortest string Vmp at ${HOT_PANEL_CELSIUS}°C = ${worstStringVmpHot}V is within ` +
+                 `10% of inverter MPPT minimum ${vmpFloorHard}V. Tracking works ` +
+                 `but with no thermal headroom; consider lengthening that group.`,
+        details: { string_vmp_hot: worstStringVmpHot, mppt_v_min: vmpFloorHard,
+                   buffered_floor: vmpFloorBuffered },
+      });
+    } else {
+      passes.push({
+        rule: 'MVP-1 §2.10 — Vmp lower envelope',
+        message: `Shortest string Vmp ${worstStringVmpHot}V at ${HOT_PANEL_CELSIUS}°C ≥ ` +
+                 `${vmpFloorBuffered}V (mppt_v_min ${vmpFloorHard}V × 1.10) ✓`,
       });
     }
   }
 
   // ── AS/NZS 5033 §3 — Isc + MPPT current ─────────────────────────────
-  if (panel && inverter && panelsPerString && stringCount) {
+  // String count is summed across groups. In parallel topology, strings are
+  // distributed across the inverter's MPPT inputs; the worst-case MPPT carries
+  // ceil(totalStrings / mpptCount) strings.
+  if (panel && inverter && stringCount > 0) {
     const isPair = stringTopology === 'parallel';
     const stringsPerMppt = isPair ? Math.ceil(stringCount / inverter.mppt_count) : 1;
     const impAtMpp = panel.imp_stc;
@@ -148,7 +224,10 @@ export function validateEngineering(spec, options = {}) {
                  `Voids Fronius warranty. Reduce DC capacity or upsize inverter.`,
       });
     } else if (dcAcRatio > inverter.max_pv_kwp_standard / inverter.ac_kw) {
-      const isReducedModeEligible = panelsPerString && panel.voc_stc * panelsPerString < 450;
+      // Reduced-mode oversizing eligibility uses the LONGEST string Voc (STC).
+      // Across groups, the worst case is the longest group's panels_per_string.
+      const isReducedModeEligible = largestPanelsPerString > 0 &&
+        panel.voc_stc * largestPanelsPerString < 450;
       if (!isReducedModeEligible) {
         hard_fails.push({
           rule: 'Fronius reduced-mode oversizing — Voc',
@@ -180,8 +259,15 @@ export function validateEngineering(spec, options = {}) {
 
   // ── Battery: Plus inverter requirement ──────────────────────────────
   if (hasBattery && inverter) {
+    // Prefer the catalogue's battery_capable / is_plus_variant flags (set by
+    // dbLoader from products.specs). Fall back to the legacy COMPATIBILITY
+    // map for the JS-fallback catalogue's 2 SKUs. Either source set TRUE
+    // means the inverter is battery-capable.
     const compat = COMPATIBILITY[inverterSku];
-    if (!compat?.battery_capable) {
+    const isCapable = inverter.battery_capable === true
+                  || inverter.is_plus_variant === true
+                  || compat?.battery_capable === true;
+    if (!isCapable) {
       hard_fails.push({
         rule: 'Battery interface — Plus inverter required',
         message: `Inverter ${inverter.name} is not battery-capable. ` +
@@ -233,11 +319,18 @@ export function validateEngineering(spec, options = {}) {
   }
 
   // ── String design sanity ────────────────────────────────────────────
-  if (panelsPerString && panelsPerString < 4) {
-    hard_fails.push({
-      rule: 'Fronius string minimum',
-      message: `String minimum 4 panels (Fronius). Found ${panelsPerString}.`,
-    });
+  // Fronius requires every string ≥ 4 panels — check each group.
+  if (stringGroups.length > 0) {
+    const shortGroups = stringGroups.filter(g => g.panels_per_string > 0 && g.panels_per_string < 4);
+    if (shortGroups.length > 0) {
+      const summary = shortGroups
+        .map(g => `${g.string_count} × ${g.panels_per_string}`)
+        .join(', ');
+      hard_fails.push({
+        rule: 'Fronius string minimum',
+        message: `String minimum 4 panels (Fronius). Found short group${shortGroups.length > 1 ? 's' : ''}: ${summary}.`,
+      });
+    }
   }
 
   // ── Phase compatibility ─────────────────────────────────────────────

@@ -46,12 +46,21 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
     if (!data) return res.status(204).end();   // no analyses for this contact
 
     // Map analysis → quote-spec bills shape.
-    const annualKwh = Number(data.annual_kwh) || 0;
-    const annualSpend = Number(data.annual_spend_nzd) || 0;
+    //
+    // Important units (verified 2026-06-11 against Abhilash Y's 4 Genesis bills):
+    //   • bill_analyses.variable_charge_total_nzd is ANNUALIZED and EX-GST
+    //   • bill_analyses.fixed_charge_total_nzd    is ANNUALIZED and EX-GST
+    //   • bill_analyses.annual_spend_nzd          is ANNUALIZED and INC-GST (from total_nzd)
+    //   • bill_analyses.annual_kwh                is ANNUALIZED
+    //
+    // Spec wants per-kWh and per-day rates INC GST, so we divide annualized
+    // totals by 365 (NOT by months_covered * 30.4375 — that was the old bug)
+    // and gross up by 15% GST.
+    const annualKwh     = Number(data.annual_kwh) || 0;
+    const annualSpend   = Number(data.annual_spend_nzd) || 0;
     const variableTotal = Number(data.variable_charge_total_nzd) || 0;
-    const fixedTotal = Number(data.fixed_charge_total_nzd) || 0;
-    const months = data.months_covered || 12;
-    const days = months * 30.4375;            // average days/month
+    const fixedTotal    = Number(data.fixed_charge_total_nzd) || 0;
+    const GST_GROSSUP   = 1.15;
 
     // Convert region label to the engine's region key when possible.
     // bill_analyses.region carries values like 'auckland', 'wellington'
@@ -80,7 +89,7 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
       plan_name: data.plan_name || null,
       period_start: data.period_start,
       period_end: data.period_end,
-      months_covered: months,
+      months_covered: data.months_covered,
       analysed_at: data.created_at,
       region: data.region,                 // raw bill-analysis region tag
       engine_region: engineRegion,         // mapped to engine key (may be null)
@@ -109,18 +118,44 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
         annual_kwh: Math.round(annualKwh),
         annual_spend: +annualSpend.toFixed(2),
         retailer: data.retailer || '',
+        // Annualized ex-GST $ ÷ annualized kWh = ex-GST rate; × 1.15 → inc-GST.
         variable_rate_per_kwh_incl_gst: annualKwh > 0
-          ? +(variableTotal / annualKwh).toFixed(4)
+          ? +(variableTotal * GST_GROSSUP / annualKwh).toFixed(4)
           : null,
-        daily_fixed_charge_incl_gst: days > 0
-          ? +(fixedTotal / days).toFixed(2)
-          : null,
-        // Buyback rate is not captured in bill_analyses — leave UI default.
+        // Annualized ex-GST $ ÷ 365 days = ex-GST daily; × 1.15 → inc-GST.
+        daily_fixed_charge_incl_gst:
+          +(fixedTotal * GST_GROSSUP / 365).toFixed(2),
+        // Buyback rate — derived from per-bill kwh_exported + export_credit_nzd
+        // sums in bill_uploads. Only populated for customers who already have
+        // solar; otherwise stays null and spec falls back to the engine default
+        // (0.09 / Mercury current).
+        buyback_rate: await deriveBuybackRate(data.id),
       },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
+
+// Derive per-customer buyback rate from per-bill solar-export totals.
+// Returns null when the customer has no solar export on file (the normal case),
+// so the spec falls through to the engine default.
+async function deriveBuybackRate(analysisId) {
+  if (!sb()) return null;
+  const { data: rows, error } = await sb()
+    .from('bill_uploads')
+    .select('kwh_exported, export_credit_nzd')
+    .eq('analysis_id', analysisId)
+    .not('kwh_exported', 'is', null);
+  if (error || !rows || rows.length === 0) return null;
+  let kwh = 0, dollars = 0;
+  for (const r of rows) {
+    const k = Number(r.kwh_exported) || 0;
+    const d = Number(r.export_credit_nzd) || 0;
+    if (k > 0 && d > 0) { kwh += k; dollars += d; }
+  }
+  if (kwh <= 0 || dollars <= 0) return null;
+  return +(dollars / kwh).toFixed(4);
+}
 
 export default router;

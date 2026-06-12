@@ -22,6 +22,33 @@ export const pmCatalogueAPI = {
   costPicker: () => api.get('/pm/catalogue/cost-picker'),
 };
 
+// Option 2 — engine-side recommendations. Server reads the live catalogue
+// (including mppt_v_min from Option 1) and runs the envelope-search string
+// designer to recommend a layout for the given panel + inverter + count.
+export const pmProposalEngineAPI = {
+  recommendStringLayout: (body) =>
+    api.post('/pm/proposal-engine/recommend-string-layout', body),
+  // Option 4a — §2.8 decision tree inverter selector
+  recommendInverter: (body) =>
+    api.post('/pm/proposal-engine/recommend-inverter', body),
+  // Option 4b — highest-wattage panel from live catalogue
+  recommendPanel: (body) =>
+    api.post('/pm/proposal-engine/recommend-panel', body),
+  // Option 4b — §3.1 battery selector + module count for backup target
+  recommendBattery: (body) =>
+    api.post('/pm/proposal-engine/recommend-battery', body),
+  // Option 4c — full-system orchestration in a single call (used by the
+  // 3-tier autosizer to populate Tier 1 / Tier 2 / Tier 3 from one input).
+  composeSystem: (body) =>
+    api.post('/pm/proposal-engine/compose-system', body),
+  // Option 4c (b) — server-side 3-tier composer with fallback handling
+  composeThreeTiers: (body) =>
+    api.post('/pm/proposal-engine/compose-three-tiers', body),
+  // Option 4c — tier-strip multipliers + labels (read-only for now)
+  tierSettings: () =>
+    api.get('/pm/proposal-engine/tier-settings'),
+};
+
 export const pmQuotesAPI = {
   // CRUD
   list:        (params) => api.get('/pm/quotes', { params }),
@@ -160,13 +187,16 @@ export function emptySpec(contactDefaults = {}) {
         buyback_rate: 0.09,
       },
     },
+    // Option 4c — no hardcoded SKUs. Engine recommends panel / inverter /
+    // battery / string layout via composeSystem. New quotes open with
+    // SKUs null; rep clicks "Recommend X" or picks from dropdown.
     system: {
-      panel:      { sku: 'PHN-PNL-595-DRC', count: 20 },
-      inverter:   { sku: 'FRN-INV-100-G24P-1P' },
-      battery:    { sku: 'BYD-BAT-276-HVM', module_count: 5 },
-      smart_meter: { sku: 'FRN-MTR-63-S1P', phase: 1 },
-      string_topology: 'series',
-      string_design: { panels_per_string: 5, string_count: 4 },
+      panel:      { sku: null, count: null },
+      inverter:   { sku: null },
+      battery:    null,                       // null = battery not included
+      smart_meter: { sku: null, phase: 1 },
+      string_topology: null,
+      string_design: { panels_per_string: null, string_count: null },
       cable_run_metres_estimate: 24,
       phase: 1,
     },

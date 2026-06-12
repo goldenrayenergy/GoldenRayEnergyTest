@@ -786,6 +786,27 @@ export function computeReviewGate({ bills, aggregate, recommendation, regionInfo
     });
   }
 
+  // (3b) Conflicting ICP numbers — stricter than the address check above.
+  // ICP is the unique NZ Electricity Authority property identifier. If two
+  // bills have different ICPs they are physically different connections,
+  // even if the addresses normalise to look similar (e.g. unit 1 vs unit 2
+  // at the same property, or a typo in the printed address).
+  //
+  // This catches the "rep accidentally uploaded one customer's bills with
+  // another's" failure mode that the address check misses when both
+  // customers happen to be at the same street.
+  const normaliseIcp = (i) => (i || '').toString().replace(/\s+/g, '').toUpperCase();
+  const icps = [...new Set(
+    (bills || []).map(b => normaliseIcp(b.icp_number)).filter(Boolean)
+  )];
+  if (icps.length > 1) {
+    reasons.push({
+      code: 'multiple_icp_numbers',
+      severity: 'blocker',
+      message: `Bills are from ${icps.length} different ICPs (electricity connections): ${icps.slice(0, 3).join(', ')}${icps.length > 3 ? '…' : ''}. Each ICP is a unique property — these bills belong to different customers and must not be combined.`,
+    });
+  }
+
   // (4) Region resolution failed → no irradiance basis (rule 6.10)
   if (regionInfo && regionInfo.region_resolved_from === 'default' && !addresses.length) {
     reasons.push({

@@ -39,7 +39,9 @@ export default function QuoteBillAnalysisPage() {
           setError('No bill analysis linked to this quote — bills were typed manually.');
           setLoading(false); return;
         }
-        const a = await api.get(`/billAnalysis/${analysisId}`);
+        // Server mounts at /api/bill-analysis (kebab-case); the camelCase
+        // path 404s. One-shot fix — only call site in the client.
+        const a = await api.get(`/bill-analysis/${analysisId}`);
         if (cancelled) return;
         setAnalysis(a.data?.analysis || a.data);
         setBills(a.data?.bills || []);

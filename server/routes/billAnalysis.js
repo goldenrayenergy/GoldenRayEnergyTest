@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import crypto from 'crypto';
 import { supabaseAdmin } from '../config/supabase.js';
 import { parseBillPdf, parseBillImage } from '../services/billOcrService.js';
 import { analyzeBills } from '../services/billAnalysisService.js';
@@ -85,28 +86,139 @@ async function escalatePartialOnReview({ contactId, enquiryId, analysisId, analy
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Split a NZ service-address string into street / suburb / city / postcode.
+// Handles common formats:
+//   "31A HILLVIEW AVENUE, NEW WINDSOR, AUCKLAND 0600"
+//   "4/11 HATFIELD PLACE, ALBANY HEIGHTS, AUCKLAND"
+//   "75 MAHIA ROAD, AUCKLAND" (no suburb)
+//   "31A HILLVIEW AVENUE NEW WINDSOR AUCKLAND 0600" (no commas)
+//
+// Returns {street, suburb, city, postcode} with nulls for any segment that
+// couldn't be confidently identified.
+// NZ street-type tokens that mark the end of the street component. Order
+// matters only in that we test the longer multi-word ones first ("BOULEVARD"
+// before "BLVD" — actually they're checked as whole tokens so order doesn't
+// matter, but kept here for documentation of the supported set).
+const NZ_STREET_TYPES = new Set([
+  'STREET','ST','ROAD','RD','AVENUE','AVE','LANE','LN','DRIVE','DR',
+  'CRESCENT','CRES','CR','PLACE','PL','WAY','COURT','CT','TERRACE','TCE',
+  'BOULEVARD','BLVD','CLOSE','CL','GROVE','GR','PARK','SQUARE','SQ',
+  'GARDENS','GDNS','MEWS','PARADE','PDE','PROMENADE','QUAY','RISE','HEIGHTS','HTS',
+  'PARKWAY','PKWY','CIRCLE','CIR','LOOP','TRAIL','HIGHWAY','HWY',
+]);
+
+// Known NZ cities + main metro areas. When parsing "STREET-NAME ST SUBURB CITY"
+// without commas, the trailing one or two tokens are typically the city.
+const NZ_CITIES = new Set([
+  'AUCKLAND','WELLINGTON','CHRISTCHURCH','HAMILTON','TAURANGA','DUNEDIN',
+  'NAPIER','PALMERSTON NORTH','NELSON','ROTORUA','NEW PLYMOUTH','WHANGAREI',
+  'INVERCARGILL','WANGANUI','GISBORNE','TIMARU','HASTINGS','BLENHEIM',
+  'MASTERTON','LEVIN','TAUPO','PUKEKOHE','HAVELOCK NORTH','UPPER HUTT',
+  'LOWER HUTT','PORIRUA','PAPAKURA','MANUKAU','NORTH SHORE','WAITAKERE',
+  'QUEENSTOWN','WANAKA','OAMARU','ASHBURTON',
+]);
+
+function splitNzAddress(addr) {
+  if (!addr || typeof addr !== 'string') return {};
+  let cleaned = addr.replace(/\s+/g, ' ').trim();
+  // Strip "NEW ZEALAND" / "AOTEAROA" / "NZ" country suffix when present —
+  // otherwise the city slot picks up "ZEALAND" instead of the real city.
+  cleaned = cleaned.replace(/\b(NEW ZEALAND|AOTEAROA NEW ZEALAND|AOTEAROA|NZ)\b\.?\s*$/i, '').trim();
+  // Pull a trailing 4-digit postcode if present.
+  let postcode = null;
+  const pcMatch = cleaned.match(/\b(\d{4})\s*$/);
+  let body = cleaned;
+  if (pcMatch) { postcode = pcMatch[1]; body = body.slice(0, pcMatch.index).trim(); }
+  // Country suffix could also come AFTER the postcode (rare). Strip again.
+  body = body.replace(/\b(NEW ZEALAND|AOTEAROA NEW ZEALAND|AOTEAROA|NZ)\b\.?\s*$/i, '').trim();
+  // Comma-separated case (most reliable)
+  if (body.includes(',')) {
+    const parts = body.split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length >= 3) {
+      return { street: parts[0], suburb: parts[1], city: parts[2], postcode };
+    }
+    if (parts.length === 2) {
+      return { street: parts[0], suburb: null, city: parts[1], postcode };
+    }
+    if (parts.length === 1) {
+      return { street: parts[0], suburb: null, city: null, postcode };
+    }
+  }
+  // ── No-comma path (e.g. Genesis bill "31A HILLVIEW AVENUE NEW WINDSOR
+  //    AUCKLAND") — detect the street-type token to split street | rest, then
+  //    split rest into suburb | city using the known NZ_CITIES set. Falls
+  //    through to "everything into street" only when neither heuristic fires.
+  const tokens = body.split(/\s+/).filter(Boolean);
+  if (tokens.length >= 2) {
+    // Find the LAST street-type token (some addresses have e.g. "PARK AVE"
+    // where PARK alone would match — taking the last match keeps street type
+    // at the right boundary).
+    let streetTypeIdx = -1;
+    for (let i = 0; i < tokens.length; i++) {
+      if (NZ_STREET_TYPES.has(tokens[i].toUpperCase().replace(/[.,]/g, ''))) {
+        streetTypeIdx = i;
+      }
+    }
+    if (streetTypeIdx > 0 && streetTypeIdx < tokens.length - 1) {
+      const street = tokens.slice(0, streetTypeIdx + 1).join(' ');
+      const rest   = tokens.slice(streetTypeIdx + 1);
+      // City heuristic: longest trailing substring that matches a known city.
+      // Try the last 2 tokens first ("NORTH SHORE"), then last 1 ("AUCKLAND").
+      let city = null, suburb = null;
+      if (rest.length >= 2 && NZ_CITIES.has(rest.slice(-2).join(' ').toUpperCase())) {
+        city   = rest.slice(-2).join(' ');
+        suburb = rest.slice(0, -2).join(' ') || null;
+      } else if (rest.length >= 1 && NZ_CITIES.has(rest[rest.length - 1].toUpperCase())) {
+        city   = rest[rest.length - 1];
+        suburb = rest.slice(0, -1).join(' ') || null;
+      } else {
+        // Unknown trailing — assume last token is city (NZ residential default).
+        city   = rest[rest.length - 1] || null;
+        suburb = rest.slice(0, -1).join(' ') || null;
+      }
+      return { street, suburb: suburb || null, city: city || null, postcode };
+    }
+  }
+  // Fallback: no street-type token recognised. Whole thing → street.
+  return { street: body, suburb: null, city: null, postcode };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // P5 (A2) — Address write-through to contacts row.
 //
 // After a bill analysis successfully inserts (or links), propagate the
-// detected region + postcode back to the contact's record. Two safety
-// guards:
+// detected region + postcode + street/suburb/city back to the contact's
+// record. Two safety guards:
 //   • Only writes when a contact_id is present
 //   • SKIPS fields that are already populated on the contact — never
 //     overwrites rep-entered data with parser output
 // ────────────────────────────────────────────────────────────────────────────
-async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode }) {
+async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode, service_address, customer_name }) {
   if (!supabaseAdmin || !contactId) return;
-  if (!region && !postcode) return;
+  if (!region && !postcode && !service_address && !customer_name) return;
   try {
     const { data: existing } = await supabaseAdmin
       .from('contacts')
-      .select('id, region, postcode')
+      .select('id, name, postcode, street, suburb, city')
       .eq('id', contactId)
       .maybeSingle();
     if (!existing) return;
     const updates = {};
-    if (region   && !existing.region)   updates.region   = region;
     if (postcode && !existing.postcode) updates.postcode = postcode;
+    // P5 (A2)+(A3) Customer name — capture from bill header. Only writes if
+    // contact has a placeholder or empty name; never overwrites rep-entered.
+    // Placeholders we replace: empty, "Unknown", a quote_ref-style ID.
+    const looksPlaceholder = !existing.name
+                          || /^unknown$/i.test(existing.name)
+                          || /^[A-Z]{2,4}-\d{4}/.test(existing.name);
+    if (customer_name && looksPlaceholder) updates.name = customer_name;
+    if (service_address) {
+      const split = splitNzAddress(service_address);
+      if (split.street   && !existing.street)   updates.street   = split.street;
+      if (split.suburb   && !existing.suburb)   updates.suburb   = split.suburb;
+      if (split.city     && !existing.city)     updates.city     = split.city;
+      if (split.postcode && !existing.postcode && !updates.postcode) updates.postcode = split.postcode;
+    }
     if (Object.keys(updates).length === 0) return;
     await supabaseAdmin.from('contacts').update(updates).eq('id', contactId);
   } catch (e) {
@@ -296,7 +408,7 @@ function buildUploadRows(parsedBills, analysisId) {
     analysis_id:          analysisId,
     file_name:            b.file_name,
     file_size_bytes:      b.file_size_bytes,
-    file_hash:            null,
+    file_hash:            b.file_hash || null,
     ocr_text_excerpt:     b.ocr_text_excerpt,
     ocr_confidence:       b.ocr_confidence,
     retailer:             b.retailer,
@@ -366,6 +478,10 @@ router.post('/', upload.array('files', 12), async (req, res) => {
     const sourceFiles = [];                          // parallel to parsedBills for PDF/image
     const ocrErrors = [];
     const csvSummaries = [];                         // per-CSV summary for the response
+    // Within-batch dedup: hash each PDF/image and skip duplicates silently.
+    // (CSV files are not deduped — they synthesise multiple bills.)
+    const seenHashes = new Set();
+    const skippedDuplicates = [];
     for (const f of req.files) {
       try {
         if (isCsvFile(f)) {
@@ -394,7 +510,15 @@ router.post('/', upload.array('files', 12), async (req, res) => {
             warnings:     csvResult.warnings,
           });
         } else {
+          // Hash the file bytes for dedup + later persistence
+          const fileHash = crypto.createHash('sha256').update(f.buffer).digest('hex');
+          if (seenHashes.has(fileHash)) {
+            skippedDuplicates.push({ file: f.originalname, file_hash: fileHash });
+            continue;                                // silent skip within batch
+          }
+          seenHashes.add(fileHash);
           const parsed = await parseUploadedFile(f);
+          parsed.file_hash = fileHash;               // surface to buildUploadRows
           parsedBills.push(parsed);
           sourceFiles.push(f);
         }
@@ -403,14 +527,38 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       }
     }
 
-    // We need at least one bill with kWh + total to run the analysis
-    const usableBills = parsedBills.filter(b => b.kwh_total != null && b.total_nzd != null);
+    // Batch B #5 — Hard-fail on bills with missing critical fields.
+    // A bill with no kwh_total or no total_nzd cannot produce usable
+    // analysis output. Previously these were persisted to bill_uploads
+    // anyway (with parse_errors) and only filtered out at aggregation
+    // time, which cluttered the DB and risked leaks if aggregation logic
+    // ever changes. Now: only usable bills get persisted. Rejected bills
+    // are surfaced in the response with a clear reason so the rep can
+    // re-upload them after fixing (or switch to manual entry).
+    const billsWithSources = parsedBills.map((bill, i) => ({ bill, source: sourceFiles[i] }));
+    const usable   = billsWithSources.filter(x => x.bill.kwh_total != null && x.bill.total_nzd != null);
+    const rejected = billsWithSources.filter(x => !(x.bill.kwh_total != null && x.bill.total_nzd != null));
+    const usableBills      = usable.map(x => x.bill);
+    const usableSourceFiles = usable.map(x => x.source);
+    const rejectedBills = rejected.map(x => {
+      const errs = x.bill.parse_errors || [];
+      const reason =
+        errs.find(e => e.code === 'pdf_image_only_ocr_unavailable')?.reason ||
+        errs.find(e => e.field === 'bill_type')?.reason ||
+        errs.find(e => e.field === 'kwh_total')?.reason ||
+        errs.find(e => e.field === 'all')?.reason ||
+        'kWh or total amount could not be extracted from this bill.';
+      return {
+        file: x.bill.file_name || x.source?.originalname || 'unknown',
+        retailer: x.bill.retailer || null,
+        reason,
+      };
+    });
+
     if (usableBills.length === 0) {
       return res.status(400).json({
-        error: 'Couldn\'t extract enough numbers from any of those PDFs to run the analysis. They may be image-scanned or use an unrecognised retailer layout.',
-        parse_summary: parsedBills.map(b => ({
-          retailer: b.retailer, ocr_confidence: b.ocr_confidence, parse_errors: b.parse_errors,
-        })),
+        error: 'Couldn\'t extract enough numbers from any of those PDFs to run the analysis. They may be image-scanned, gas bills, or use an unrecognised retailer layout.',
+        rejected_bills: rejectedBills,
         ocr_errors: ocrErrors,
       });
     }
@@ -438,9 +586,14 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       .single();
     if (insErr) throw insErr;
 
-    // P5 (A2) — write parsed region/postcode through to the contact row.
-    writeAddressThroughToContact(supabaseAdmin, partialContactId,
-      { region, postcode: req.body.postcode });
+    // P5 (A2) + Address-writethrough v2 + Customer-name writethrough — propagate
+    // region/postcode + the parsed street/suburb/city + the customer name from
+    // the first usable bill back to the contact.
+    writeAddressThroughToContact(supabaseAdmin, partialContactId, {
+      region, postcode: req.body.postcode,
+      service_address: usableBills.find(b => b.service_address)?.service_address || null,
+      customer_name:   usableBills.find(b => b.customer_name)?.customer_name     || null,
+    });
 
     // Fire-and-forget escalation when review_required + partial linked.
     escalatePartialOnReview({
@@ -451,7 +604,9 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       reqBody: req.body,
     });
 
-    const uploadRows = buildUploadRows(parsedBills, inserted.id);
+    // Batch B #5 — only persist USABLE bills to bill_uploads (rejected
+    // ones are surfaced in the response instead so the rep can re-upload).
+    const uploadRows = buildUploadRows(usableBills, inserted.id);
     const { data: insertedUploads, error: uplErr } = await supabaseAdmin
       .from('bill_uploads')
       .insert(uploadRows)
@@ -459,15 +614,15 @@ router.post('/', upload.array('files', 12), async (req, res) => {
     if (uplErr) console.error('Bill uploads insert failed (non-fatal):', uplErr.message);
 
     // ── Store original bill PDFs/images to Supabase Storage ────────────────
-    // Per business decision (Path A): store every bill so sales has the
-    // source artifact when reviewing flagged bills + future re-analysis.
+    // Per business decision (Path A): store every USABLE bill so sales has
+    // the source artifact when reviewing flagged bills + future re-analysis.
+    // Rejected bills are NOT stored — they're returned to the rep with a
+    // clear error so they can re-upload (clearer copy / different format).
     // Bucket name + setup script: server/scripts/setup-bill-storage.js.
-    // Failure here is non-fatal — the analysis still completes; sales will
-    // just not have the original PDF to look at for this customer.
-    if (insertedUploads?.length === parsedBills.length) {
-      for (let i = 0; i < parsedBills.length; i++) {
+    if (insertedUploads?.length === usableBills.length) {
+      for (let i = 0; i < usableBills.length; i++) {
         const uploadId = insertedUploads[i].id;
-        const file     = sourceFiles[i];
+        const file     = usableSourceFiles[i];
         // CSV-derived synthesised bills have no source-PDF/image to upload.
         if (!file) continue;
         const ext      = (file.originalname.match(/\.([a-z0-9]+)$/i)?.[1] || 'bin').toLowerCase();
@@ -494,16 +649,17 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       }
     }
 
-    // 4. Normalise into customer_profiles (Phase 1.5) — non-blocking
-    const normResult = await normaliseFromBillAnalysis(inserted.id, { ...analysis, region }, parsedBills);
+    // 4. Normalise into customer_profiles (Phase 1.5) — non-blocking.
+    //    Only usable bills contribute (rejected bills have no values to normalise).
+    const normResult = await normaliseFromBillAnalysis(inserted.id, { ...analysis, region }, usableBills);
 
     // source_door reflects how the data arrived — CSV uploads land in their
     // own bucket so analytics can split bill-upload customers from smart-meter
     // customers.
     const csvCount = csvSummaries.length;
-    const pdfImgCount = parsedBills.length - csvSummaries.reduce((s, c) => s + (c.month_count || 0), 0);
+    const pdfImgCount = usableBills.length - csvSummaries.reduce((s, c) => s + (c.month_count || 0), 0);
     const sourceDoor = csvCount > 0 && pdfImgCount === 0 ? 'smart_meter_csv'
-                     : parsedBills.length >= 6 ? 'bill_upload_12'
+                     : usableBills.length >= 6 ? 'bill_upload_12'
                      : 'bill_upload_partial';
     res.status(201).json({
       id: inserted.id,
@@ -511,7 +667,7 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       source_door: sourceDoor,
       confidence_band: normResult.profile?.confidence_band || 'medium',
       profile_normalised: normResult.ok,
-      parse_summary: parsedBills.map(b => ({
+      parse_summary: usableBills.map(b => ({
         retailer:        b.retailer,
         period_start:    b.period_start,
         period_end:      b.period_end,
@@ -522,6 +678,11 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       })),
       csv_summary: csvSummaries.length ? csvSummaries : undefined,
       ocr_errors: ocrErrors,
+      skipped_duplicates: skippedDuplicates.length ? skippedDuplicates : undefined,
+      // Batch B #5 — bills that couldn't be parsed (e.g. image-only PDFs, gas
+      // bills, missing kWh). NOT persisted to bill_uploads. The rep should
+      // re-upload these as clearer copies, or use manual entry on the quote.
+      rejected_bills: rejectedBills.length ? rejectedBills : undefined,
     });
   } catch (e) {
     console.error('Bill analysis error:', e.message);
@@ -946,9 +1107,42 @@ router.post('/:id/promote-to-quote', async (req, res) => {
       expires_at: null,
     }).eq('id', req.params.id);
 
-    // P5 (A2) — propagate parsed region/postcode to the now-linked contact
-    writeAddressThroughToContact(supabaseAdmin, contactId,
-      { region: analysis.region, postcode: analysis.postcode });
+    // P5 (A2) + Address-writethrough v2 — propagate region/postcode AND the
+    // service_address captured per-bill back to the now-linked contact.
+    // Pull the first non-null service_address from this analysis's bill_uploads.
+    const { data: addrRow } = await supabaseAdmin
+      .from('bill_uploads')
+      .select('service_address')
+      .eq('analysis_id', req.params.id)
+      .not('service_address', 'is', null)
+      .limit(1)
+      .maybeSingle();
+    // Customer name is not stored as a column on bill_uploads — re-extract
+    // from OCR text excerpt at link time using the shared helper.
+    const { data: ocrRow } = await supabaseAdmin
+      .from('bill_uploads')
+      .select('ocr_text_excerpt, ocr_text_full')
+      .eq('analysis_id', req.params.id)
+      .limit(1)
+      .maybeSingle();
+    let claimedCustomerName = null;
+    try {
+      const { default: ocrSvc } = await import('../services/billOcrService.js');
+      // extractCustomerName is internal — use the parser entrypoint instead
+      if (ocrRow?.ocr_text_excerpt || ocrRow?.ocr_text_full) {
+        const { parseBillText } = await import('../services/billOcrService.js');
+        const reparsed = parseBillText(ocrRow.ocr_text_full || ocrRow.ocr_text_excerpt);
+        claimedCustomerName = reparsed.customer_name || null;
+      }
+    } catch (e) {
+      console.warn('Customer-name re-extract failed (non-fatal):', e.message);
+    }
+    writeAddressThroughToContact(supabaseAdmin, contactId, {
+      region: analysis.region,
+      postcode: analysis.postcode,
+      service_address: addrRow?.service_address || null,
+      customer_name:   claimedCustomerName,
+    });
 
     // 5. Sales follow-up task (high priority, due tomorrow)
     await supabaseAdmin.from('tasks').insert({
