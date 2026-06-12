@@ -92,7 +92,7 @@ router.post('/:id/generate',
     let engineOptions = {};
     try { engineOptions = { catalogue: await getCachedCatalogue(sb()) }; }
     catch (e) { console.warn('quote-actions /generate: catalogue load failed:', e.message); }
-    const engine = runEngine(current.spec, engineOptions);
+    const engine = await runEngine(current.spec, engineOptions);
     if (!engine.ok) {
       return res.status(422).json({ error: 'Engine refused current spec.',
         config_errors: engine.config_errors });
@@ -226,7 +226,7 @@ router.post('/:id/email',
     let engineOptions = {};
     try { engineOptions = { catalogue: await getCachedCatalogue(sb()) }; }
     catch (e) { console.warn('quote-actions /email: catalogue load failed:', e.message); }
-    const engine = runEngine(current.spec, engineOptions);
+    const engine = await runEngine(current.spec, engineOptions);
     if (!engine.ok) return res.status(422).json({ error: 'Engine refused current spec on re-evaluation.' });
     const scenarios = runThreeScenarios(current.spec, engine.cost, {}, engineOptions);
     const proposalData = buildProposalData({

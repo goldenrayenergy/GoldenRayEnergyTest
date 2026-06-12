@@ -89,7 +89,7 @@ console.log('━'.repeat(80));
 
 // ── 1. Run engine ────────────────────────────────────────────────────────
 section('Step 1 — runEngine (3 tiers)');
-const engineResult = runEngine(spec);
+const engineResult = await runEngine(spec);
 check('Engine ok', engineResult.ok);
 check('is_multi_tier=true', engineResult.is_multi_tier === true);
 check('3 tier results', engineResult.tiers.length === 3);
@@ -203,7 +203,7 @@ section('Step 5 — Single-tier (legacy) input still works');
   singleSpec.pricing = { customer_price_inc_gst: 42000, stage: 'stage_1_estimate', final_mode: true,
                          discount: { applied_nzd: 0, owner_approved: false, reason: null }};
   singleSpec.system = { ...singleSpec.system, battery: { sku: 'BYD-BAT-276-HVM', module_count: 4 }};
-  const eng = runEngine(singleSpec);
+  const eng = await runEngine(singleSpec);
   const sc = runThreeScenarios(singleSpec, eng.cost);
   const legacyHtml = buildCustomerProposalHTML({
     spec: singleSpec, costResult: eng.cost, scenarios: sc,

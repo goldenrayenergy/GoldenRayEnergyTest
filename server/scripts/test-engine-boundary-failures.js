@@ -17,8 +17,8 @@ import { runEngine } from '../services/pm/proposalEngine/index.js';
 let passCount = 0, failCount = 0;
 const failures = [];
 
-function expectRejection(name, spec, expected) {
-  const r = runEngine(spec);
+async function expectRejection(name, spec, expected) {
+  const r = await runEngine(spec);
 
   // Collect what actually happened
   const configErrPaths = (r.config_errors || []).map(e => e.path);
@@ -95,7 +95,7 @@ console.log();
   spec.system.panel.count = 26;
   spec.system.string_design = { panels_per_string: 13, string_count: 2 };
   // Voc cold per panel = 52.92 × 1.0875 = 57.55V × 13 = 748V > 600V Uoc max
-  expectRejection('1. 13-in-series Voc violation (748V > 600V)',
+  await expectRejection('1. 13-in-series Voc violation (748V > 600V)',
     spec, { type: 'hard_fail', contains: 'Voc max' });
 }
 
@@ -103,7 +103,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.system.inverter.sku = 'FRN-INV-100-G24-1P';  // base, not Plus
-  expectRejection('2. Battery on base GEN24 (not Plus)',
+  await expectRejection('2. Battery on base GEN24 (not Plus)',
     spec, { type: 'config_error', contains: 'battery' });
 }
 
@@ -113,7 +113,7 @@ console.log();
   spec.system.battery.module_count = 9;
   spec.system.string_topology = 'series';
   spec.system.string_design = { panels_per_string: 10, string_count: 2 };
-  expectRejection('3. 9× HVM modules (max 8 per tower)',
+  await expectRejection('3. 9× HVM modules (max 8 per tower)',
     spec, { type: 'hard_fail', contains: 'module count' });
 }
 
@@ -121,7 +121,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.system.battery.module_count = 2;
-  expectRejection('4. 2× HVM modules (min 3 per tower)',
+  await expectRejection('4. 2× HVM modules (min 3 per tower)',
     spec, { type: 'hard_fail', contains: 'module count' });
 }
 
@@ -130,15 +130,17 @@ console.log();
   const spec = baseSpec();
   spec.system.panel.count = 24;
   spec.system.string_design = { panels_per_string: 3, string_count: 8 };
-  expectRejection('5. 3-panel strings (Fronius minimum 4)',
-    spec, { type: 'hard_fail', contains: 'string minimum' });
+  // Caught at config-validation layer (panels_per_string hard_min = 4) before
+  // it reaches the engineering Fronius-min hard_fail. Both layers protect us.
+  await expectRejection('5. 3-panel strings (Fronius minimum 4)',
+    spec, { type: 'config_error', contains: 'panels_per_string' });
 }
 
 // ── 6. Phase mismatch (3ph meter on 1ph inverter) ───────────────────────────
 {
   const spec = baseSpec();
   spec.system.smart_meter = { sku: 'FRN-MTR-63-S3P', phase: 3 };
-  expectRejection('6. 3-phase meter on 1-phase inverter',
+  await expectRejection('6. 3-phase meter on 1-phase inverter',
     spec, { type: 'hard_fail', contains: 'phase mismatch' });
 }
 
@@ -146,7 +148,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.pricing.customer_price_inc_gst = 25000;  // engine cost ~$33k, well below
-  expectRejection('7. Customer price $25k on $33k-cost system (below floor)',
+  await expectRejection('7. Customer price $25k on $33k-cost system (below floor)',
     spec, { type: 'below_floor' });
 }
 
@@ -154,7 +156,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.pricing.discount = { applied_nzd: 2000, owner_approved: false, reason: 'Customer asked' };
-  expectRejection('8. Discount > 0 without owner_approved',
+  await expectRejection('8. Discount > 0 without owner_approved',
     spec, { type: 'config_error', contains: 'owner_approved' });
 }
 
@@ -163,7 +165,7 @@ console.log();
   const spec = baseSpec();
   spec.pricing.discount = { applied_nzd: 2000, owner_approved: true, reason: null,
                             approved_by: 'owner', approved_at: '2026-06-09' };
-  expectRejection('9. Discount > 0 without reason',
+  await expectRejection('9. Discount > 0 without reason',
     spec, { type: 'config_error', contains: 'reason' });
 }
 
@@ -172,7 +174,7 @@ console.log();
   const spec = baseSpec();
   spec.system.panel.count = 24;
   spec.system.string_design = { panels_per_string: 5, string_count: 4 };  // 20 ≠ 24
-  expectRejection('10. Panel count mismatch with string design',
+  await expectRejection('10. Panel count mismatch with string design',
     spec, { type: 'config_error', contains: 'string_design' });
 }
 
@@ -180,7 +182,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.customer.address.region = 'mars_colony';
-  expectRejection('11. Unknown region "mars_colony"',
+  await expectRejection('11. Unknown region "mars_colony"',
     spec, { type: 'config_error', contains: 'region' });
 }
 
@@ -188,7 +190,7 @@ console.log();
 {
   const spec = baseSpec();
   delete spec.customer.email;
-  expectRejection('12. Missing customer.email',
+  await expectRejection('12. Missing customer.email',
     spec, { type: 'config_error', contains: 'email' });
 }
 
@@ -196,7 +198,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.customer.email = 'not-an-email';
-  expectRejection('13. Invalid email format',
+  await expectRejection('13. Invalid email format',
     spec, { type: 'config_error', contains: 'email' });
 }
 
@@ -204,7 +206,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.system.panel.sku = 'BOG-PNL-9999-FAKE';
-  expectRejection('14. Unknown panel SKU',
+  await expectRejection('14. Unknown panel SKU',
     spec, { type: 'config_error', contains: 'panel.sku' });
 }
 
@@ -212,7 +214,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.bills.manual_entry.annual_kwh = 500;
-  expectRejection('15. Annual kWh 500 (below 1000 floor)',
+  await expectRejection('15. Annual kWh 500 (below 1000 floor)',
     spec, { type: 'config_error', contains: 'annual_kwh' });
 }
 
@@ -220,7 +222,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.bills.manual_entry.annual_kwh = 80000;
-  expectRejection('16. Annual kWh 80000 (above 60000 ceiling)',
+  await expectRejection('16. Annual kWh 80000 (above 60000 ceiling)',
     spec, { type: 'config_error', contains: 'annual_kwh' });
 }
 
@@ -228,7 +230,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.pricing.customer_price_inc_gst = 0;
-  expectRejection('17. Customer price 0',
+  await expectRejection('17. Customer price 0',
     spec, { type: 'config_error', contains: 'customer_price_inc_gst' });
 }
 
@@ -237,7 +239,7 @@ console.log();
   const spec = baseSpec();
   spec.system.panel.count = 26;
   spec.system.string_design = { panels_per_string: 13, string_count: 2 };
-  expectRejection('18. can_ship = false when Voc hard-fails',
+  await expectRejection('18. can_ship = false when Voc hard-fails',
     spec, { type: 'cant_ship' });
 }
 
@@ -245,7 +247,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.pricing.customer_price_inc_gst = 20000;
-  expectRejection('19. can_ship = false when below margin floor',
+  await expectRejection('19. can_ship = false when below margin floor',
     spec, { type: 'cant_ship' });
 }
 
@@ -253,7 +255,7 @@ console.log();
 {
   const spec = baseSpec();
   spec.bills = {};
-  expectRejection('20. Bills missing both array and manual_entry',
+  await expectRejection('20. Bills missing both array and manual_entry',
     spec, { type: 'config_error', contains: 'bills' });
 }
 

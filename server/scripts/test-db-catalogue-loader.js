@@ -165,7 +165,7 @@ const fullSpec = {
 };
 
 const warnings = [];
-const e2e = runEngine(fullSpec, { catalogue: cat, warnings });
+const e2e = await runEngine(fullSpec, { catalogue: cat, warnings });
 check('Engine returned ok=true with DB catalogue + role-based BoM', e2e.ok,
       `config_errors=${JSON.stringify(e2e.config_errors)}, bom_error=${e2e.bom_error}, cost_error=${e2e.cost_error}`);
 if (e2e.ok) {

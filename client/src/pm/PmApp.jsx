@@ -1,5 +1,8 @@
+import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import api from '../services/api';
+import { bootstrapFieldLimits } from './utils/fieldHints';
 
 import PmLayout from './PmLayout';
 import OwnerDashboardPage from './pages/OwnerDashboardPage';
@@ -24,6 +27,10 @@ function PmProtected({ children }) {
 // Mounted at /pm in the main App.jsx with React.lazy code-splitting so the
 // PM tool bundle never loads on the existing portal/website pages.
 export default function PmApp() {
+  // Boot-time fetch of admin-tunable field_limits (Session B). Fire-and-
+  // forget — hints fall back to STATIC_DEFAULTS until this resolves.
+  useEffect(() => { bootstrapFieldLimits(api); }, []);
+
   return (
     <Routes>
       <Route element={<PmProtected><PmLayout /></PmProtected>}>

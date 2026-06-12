@@ -171,7 +171,7 @@ const expectedFraction = selfConsumptionFraction(expectedBatteryKwh, false);   /
 // ────────────────────────────────────────────────────────────────────────────
 // Run engine + assert
 // ────────────────────────────────────────────────────────────────────────────
-const result = runEngine(spec);
+const result = await runEngine(spec);
 if (!result.ok) {
   console.log('❌ Engine refused fictional spec — should have passed:');
   if (result.config_errors) for (const e of result.config_errors) console.log(`    ${e.path}: ${e.message}`);

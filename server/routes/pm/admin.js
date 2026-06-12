@@ -16,9 +16,19 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth.js';
 import { supabaseAdmin } from '../../config/supabase.js';
+import { invalidate as invalidateFieldLimits } from '../../services/pm/proposalEngine/fieldLimits.js';
 
 const router = Router();
 router.use(authenticate);
+
+// Admin-only gate for write endpoints. Reads stay authenticated-only so reps
+// + non-admin staff can see what the limits are for forms/hints.
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin role required.' });
+  }
+  next();
+}
 
 // ── company_settings ──────────────────────────────────────────────────────
 router.get('/settings', async (_req, res) => {
@@ -259,6 +269,130 @@ router.delete('/labour-rates/:id', async (req, res) => {
       .from('labour_rates').update({ is_active: false }).eq('id', req.params.id);
     if (error) throw error;
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── field_limits ──────────────────────────────────────────────────────────
+//   GET  /api/pm/admin/field-limits          → list all rows (auth-only)
+//   GET  /api/pm/admin/field-limits/audit    → last 100 audit entries
+//   PATCH /api/pm/admin/field-limits/:path   → update + audit + cache invalidate (admin-only)
+//
+// PATCH body: { hard_min, hard_max, typical_min, typical_max, unit?, notes?, reason }
+// reason MUST be >= 10 chars (also DB-enforced). Server writes the audit row
+// in the same query batch, then invalidates the in-process cache so the next
+// engine run picks up the new value.
+router.get('/field-limits', async (_req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const { data, error } = await supabaseAdmin
+      .from('field_limits')
+      .select('*')
+      .order('path');
+    if (error) throw error;
+    res.json({ rows: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/field-limits/audit', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const q = supabaseAdmin
+      .from('field_limits_audit')
+      .select('*')
+      .order('occurred_at', { ascending: false })
+      .limit(limit);
+    if (req.query.path) q.eq('path', req.query.path);
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ rows: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.patch('/field-limits/:path', requireAdmin, async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    const path = req.params.path;
+    const { hard_min, hard_max, typical_min, typical_max, unit, notes, reason } = req.body;
+
+    // Server-side validation (DB CHECK constraints catch it too, but a clean
+    // error message beats a Postgres constraint error in the UI).
+    const nums = { hard_min, hard_max, typical_min, typical_max };
+    for (const [k, v] of Object.entries(nums)) {
+      if (v == null || !Number.isFinite(Number(v))) {
+        return res.status(400).json({ error: `${k} is required and must be a number.` });
+      }
+    }
+    if (Number(hard_min) >= Number(hard_max)) {
+      return res.status(400).json({ error: 'hard_min must be less than hard_max.' });
+    }
+    if (Number(typical_min) < Number(hard_min) || Number(typical_max) > Number(hard_max)
+        || Number(typical_min) > Number(typical_max)) {
+      return res.status(400).json({ error: 'typical range must fit within hard range and typical_min ≤ typical_max.' });
+    }
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 10) {
+      return res.status(400).json({ error: 'reason is required and must be at least 10 characters.' });
+    }
+
+    // Fetch existing row for the audit "before" snapshot. Treat missing as 404
+    // (caller should use a future POST endpoint to add new paths — out of scope here).
+    const { data: prev, error: prevErr } = await supabaseAdmin
+      .from('field_limits').select('*').eq('path', path).maybeSingle();
+    if (prevErr) throw prevErr;
+    if (!prev) return res.status(404).json({ error: `No field_limits row for path "${path}".` });
+
+    // Update + audit. Done as two separate queries (Supabase JS client doesn't
+    // expose multi-statement transactions); ordering is update-then-audit so a
+    // failed audit insert leaves a real change without history rather than a
+    // phantom audit row. Trade-off accepted because audits are append-only and
+    // a follow-up audit-repair script can reconcile.
+    const update = {
+      hard_min: Number(hard_min),
+      hard_max: Number(hard_max),
+      typical_min: Number(typical_min),
+      typical_max: Number(typical_max),
+      unit: unit ?? prev.unit,
+      notes: notes ?? prev.notes,
+      last_updated_by: req.user?.id || null,
+    };
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from('field_limits').update(update).eq('path', path).select().single();
+    if (updErr) throw updErr;
+
+    const audit = {
+      path,
+      prev_hard_min:    prev.hard_min,
+      prev_hard_max:    prev.hard_max,
+      prev_typical_min: prev.typical_min,
+      prev_typical_max: prev.typical_max,
+      prev_unit:        prev.unit,
+      prev_notes:       prev.notes,
+      new_hard_min:     updated.hard_min,
+      new_hard_max:     updated.hard_max,
+      new_typical_min:  updated.typical_min,
+      new_typical_max:  updated.typical_max,
+      new_unit:         updated.unit,
+      new_notes:        updated.notes,
+      actor_user_id:    req.user?.id || null,
+      reason:           reason.trim(),
+    };
+    const { error: auditErr } = await supabaseAdmin.from('field_limits_audit').insert(audit);
+    if (auditErr) {
+      // The update DID land. Log the audit error so it can be reconciled.
+      console.error('[field-limits] update succeeded but audit insert failed:', auditErr.message);
+    }
+
+    // Hot-reload: next runEngine call will re-fetch the table.
+    invalidateFieldLimits();
+
+    res.json({ row: updated, audit_recorded: !auditErr });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import api from '../../services/api';
 import { pmAdminAPI } from '../services/pmApi';
 import { fmt$, fmtDateLong } from '../../utils/format';
+import { bootstrapFieldLimits } from '../utils/fieldHints';
 
 // ────────────────────────────────────────────────────────────────────────────
 // /pm/admin — single page with three tabs:
@@ -33,6 +35,7 @@ export default function AdminPage() {
           { id: 'financing', label: 'Financing Options' },
           { id: 'terms',     label: 'T&Cs Versions' },
           { id: 'labour',    label: 'Labour & Compliance' },
+          { id: 'limits',    label: 'Field Limits' },
           { id: 'import',    label: 'Data Import' },
           { id: 'catalogue', label: 'Catalogue CSV' },
         ].map(t => (
@@ -53,8 +56,252 @@ export default function AdminPage() {
       {tab === 'financing' && <FinancingTab />}
       {tab === 'terms'     && <TermsTab />}
       {tab === 'labour'    && <LabourComplianceTab />}
+      {tab === 'limits'    && <FieldLimitsTab />}
       {tab === 'import'    && <ImportTab />}
       {tab === 'catalogue' && <CatalogueCsvTab />}
+    </div>
+  );
+}
+
+// ── Field Limits tab (Session B) ─────────────────────────────────────────
+// Admin-tunable hard/typical ranges that drive the server config validator
+// AND the inline hint text rendered under every editable spec field. Edits
+// require a reason (audit-logged) — same pattern as labour margin% edits.
+//
+// After save: the server invalidates its in-process cache AND we re-call
+// bootstrapFieldLimits() so the OPEN client tab sees the new value in its
+// hint text immediately (no reload needed).
+function FieldLimitsTab() {
+  const [rows, setRows] = useState([]);
+  const [audit, setAudit] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+
+  function load() {
+    setLoading(true);
+    Promise.all([
+      pmAdminAPI.listFieldLimits(),
+      pmAdminAPI.listFieldLimitsAudit(null, 20),
+    ])
+      .then(([r, a]) => { setRows(r.data.rows || []); setAudit(a.data.rows || []); })
+      .catch(e => setErr(e.response?.data?.error || e.message))
+      .finally(() => setLoading(false));
+  }
+  useEffect(load, []);
+
+  function flashMsg(m) { setMsg(m); setTimeout(() => setMsg(''), 2500); }
+
+  async function save(row) {
+    setErr('');
+    try {
+      await pmAdminAPI.updateFieldLimit(row.path, {
+        hard_min:    Number(row.hard_min),
+        hard_max:    Number(row.hard_max),
+        typical_min: Number(row.typical_min),
+        typical_max: Number(row.typical_max),
+        unit:        row.unit,
+        notes:       row.notes,
+        reason:      row.reason,
+      });
+      // Re-merge into the in-memory hint cache so this tab + other open tabs
+      // pick up the new value without reload.
+      await bootstrapFieldLimits(api);
+      setEditing(null);
+      flashMsg(`Updated ${row.path} ✓`);
+      load();
+    } catch (e) {
+      setErr(e.response?.data?.error || e.message);
+    }
+  }
+
+  // Group rows by section prefix (system.* / bills.*) for readability.
+  const grouped = rows.reduce((acc, r) => {
+    const section = r.path.split('.', 1)[0] || 'other';
+    (acc[section] = acc[section] || []).push(r);
+    return acc;
+  }, {});
+
+  return (
+    <div className="max-w-5xl space-y-5">
+      {err && <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">{err}</div>}
+      {msg && <div className="bg-green-50 border border-green-200 text-green-800 px-3 py-2 rounded text-sm">{msg}</div>}
+
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+        <div className="text-sm font-semibold text-amber-900 mb-1">Admin-tunable validator ranges</div>
+        <p className="text-xs text-amber-800 leading-relaxed">
+          <b>Hard range</b> = engine rejects values outside this on save.{' '}
+          <b>Typical band</b> = informational only; shown to reps as "Typical NZ residential X-Y".
+          Changes take effect on the next validate / live-preview run (server cache invalidates immediately).
+          Every edit needs a reason (≥10 chars) and is logged to <code className="bg-white px-1 rounded">field_limits_audit</code>.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="text-slate-400 text-sm">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="text-slate-500 text-sm italic">
+          No field_limits rows. Run migration 030 (server/db/apply-migration-030.js) to seed defaults.
+        </div>
+      ) : (
+        Object.entries(grouped).map(([section, sectionRows]) => (
+          <div key={section} className="bg-white border border-slate-200 rounded-lg">
+            <div className="px-4 py-2 bg-slate-50 border-b border-slate-200">
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wide">{section}</h3>
+            </div>
+            <table className="w-full text-sm">
+              <thead className="bg-white text-xs text-slate-600 uppercase">
+                <tr>
+                  <th className="px-3 py-2 text-left">Path</th>
+                  <th className="px-3 py-2 text-right">Hard min</th>
+                  <th className="px-3 py-2 text-right">Hard max</th>
+                  <th className="px-3 py-2 text-right">Typical min</th>
+                  <th className="px-3 py-2 text-right">Typical max</th>
+                  <th className="px-3 py-2 text-left">Unit</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sectionRows.map(r => (
+                  <tr key={r.path}>
+                    <td className="px-3 py-2 font-mono text-[11px]">{r.path}</td>
+                    <td className="px-3 py-2 text-right">{Number(r.hard_min)}</td>
+                    <td className="px-3 py-2 text-right">{Number(r.hard_max)}</td>
+                    <td className="px-3 py-2 text-right text-slate-500">{Number(r.typical_min)}</td>
+                    <td className="px-3 py-2 text-right text-slate-500">{Number(r.typical_max)}</td>
+                    <td className="px-3 py-2 text-slate-600">{r.unit || '—'}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button onClick={() => setEditing({ ...r, reason: '' })} className="text-amber-700 hover:underline text-xs">Edit</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))
+      )}
+
+      {/* Recent audit entries */}
+      {audit.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Recent changes</h3>
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-600 uppercase">
+              <tr>
+                <th className="px-2 py-1.5 text-left">When</th>
+                <th className="px-2 py-1.5 text-left">Path</th>
+                <th className="px-2 py-1.5 text-right">Prev hard</th>
+                <th className="px-2 py-1.5 text-right">New hard</th>
+                <th className="px-2 py-1.5 text-left">Reason</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {audit.map(a => (
+                <tr key={a.id}>
+                  <td className="px-2 py-1.5 whitespace-nowrap">{fmtDateLong(a.occurred_at)}</td>
+                  <td className="px-2 py-1.5 font-mono text-[10px]">{a.path}</td>
+                  <td className="px-2 py-1.5 text-right text-slate-500">{Number(a.prev_hard_min)}–{Number(a.prev_hard_max)}</td>
+                  <td className="px-2 py-1.5 text-right">{Number(a.new_hard_min)}–{Number(a.new_hard_max)}</td>
+                  <td className="px-2 py-1.5 italic text-slate-600 truncate max-w-[20rem]" title={a.reason}>{a.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {editing && <FieldLimitEditorModal row={editing} onSave={save} onCancel={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+function FieldLimitEditorModal({ row, onSave, onCancel }) {
+  const [v, setV] = useState(row);
+  const set = (k, val) => setV(p => ({ ...p, [k]: val }));
+
+  // Track whether anything actually changed — if not, save is disabled.
+  const changed =
+    Number(v.hard_min)    !== Number(row.hard_min)    ||
+    Number(v.hard_max)    !== Number(row.hard_max)    ||
+    Number(v.typical_min) !== Number(row.typical_min) ||
+    Number(v.typical_max) !== Number(row.typical_max) ||
+    (v.unit  || '') !== (row.unit  || '') ||
+    (v.notes || '') !== (row.notes || '');
+
+  const reasonOk = (v.reason || '').trim().length >= 10;
+  const numbersOk = [v.hard_min, v.hard_max, v.typical_min, v.typical_max].every(n =>
+    Number.isFinite(Number(n)));
+  const rangesOk =
+    Number(v.hard_min) < Number(v.hard_max) &&
+    Number(v.typical_min) >= Number(v.hard_min) &&
+    Number(v.typical_max) <= Number(v.hard_max) &&
+    Number(v.typical_min) <= Number(v.typical_max);
+
+  const canSave = changed && reasonOk && numbersOk && rangesOk;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+        <h3 className="font-bold text-lg mb-1">Edit field limit</h3>
+        <p className="text-[11px] font-mono text-slate-500 mb-4">{v.path}</p>
+
+        <div className="grid grid-cols-2 gap-3">
+          <NumberField label="Hard min"    v={v.hard_min}    onChange={x => set('hard_min', x)} />
+          <NumberField label="Hard max"    v={v.hard_max}    onChange={x => set('hard_max', x)} />
+          <NumberField label="Typical min" v={v.typical_min} onChange={x => set('typical_min', x)} />
+          <NumberField label="Typical max" v={v.typical_max} onChange={x => set('typical_max', x)} />
+        </div>
+        {!rangesOk && (
+          <p className="text-[11px] text-red-600 mt-2">
+            Hard range must satisfy hard_min &lt; hard_max. Typical band must fit within hard range and typical_min ≤ typical_max.
+          </p>
+        )}
+
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-slate-700 mb-1">Unit</label>
+          <input type="text" value={v.unit ?? ''} onChange={e => set('unit', e.target.value)}
+                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" />
+        </div>
+
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-slate-700 mb-1">Notes (shown to admin only)</label>
+          <textarea rows={2} value={v.notes || ''} onChange={e => set('notes', e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm"
+                    placeholder="e.g. Fronius datasheet min 4 panels/string." />
+        </div>
+
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-slate-700 mb-1">
+            Reason for change <span className="text-red-700">*</span>
+            <span className="text-slate-400 font-normal"> · ≥10 chars · audit-logged</span>
+          </label>
+          <textarea rows={2} value={v.reason || ''} onChange={e => set('reason', e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm"
+                    placeholder="e.g. Lifting panel-count max to 80 to support a new 80-panel commercial project." />
+          {(v.reason || '').trim().length > 0 && !reasonOk && (
+            <p className="text-[11px] text-red-600 mt-1">Reason must be at least 10 characters.</p>
+          )}
+        </div>
+
+        <div className="flex gap-2 mt-5">
+          <button onClick={() => onSave(v)} disabled={!canSave}
+                  className="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded text-sm font-medium">
+            Save
+          </button>
+          <button onClick={onCancel} className="px-4 py-1.5 border border-slate-300 hover:bg-slate-50 rounded text-sm">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NumberField({ label, v, onChange }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
+      <input type="number" step="any" value={v ?? ''} onChange={e => onChange(e.target.value)}
+             className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" />
     </div>
   );
 }

@@ -162,7 +162,7 @@ for (const [idx, analysis] of picked.entries()) {
       tiers: out.tiers,
       tier_strip: { size_mode: sizeMode },
     };
-    const engineResult = runEngine(fullSpec, { catalogue });
+    const engineResult = await runEngine(fullSpec, { catalogue });
 
     if (!engineResult.ok) {
       bug(`runEngine returned ok=false: ${JSON.stringify(engineResult.config_errors?.slice(0, 3) || engineResult)}`);

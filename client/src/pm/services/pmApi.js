@@ -105,6 +105,16 @@ export const pmAdminAPI = {
   updateRateCardRow:   (kind, sku, patch) => api.patch(`/pm/admin/catalogue/${kind}/${encodeURIComponent(sku)}`, patch),
   deactivateRateCardRow: (kind, sku, reason) =>
     api.delete(`/pm/admin/catalogue/${kind}/${encodeURIComponent(sku)}`, { data: { reason } }),
+
+  // Session B — field_limits (admin-tunable validator/hint ranges).
+  // path is a JSON-ish dotted spec path (e.g. 'system.panel.count') — encode
+  // for the URL since some paths contain brackets in their string form.
+  listFieldLimits:        () => api.get('/pm/admin/field-limits'),
+  listFieldLimitsAudit:   (path, limit = 100) =>
+    api.get(`/pm/admin/field-limits/audit`,
+      { params: path ? { path, limit } : { limit } }),
+  updateFieldLimit:       (path, body) =>
+    api.patch(`/pm/admin/field-limits/${encodeURIComponent(path)}`, body),
 };
 
 // QR-code campaign management (Phase D)
