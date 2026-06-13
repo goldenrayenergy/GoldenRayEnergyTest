@@ -20,7 +20,8 @@ import { runEngine } from '../../services/pm/proposalEngine/index.js';
 import { runThreeScenarios } from '../../services/pm/proposalEngine/financialModel.js';
 import { getCachedCatalogue } from '../../services/pm/proposalEngine/catalogue/cachedDbLoader.js';
 import { renderProposalPdfs } from '../../services/pm/proposalEngine/renderPdf.js';
-import { buildProposalData } from '../../services/pm/proposalEngine/htmlTemplates/proposalData.js';
+import { buildProposalData, buildMultiTierProposalData }
+  from '../../services/pm/proposalEngine/htmlTemplates/proposalData.js';
 import * as quoteStorage from '../../services/pm/quoteStorageService.js';
 import { sendCustomerProposalEmail } from '../../services/pm/quoteEmailService.js';
 
@@ -97,16 +98,42 @@ router.post('/:id/generate',
       return res.status(422).json({ error: 'Engine refused current spec.',
         config_errors: engine.config_errors });
     }
-    if (!engine.can_ship) {
+
+    // Ship-ready gate — multi-tier uses can_ship_all + per-tier flags; legacy
+    // single-tier uses can_ship. Without this branch, every multi-tier quote
+    // would 409 because engine.can_ship is undefined for multi-tier output.
+    const canShipEntire = engine.is_multi_tier ? engine.can_ship_all : engine.can_ship;
+    if (!canShipEntire) {
       return res.status(409).json({ error: 'Quote cannot ship.', block_reasons: engine.block_reasons });
     }
 
-    const scenarios = runThreeScenarios(current.spec, engine.cost, {}, engineOptions);
+    // ── Build scenarios — single-tier returns one bundle; multi-tier returns
+    //    one bundle per tier (aligned to engine.tiers order).
+    let singleTierScenarios = null;
+    let tierScenarios = null;
+    if (engine.is_multi_tier) {
+      tierScenarios = engine.tiers.map((t, i) => {
+        // Build the effective per-tier spec the same way runEngine did so the
+        // scenario maths sees the correct system + pricing for this tier.
+        const tierSpec = current.spec.tiers?.[i] || {};
+        const effective = {
+          ...current.spec,
+          system: { ...current.spec.system, ...(tierSpec.system_overrides || {}) },
+          pricing: tierSpec.pricing || current.spec.pricing,
+          cost_overrides: tierSpec.cost_overrides || current.spec.cost_overrides,
+        };
+        return runThreeScenarios(effective, t.cost, {}, engineOptions);
+      });
+    } else {
+      singleTierScenarios = runThreeScenarios(current.spec, engine.cost, {}, engineOptions);
+    }
 
-    // Build PDFs
+    // ── Render PDFs. renderProposalPdfs auto-routes on engine.is_multi_tier.
     const rendered = await renderProposalPdfs({
-      spec: current.spec, costResult: engine.cost, scenarios,
-      engineering: engine.engineering, bom: engine.bom,
+      spec: current.spec,
+      engineResult: engine,
+      scenarios: singleTierScenarios,
+      tierScenarios,
       options: { quote_ref: quote.quote_ref, quote_date: new Date().toISOString() },
     });
 
@@ -120,25 +147,84 @@ router.post('/:id/generate',
       kind: 'sales-console', buffer: rendered.sales_console_pdf,
     });
 
-    // Compute pricing snapshot (frozen at generation time per design)
-    const pricingSnapshot = {
-      lines: engine.cost.lines,
-      sections: engine.cost.sections,
-      totals: engine.cost.totals,
-      margin_floor_status: engine.cost.margin_floor_status,
-      discount: current.spec.pricing?.discount || null,
-      gst_rate: engine.cost.gst_rate,
-      computed_at: new Date().toISOString(),
-    };
+    // ── Pricing snapshot. For multi-tier we freeze the RECOMMENDED tier's
+    //    cost block as the canonical snapshot (that's the headline the
+    //    customer sees) AND keep an array of every tier's totals for the
+    //    sales-side audit. Single-tier path unchanged.
+    let pricingSnapshot;
+    let validatorOutput;
+    let financialModelOutput;
+    let standardsVersion;
+    if (engine.is_multi_tier) {
+      const recIdx = engine.tiers.findIndex(t => t.tier_id === engine.recommended_tier_id);
+      const rec = engine.tiers[Math.max(0, recIdx)];
+      const recScenarios = tierScenarios[Math.max(0, recIdx)];
+      pricingSnapshot = {
+        is_multi_tier: true,
+        recommended_tier_id: engine.recommended_tier_id,
+        recommended_tier_label: rec?.label,
+        recommended: {
+          lines: rec?.cost?.lines,
+          sections: rec?.cost?.sections,
+          totals: rec?.cost?.totals,
+          margin_floor_status: rec?.cost?.margin_floor_status,
+        },
+        all_tiers: engine.tiers.map(t => ({
+          tier_id: t.tier_id, label: t.label, is_recommended: t.is_recommended,
+          totals: t.cost?.totals, margin_floor_status: t.cost?.margin_floor_status,
+        })),
+        discount: current.spec.pricing?.discount || null,
+        gst_rate: rec?.cost?.gst_rate,
+        computed_at: new Date().toISOString(),
+      };
+      validatorOutput = {
+        is_multi_tier: true,
+        recommended_tier_id: engine.recommended_tier_id,
+        recommended_engineering: rec?.engineering,
+        per_tier: engine.tiers.map(t => ({
+          tier_id: t.tier_id, label: t.label,
+          hard_fails: t.engineering?.hard_fails || [],
+          soft_warnings: t.engineering?.soft_warnings || [],
+          can_ship: t.can_ship,
+        })),
+      };
+      financialModelOutput = {
+        is_multi_tier: true,
+        recommended_tier_id: engine.recommended_tier_id,
+        recommended: {
+          summary: recScenarios?.summary,
+          headline: recScenarios?.expected?.yr1,
+          yearly: recScenarios?.expected?.yearly,
+        },
+        per_tier_summary: tierScenarios.map((s, i) => ({
+          tier_id: engine.tiers[i].tier_id, label: engine.tiers[i].label,
+          summary: s.summary,
+        })),
+      };
+      standardsVersion = rec?.engineering?.standards_referenced;
+    } else {
+      pricingSnapshot = {
+        lines: engine.cost.lines,
+        sections: engine.cost.sections,
+        totals: engine.cost.totals,
+        margin_floor_status: engine.cost.margin_floor_status,
+        discount: current.spec.pricing?.discount || null,
+        gst_rate: engine.cost.gst_rate,
+        computed_at: new Date().toISOString(),
+      };
+      validatorOutput = engine.engineering;
+      financialModelOutput = {
+        summary: singleTierScenarios.summary,
+        headline: singleTierScenarios.expected.yr1,
+        yearly: singleTierScenarios.expected.yearly,
+      };
+      standardsVersion = engine.engineering.standards_referenced;
+    }
 
-    await sb().from('quote_versions').update({
+    const { error: vUpErr } = await sb().from('quote_versions').update({
       pricing_snapshot: pricingSnapshot,
-      validator_output: engine.engineering,
-      financial_model_output: {
-        summary: scenarios.summary,
-        headline: scenarios.expected.yr1,
-        yearly: scenarios.expected.yearly,
-      },
+      validator_output: validatorOutput,
+      financial_model_output: financialModelOutput,
       customer_pdf_storage_path: customerUpload.storage_path,
       customer_pdf_size_bytes: customerUpload.size_bytes,
       customer_pdf_sha256: customerUpload.sha256,
@@ -148,17 +234,23 @@ router.post('/:id/generate',
       engine_version: engine.versions.engine_version,
       warranty_terms_version: engine.versions.warranty_terms_version,
       catalogue_version: engine.versions.catalogue_version,
-      standards_version_json: engine.engineering.standards_referenced,
+      standards_version_json: standardsVersion,
       generated_at: new Date().toISOString(),
       generated_by: req.user.id,
     }).eq('id', current.id);
+    if (vUpErr) throw vUpErr;
 
-    await sb().from('quotes').update({
+    const { error: qUpErr } = await sb().from('quotes').update({
       status: 'generated',
       updated_at: new Date().toISOString(),
     }).eq('id', quote.id);
+    if (qUpErr) throw qUpErr;
 
-    // Log every PDF generation attempt for audit.
+    // Log every PDF generation attempt for audit. Multi-tier captures the
+    // worst-case validation status (any tier with soft warnings ⇒ flagged).
+    const hasSoftWarnings = engine.is_multi_tier
+      ? engine.tiers.some(t => (t.engineering?.soft_warnings || []).length > 0)
+      : (engine.engineering?.soft_warnings || []).length > 0;
     await sb().from('quote_run_log').insert({
       quote_id: quote.id,
       version_id: current.id,
@@ -168,8 +260,7 @@ router.post('/:id/generate',
       spec_sha256: engine.spec_sha256,
       catalogue_version: engine.versions.catalogue_version,
       engine_version: engine.versions.engine_version,
-      validation_status: engine.engineering.soft_warnings.length > 0
-        ? 'passed_with_soft_warnings' : 'passed',
+      validation_status: hasSoftWarnings ? 'passed_with_soft_warnings' : 'passed',
       outputs: {
         customer_pdf: { storage_path: customerUpload.storage_path, sha256: customerUpload.sha256, size_bytes: customerUpload.size_bytes },
         sales_console_pdf: { storage_path: salesUpload.storage_path, sha256: salesUpload.sha256, size_bytes: salesUpload.size_bytes },
@@ -222,18 +313,39 @@ router.post('/:id/email',
       return res.status(404).json({ error: 'No generated customer PDF for current version.' });
     }
 
-    // Build proposalData (so the email body has the same numbers as the PDF)
+    // Build proposalData (so the email body has the same numbers as the PDF).
+    // Multi-tier branch: use buildMultiTierProposalData (the email body shows
+    // the recommended tier's headline numbers, matching the customer PDF).
     let engineOptions = {};
     try { engineOptions = { catalogue: await getCachedCatalogue(sb()) }; }
     catch (e) { console.warn('quote-actions /email: catalogue load failed:', e.message); }
     const engine = await runEngine(current.spec, engineOptions);
     if (!engine.ok) return res.status(422).json({ error: 'Engine refused current spec on re-evaluation.' });
-    const scenarios = runThreeScenarios(current.spec, engine.cost, {}, engineOptions);
-    const proposalData = buildProposalData({
-      spec: current.spec, costResult: engine.cost, scenarios,
-      engineering: engine.engineering, bom: engine.bom,
-      options: { quote_ref: quote.quote_ref, quote_date: new Date().toISOString() },
-    });
+
+    let proposalData;
+    if (engine.is_multi_tier) {
+      const tierScenarios = engine.tiers.map((t, i) => {
+        const tierSpec = current.spec.tiers?.[i] || {};
+        const effective = {
+          ...current.spec,
+          system: { ...current.spec.system, ...(tierSpec.system_overrides || {}) },
+          pricing: tierSpec.pricing || current.spec.pricing,
+          cost_overrides: tierSpec.cost_overrides || current.spec.cost_overrides,
+        };
+        return runThreeScenarios(effective, t.cost, {}, engineOptions);
+      });
+      proposalData = buildMultiTierProposalData({
+        spec: current.spec, engineResult: engine, tierScenarios,
+        options: { quote_ref: quote.quote_ref, quote_date: new Date().toISOString() },
+      });
+    } else {
+      const scenarios = runThreeScenarios(current.spec, engine.cost, {}, engineOptions);
+      proposalData = buildProposalData({
+        spec: current.spec, costResult: engine.cost, scenarios,
+        engineering: engine.engineering, bom: engine.bom,
+        options: { quote_ref: quote.quote_ref, quote_date: new Date().toISOString() },
+      });
+    }
 
     // Fetch PDF from storage (only needed for real send — dry-run doesn't attach).
     const customerPdfBuffer = dryRun
@@ -455,7 +567,12 @@ router.post('/:id/deposit',
       updates.project_id = project.id;
     }
 
-    await sb().from('quotes').update(updates).eq('id', quote.id);
+    // Check the update result — without this the route would falsely report
+    // success even when the underlying UPDATE silently failed (e.g. missing
+    // column from a pending migration). Surfaced by Day 7 e2e against a DB
+    // where MVP1_002 hadn't been applied.
+    const { error: depUpErr } = await sb().from('quotes').update(updates).eq('id', quote.id);
+    if (depUpErr) throw depUpErr;
 
     await writeAudit(req, {
       quote_id: quote.id, action: handoff_to_pm ? 'handoff.to_pm' : 'deposit.received',
