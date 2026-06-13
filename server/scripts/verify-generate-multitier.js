@@ -80,7 +80,11 @@ const rendered = await renderProposalPdfs({
   engineResult: engine,
   scenarios: singleTierScenarios,
   tierScenarios,
-  options: { quote_ref: q.quote_ref, quote_date: new Date().toISOString() },
+  options: {
+    quote_ref: q.quote_ref,
+    quote_date: new Date().toISOString(),
+    catalogue,                                  // thread DB catalogue → PDF data
+  },
 });
 console.log(`  customer_pdf bytes:        ${rendered.customer_pdf.length}`);
 console.log(`  sales_console_pdf bytes:   ${rendered.sales_console_pdf.length}`);

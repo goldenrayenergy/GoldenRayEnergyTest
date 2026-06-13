@@ -129,12 +129,20 @@ router.post('/:id/generate',
     }
 
     // ── Render PDFs. renderProposalPdfs auto-routes on engine.is_multi_tier.
+    //    Catalogue is threaded through so any DB-only product field
+    //    (image_url, datasheet_url, etc.) surfaces in the PDF — without
+    //    this thread, proposalData would silently fall back to the legacy
+    //    JS catalogue.
     const rendered = await renderProposalPdfs({
       spec: current.spec,
       engineResult: engine,
       scenarios: singleTierScenarios,
       tierScenarios,
-      options: { quote_ref: quote.quote_ref, quote_date: new Date().toISOString() },
+      options: {
+        quote_ref: quote.quote_ref,
+        quote_date: new Date().toISOString(),
+        catalogue: engineOptions.catalogue,
+      },
     });
 
     // Upload to storage
@@ -336,14 +344,22 @@ router.post('/:id/email',
       });
       proposalData = buildMultiTierProposalData({
         spec: current.spec, engineResult: engine, tierScenarios,
-        options: { quote_ref: quote.quote_ref, quote_date: new Date().toISOString() },
+        options: {
+          quote_ref: quote.quote_ref,
+          quote_date: new Date().toISOString(),
+          catalogue: engineOptions.catalogue,    // thread DB catalogue → PDF data
+        },
       });
     } else {
       const scenarios = runThreeScenarios(current.spec, engine.cost, {}, engineOptions);
       proposalData = buildProposalData({
         spec: current.spec, costResult: engine.cost, scenarios,
         engineering: engine.engineering, bom: engine.bom,
-        options: { quote_ref: quote.quote_ref, quote_date: new Date().toISOString() },
+        options: {
+          quote_ref: quote.quote_ref,
+          quote_date: new Date().toISOString(),
+          catalogue: engineOptions.catalogue,    // thread DB catalogue → PDF data
+        },
       });
     }
 
