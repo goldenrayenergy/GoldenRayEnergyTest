@@ -80,6 +80,8 @@ function mapPanel(row) {
     cost_nzd: num(row.cost_nzd),
     margin_pct: num(row.default_margin_pct) ?? 30,
     datasheet_filename: s.datasheet_filename || null,
+    image_url:     row.image_url || null,
+    datasheet_url: row.datasheet_url || null,
   };
 }
 
@@ -123,6 +125,8 @@ function mapInverter(row) {
     upgrade_license_sku: s.upgrade_license_sku || null,
     compatible_batteries_raw: s.compatible_batteries_raw || null,
     datasheet_filename: s.inverter_datasheet || null,
+    image_url:     row.image_url || null,
+    datasheet_url: row.datasheet_url || null,
   };
 }
 
@@ -138,6 +142,8 @@ function mapBattery(row) {
     cost_nzd: num(row.cost_nzd),
     margin_pct: num(row.default_margin_pct) ?? 30,
     datasheet_filename: s.datasheet_filename || null,
+    image_url:     row.image_url || null,
+    datasheet_url: row.datasheet_url || null,
   };
 }
 
@@ -164,6 +170,8 @@ function mapSmartMeter(row) {
     cost_nzd: num(row.cost_nzd),
     margin_pct: num(row.default_margin_pct) ?? 30,
     datasheet_filename: s.datasheet_filename || null,
+    image_url:     row.image_url || null,
+    datasheet_url: row.datasheet_url || null,
   };
 }
 
@@ -249,7 +257,7 @@ export async function loadCatalogueFromDb(supabase) {
   const wantedCategories = Object.values(CATEGORY_BUCKETS).flat();
   const { data: productRows, error: prodErr } = await supabase
     .from('products')
-    .select('id, sku, brand, name, category, subcategory, cost_nzd, default_margin_pct, specs, is_active')
+    .select('id, sku, brand, name, category, subcategory, cost_nzd, default_margin_pct, specs, is_active, image_url, datasheet_url')
     .eq('is_active', true)
     .in('category', wantedCategories);
   if (prodErr) throw new Error(`Products query failed: ${prodErr.message}`);

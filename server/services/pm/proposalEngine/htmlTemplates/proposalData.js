@@ -246,6 +246,99 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
       validator_version: engineering.validator_version,
     },
     warranties: warrantyTerms(spec, catalogue),
+    hardware: hardwareDetailBlocks(spec, catalogue, costResult),
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase C-1 — hardware detail blocks for the new Components page.
+//
+// Returns ONE block per hardware kind (panel/inverter/battery/smart_meter)
+// that the components page renders as a row with image + name + specs +
+// warranty + count. Each block degrades gracefully when image_url /
+// datasheet_url aren't yet filled in for the SKU — page just shows the
+// spec block without the photo.
+// ────────────────────────────────────────────────────────────────────────────
+function hardwareDetailBlocks(spec, catalogue, costResult) {
+  const w = warrantyTerms(spec, catalogue);
+
+  const panel = catalogue.PANELS[spec.system.panel.sku];
+  const inverter = catalogue.INVERTERS[spec.system.inverter.sku];
+  const battery = spec.system?.battery?.sku ? catalogue.BATTERIES[spec.system.battery.sku] : null;
+  const meter = spec.system?.smart_meter?.sku ? catalogue.SMART_METERS[spec.system.smart_meter.sku] : null;
+
+  // BMS lines exist on the BoM; count needed BMS units per series.
+  const batteryModuleCount = spec.system?.battery?.module_count || 0;
+  const batteryUsableKwh = battery ? +(batteryModuleCount * battery.module_kwh).toFixed(2) : 0;
+
+  // Effective continuous + peak — derived per the engineering rules. Falls
+  // back to N/A strings if the spec hasn't been populated for a SKU.
+  const inverterAcKw = inverter?.ac_kw;
+  const inverterDcAc = inverterAcKw && panel?.watts && spec.system.panel.count
+    ? +((spec.system.panel.count * panel.watts / 1000) / inverterAcKw).toFixed(2)
+    : null;
+
+  return {
+    panel: panel ? {
+      sku: panel.sku,
+      name: panel.name,
+      brand: panel.brand,
+      count: spec.system.panel.count,
+      watts: panel.watts,
+      total_kwp: panel.watts && spec.system.panel.count
+        ? +(spec.system.panel.count * panel.watts / 1000).toFixed(2) : null,
+      voc_stc: panel.voc_stc,
+      isc_stc: panel.isc_stc,
+      vmp_stc: panel.vmp_stc,
+      imp_stc: panel.imp_stc,
+      peak_efficiency_pct: panel.peak_efficiency_pct ?? null,
+      image_url: panel.image_url,
+      datasheet_url: panel.datasheet_url,
+      warranty: w.panel,
+    } : null,
+
+    inverter: inverter ? {
+      sku: inverter.sku,
+      name: inverter.name,
+      brand: inverter.brand,
+      ac_kw: inverterAcKw,
+      phase: inverter.phase,
+      is_plus_variant: inverter.is_plus_variant === true,
+      battery_capable: inverter.battery_capable === true,
+      dc_ac_ratio: inverterDcAc,
+      uoc_max_v: inverter.uoc_max_v,
+      mppt_v_min: inverter.mppt_v_min,
+      mppt_count: inverter.mppt_count,
+      peak_efficiency_pct: inverter.peak_efficiency_pct,
+      image_url: inverter.image_url,
+      datasheet_url: inverter.datasheet_url,
+      warranty: w.inverter,
+    } : null,
+
+    battery: battery ? {
+      sku: battery.sku,
+      name: battery.name,
+      brand: battery.brand,
+      series: battery.series,
+      module_count: batteryModuleCount,
+      module_kwh: battery.module_kwh,
+      total_usable_kwh: batteryUsableKwh,
+      chemistry: battery.chemistry || 'LFP',
+      image_url: battery.image_url,
+      datasheet_url: battery.datasheet_url,
+      warranty: w.battery,
+    } : null,
+
+    smart_meter: meter ? {
+      sku: meter.sku,
+      name: meter.name,
+      brand: meter.brand,
+      phase: meter.phase,
+      amps: meter.amps,
+      image_url: meter.image_url,
+      datasheet_url: meter.datasheet_url,
+      warranty: w.smart_meter,
+    } : null,
   };
 }
 
