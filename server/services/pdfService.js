@@ -1,27 +1,27 @@
-// PDF Generation Service using Puppeteer.
-// Falls back to raw HTML if Puppeteer can't launch in this environment.
-//
-// If proposal.lineItems is populated, the PDF includes an itemised
-// Bill of Materials section. Otherwise it falls back to the legacy
-// bag-of-numbers summary so existing flows keep working.
+// PDF Generation Service.
+// Phase G1 — switched from heavy `puppeteer` (bundles Chromium) to the shared
+// `launchHeadlessBrowser` helper (puppeteer-core + @sparticuz/chromium-min).
+// Falls back to raw HTML if Chromium can't launch.
+
+import { launchHeadlessBrowser } from './pm/proposalEngine/headlessBrowser.js';
 
 const GST_RATE = 0.15;
 const fmt = n => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
 
 export async function generateProposalPDF(proposal) {
+  let browser;
   try {
-    const puppeteer = await import('puppeteer');
-    const browser = await puppeteer.default.launch({ headless: true, args: ['--no-sandbox'] });
+    browser = await launchHeadlessBrowser();
     const page = await browser.newPage();
-
     const html = buildProposalHTML(proposal);
     await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdf = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' } });
-
+    const pdf = await page.pdf({ format: 'A4', printBackground: true,
+      margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' } });
     await browser.close();
     return pdf;
   } catch (err) {
-    console.warn('Puppeteer not available, returning HTML fallback');
+    if (browser) try { await browser.close(); } catch {}
+    console.warn(`Chromium not available — returning HTML fallback. (${err.message})`);
     return Buffer.from(buildProposalHTML(proposal));
   }
 }

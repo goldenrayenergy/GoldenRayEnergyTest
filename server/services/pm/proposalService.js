@@ -20,7 +20,7 @@
 // content of the standalone sample scripts but pulls everything from DB.
 // ────────────────────────────────────────────────────────────────────────────
 
-import puppeteer from 'puppeteer';
+import { launchHeadlessBrowser } from './proposalEngine/headlessBrowser.js';
 import { supabaseAdmin } from '../../config/supabase.js';
 
 const fmt$ = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('en-NZ');
@@ -379,7 +379,7 @@ const BASE_CSS = `
 let _browser = null;
 async function getBrowser() {
   if (_browser) return _browser;
-  _browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
+  _browser = await launchHeadlessBrowser();
   return _browser;
 }
 

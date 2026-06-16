@@ -156,6 +156,11 @@ function mapBmsController(row) {
     for_battery_series: s.for_battery_series || s.series || null,
     cost_nzd: num(row.cost_nzd),
     margin_pct: num(row.default_margin_pct) ?? 30,
+    // Phase G — surface image_url + datasheet_url so the customer PDF concat
+    // and Components page can find them. Without these, BMS rows showed up
+    // in the bucket but loadDatasheetBuffers couldn't see their URL.
+    image_url:     row.image_url || null,
+    datasheet_url: row.datasheet_url || null,
   };
 }
 
@@ -207,6 +212,11 @@ function mapEvCharger(row) {
     phase: num(s.phase) || (typeof s.phase === 'string' ? Number(s.phase) : null),
     cost_nzd: num(row.cost_nzd),
     margin_pct: num(row.default_margin_pct) ?? 30,
+    // Phase G — needed for the customer-PDF datasheet concat. Without these
+    // the Wattpilot datasheet was uploaded but never made it into the merged
+    // EV-ready quote PDFs.
+    image_url:     row.image_url || null,
+    datasheet_url: row.datasheet_url || null,
   };
 }
 
