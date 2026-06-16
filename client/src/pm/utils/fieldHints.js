@@ -159,39 +159,31 @@ export function buybackHint() {
 }
 
 // ── Pricing tab generators ─────────────────────────────────────────────────
-// Pricing fields don't have static "typical bands" — the meaningful anchor is
-// the engine-computed LIST price (HW×margins + BoS×1.3 + labour + GST). These
-// hints surface it directly from the cost snapshot so the rep sees the floor /
-// ceiling per the discount-cap rule (11% of list, recomputed every change).
+// Pricing hints surface the live engine LIST so the rep can see what they're
+// charging vs. what the system actually costs. Discounts run on owner
+// discretion (no fixed cap) but always require a reason + owner approval.
 //
 // costSnapshot shape: the active tier's `engine.cost` block (or root cost for
-// single-tier). Pass null if no engine run has happened yet — hint falls back
-// to generic guidance.
+// single-tier). Pass null if no engine run has happened yet.
 
-const DISCOUNT_CAP_PCT = 11;   // memory rule: never freeze; always recompute
-
-// Customer-facing price anchor — engine's LIST. Going BELOW list applies a
-// discount (capped at 11%); going above is unusual and prompts owner review.
+// Customer-facing price anchor — engine's LIST.
 export function customerPriceHint(costSnapshot) {
   const list = costSnapshot?.totals?.total_list_inc_gst;
   if (!Number.isFinite(list)) {
-    return 'Set the customer-facing total inc GST. Save once to see the engine LIST (HW + BoS + labour + GST), then the floor is LIST − 11%.';
+    return 'Customer-facing total inc GST. By default the price tracks the engine LIST (HW + BoS + labour + GST). Lock manually to negotiate a specific number.';
   }
-  const floor = list * (1 - DISCOUNT_CAP_PCT / 100);
-  return `Engine LIST: ${fmtMoney(list)} · Floor (LIST − ${DISCOUNT_CAP_PCT}%): ${fmtMoney(floor)} · Below floor needs owner approval.`;
+  return `Engine LIST: ${fmtMoney(list)} · Auto-priced quotes track this number; locked quotes hold whatever you set.`;
 }
 
-// Discount intake — anchor is 11% of LIST, recomputed on every spec change.
-// Owner approval still required even within cap (admin-only flag).
+// Discount intake — owner discretion (no fixed %); audit trail is mandatory.
 export function discountHint(costSnapshot) {
   const list = costSnapshot?.totals?.total_list_inc_gst;
+  const applied = costSnapshot?.totals?.discount_applied_inc_gst;
   if (!Number.isFinite(list)) {
-    return `Enter the discount you've offered (NZD inc GST). Save once to see the cap (${DISCOUNT_CAP_PCT}% of engine LIST).`;
+    return 'Discount amount in NZD inc GST. Reason text and owner approval are required for any discount > 0.';
   }
-  const cap = list * (DISCOUNT_CAP_PCT / 100);
-  const declared = costSnapshot?.totals?.discount_applied_inc_gst;
-  const declaredPart = Number.isFinite(declared) && declared > 0
-    ? ` · Currently ${fmtMoney(declared)} (${(declared / list * 100).toFixed(1)}% of list)`
+  const appliedPart = Number.isFinite(applied) && applied > 0
+    ? ` · Currently ${fmtMoney(applied)} (${(applied / list * 100).toFixed(1)}% of list)`
     : '';
-  return `Cap: ${fmtMoney(cap)} (${DISCOUNT_CAP_PCT}% of ${fmtMoney(list)} LIST)${declaredPart} · Owner approval required if > 0.`;
+  return `Engine LIST: ${fmtMoney(list)}${appliedPart} · Owner approval + reason required for any discount.`;
 }

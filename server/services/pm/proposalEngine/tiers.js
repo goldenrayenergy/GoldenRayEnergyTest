@@ -90,9 +90,15 @@ export function validateTiers(spec) {
     } else {
       labels.add(t.label);
     }
-    if (!t.pricing || typeof t.pricing.customer_price_inc_gst !== 'number') {
+    // Pricing object is required (carries discount/stage/etc.) but the
+    // customer_price_inc_gst inside it is now OPTIONAL — null means
+    // auto-priced from the live engine. Only validate type if it's set.
+    if (!t.pricing) {
+      errors.push({ path: `tiers[${i}].pricing`, message: 'each tier needs a pricing object' });
+    } else if (t.pricing.customer_price_inc_gst != null
+            && typeof t.pricing.customer_price_inc_gst !== 'number') {
       errors.push({ path: `tiers[${i}].pricing.customer_price_inc_gst`,
-                    message: 'each tier needs customer_price_inc_gst' });
+                    message: 'customer_price_inc_gst must be a number or null' });
     }
   }
   return errors;

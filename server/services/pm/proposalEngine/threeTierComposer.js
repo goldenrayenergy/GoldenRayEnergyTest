@@ -344,17 +344,18 @@ export function composeThreeTiers({
   };
 }
 
-// ── Price every tier in the list from the live catalogue ───────────────────
-// Sets tier.pricing.customer_price_inc_gst from costEngine.computeCost().
-// On failure, leaves price as null + adds a pricing_pending warning to that
-// tier so the rep knows pricing couldn't be computed yet.
+// ── Validate each tier prices cleanly from the live catalogue ──────────────
+// Phase D1: tier price is no longer baked in at auto-size time. The engine
+// quotes the live list price every time the rep edits the spec. We still RUN
+// the cost engine here to surface a `pricing_pending` warning if the tier
+// can't be priced (missing catalogue lines), but we leave
+// customer_price_inc_gst as null so the tier card shows the live engine
+// recommendation by default.
 function applyPricesFromCatalogue(tiers, catalogue) {
   for (const tier of tiers) {
+    tier.pricing.customer_price_inc_gst = null;   // auto-priced by default
     const price = priceTierFromCatalogue(tier, catalogue);
-    if (price != null) {
-      tier.pricing.customer_price_inc_gst = Math.round(price);
-    } else {
-      tier.pricing.customer_price_inc_gst = null;
+    if (price == null) {
       tier.engine_warnings = tier.engine_warnings || [];
       tier.engine_warnings.push({
         code: 'pricing_pending',

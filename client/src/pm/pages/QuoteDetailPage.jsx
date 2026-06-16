@@ -101,6 +101,10 @@ export default function QuoteDetailPage() {
 
   // Modal state — one open at a time.
   const [openModal, setOpenModal] = useState(null);     // 'discount' | 'email' | 'sign' | 'countersign' | 'deposit'
+  // Phase F — multi-tier detail page. Default to 0; auto-switches to the
+  // recommended tier when data lands (useEffect below). Must be declared at
+  // the TOP of the component, before any early returns, per Rules of Hooks.
+  const [detailTierIdx, setDetailTierIdx] = useState(0);
 
   const load = useCallback(() => {
     return Promise.all([
@@ -112,6 +116,17 @@ export default function QuoteDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Phase F — when a new version's data lands, default the detail-page tier
+  // selector to the recommended tier (if any). Runs once per version_id so
+  // user clicks aren't overridden mid-view.
+  useEffect(() => {
+    const tiers = data?.current_version?.spec?.tiers;
+    if (Array.isArray(tiers) && tiers.length > 0) {
+      const rec = tiers.findIndex(t => t.is_recommended === true);
+      if (rec >= 0) setDetailTierIdx(rec);
+    }
+  }, [data?.current_version?.id]);
 
   function flashMsg(m) { setActionMsg(m); setTimeout(() => setActionMsg(''), 3000); }
   function flashErr(m) { setActionErr(m); setTimeout(() => setActionErr(''), 6000); }
@@ -157,6 +172,25 @@ export default function QuoteDetailPage() {
   const margin = current_version?.validator_output
     ? snap?.totals?.project_margin_pct
     : null;
+
+  // Multi-tier awareness: the quote may carry 3 tiers, each with its own
+  // system_overrides + pricing. The detail page used to read top-level
+  // spec.system.* which is a stale snapshot from quote creation. Now we
+  // resolve the SELECTED tier (default: recommended ★) and merge its
+  // overrides over the top-level for display.
+  const spec = current_version?.spec || {};
+  const tiers = Array.isArray(spec.tiers) ? spec.tiers : [];
+  const isMultiTier = tiers.length > 0;
+  // Clamp the user's selection to the current tiers array (handles version
+  // refreshes that change the tier count).
+  const safeTierIdx = Math.min(detailTierIdx, Math.max(0, tiers.length - 1));
+  const selectedTier = isMultiTier ? tiers[safeTierIdx] : null;
+  const viewSystem = isMultiTier
+    ? { ...(spec.system || {}), ...(selectedTier?.system_overrides || {}) }
+    : (spec.system || {});
+  const viewPricing = isMultiTier
+    ? (selectedTier?.pricing || {})
+    : (spec.pricing || {});
 
   return (
     <div>
@@ -244,13 +278,61 @@ export default function QuoteDetailPage() {
 
           {/* Current spec snapshot card */}
           <div className="bg-white border border-slate-200 rounded-lg p-5">
-            <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wide mb-3">Current spec snapshot</h2>
+            <div className="flex items-baseline justify-between flex-wrap gap-2 mb-3">
+              <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">
+                {isMultiTier ? 'Spec snapshot — viewing tier' : 'Current spec snapshot'}
+              </h2>
+              {isMultiTier && (
+                <div className="flex items-center gap-1 flex-wrap">
+                  {tiers.map((t, i) => (
+                    <button
+                      key={t.tier_id || i}
+                      type="button"
+                      onClick={() => setDetailTierIdx(i)}
+                      className={
+                        'px-2.5 py-0.5 rounded text-xs font-medium border transition-colors ' +
+                        (i === safeTierIdx
+                          ? 'border-amber-500 bg-amber-100 text-amber-900'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50')
+                      }
+                      title={t.is_recommended ? 'Recommended tier' : ''}>
+                      {t.is_recommended && '★ '}
+                      {t.label || `Tier ${i + 1}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-              <Row k="Panels">{current_version?.spec?.system?.panel?.count} × {current_version?.spec?.system?.panel?.sku}</Row>
-              <Row k="Inverter"><span className="font-mono text-xs">{current_version?.spec?.system?.inverter?.sku}</span></Row>
-              <Row k="Battery">{current_version?.spec?.system?.battery?.sku ? `${current_version.spec.system.battery.module_count}× ${current_version.spec.system.battery.sku}` : '—'}</Row>
-              <Row k="Customer price">${Number(current_version?.spec?.pricing?.customer_price_inc_gst || 0).toLocaleString()} inc GST</Row>
-              <Row k="Engine LIST">{snap?.totals?.total_list_inc_gst ? fmt$(snap.totals.total_list_inc_gst) : '— (run /generate)'}</Row>
+              <Row k="Panels">
+                {viewSystem?.panel?.count != null
+                  ? `${viewSystem.panel.count} × ${viewSystem.panel.sku || '—'}`
+                  : '—'}
+              </Row>
+              <Row k="Inverter">
+                <span className="font-mono text-xs">{viewSystem?.inverter?.sku || '—'}</span>
+              </Row>
+              <Row k="Battery">
+                {viewSystem?.battery?.sku
+                  ? `${viewSystem.battery.module_count}× ${viewSystem.battery.sku}`
+                  : '— (no battery)'}
+              </Row>
+              <Row k="EV charger">
+                {viewSystem?.wattpilot_included ? 'Wattpilot included' : '—'}
+              </Row>
+              <Row k="Customer price">
+                {viewPricing?.customer_price_inc_gst != null
+                  ? `$${Number(viewPricing.customer_price_inc_gst).toLocaleString()} inc GST`
+                  : <span className="text-emerald-700">Auto-priced ⚡ (tracks live engine list)</span>}
+              </Row>
+              <Row k="Engine LIST">
+                {snap?.totals?.total_list_inc_gst
+                  ? fmt$(snap.totals.total_list_inc_gst)
+                  : '— (run Generate PDF)'}
+                {isMultiTier && snap?.totals?.total_list_inc_gst && (
+                  <span className="text-[10px] text-slate-500 ml-1">(headline tier snapshot)</span>
+                )}
+              </Row>
               <Row k="Margin %">{margin != null ? margin.toFixed(1) + '%' : '—'}</Row>
               <Row k="Generated">{current_version?.generated_at ? fmtDateTime(current_version.generated_at) : 'Not yet generated'}</Row>
               <Row k="Signed">{current_version?.signed_at ? fmtDateTime(current_version.signed_at) : '—'}</Row>

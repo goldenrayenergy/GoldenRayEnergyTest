@@ -27,6 +27,8 @@ import { useId } from 'react';
 export default function TierStrip({
   tiers, activeIndex, stage, sizeMode = 'same_size',
   canRecompose = false, recomposing = false,
+  tierEngineCosts = [],                // Phase D1: per-tier engine cost.totals,
+                                       //   aligned to tiers[] by index.
   onPickActive, onRename, onMarkRec, onAdd, onDelete,
   onSizeModeChange, onRecompose,
 }) {
@@ -82,6 +84,7 @@ export default function TierStrip({
             isActive={idx === activeIndex}
             ribbonWord={ribbonWord}
             canDelete={tiers.length > 1}
+            engineCost={tierEngineCosts[idx] || null}
             onPickActive={() => onPickActive(idx)}
             onRename={(newLabel) => onRename(idx, newLabel)}
             onMarkRec={() => onMarkRec(idx)}
@@ -111,12 +114,21 @@ const SOURCE_BADGES = {
 };
 
 function TierCard({
-  tier, idx, isActive, ribbonWord, canDelete,
+  tier, idx, isActive, ribbonWord, canDelete, engineCost,
   onPickActive, onRename, onMarkRec, onDelete,
 }) {
   const renameId = useId();
   const rec = tier.is_recommended === true;
-  const price = tier.pricing?.customer_price_inc_gst;
+  // Phase D1 — price comes from the LIVE engine cost when available so it
+  // tracks every spec edit. Falls back to the saved tier.pricing.* if engine
+  // hasn't returned yet (initial load, preview in flight) or if the rep
+  // manually locked the price (engine echoes the lock as customer_total).
+  const locked = tier.pricing?.customer_price_inc_gst != null;
+  const enginePrice = engineCost?.totals?.customer_total_inc_gst;
+  const price = enginePrice != null
+    ? enginePrice
+    : (tier.pricing?.customer_price_inc_gst);
+  const marginPct = engineCost?.totals?.project_margin_pct;
   const source = tier.source || 'empty';
   const badge = SOURCE_BADGES[source] || SOURCE_BADGES.empty;
   const warnings = tier.engine_warnings || [];
@@ -179,9 +191,31 @@ function TierCard({
         )}
       </div>
 
-      <div className="text-lg font-bold text-slate-900 mt-2">
-        {price ? `$${Math.round(price).toLocaleString('en-NZ')}` : '$—'}
-        <span className="text-xs font-normal text-slate-500 ml-1">inc GST</span>
+      <div className="mt-2">
+        <div className="text-lg font-bold text-slate-900">
+          {price != null ? `$${Math.round(price).toLocaleString('en-NZ')}` : '$—'}
+          <span className="text-xs font-normal text-slate-500 ml-1">inc GST</span>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5 text-[10px]">
+          {locked ? (
+            <span
+              className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-300 font-semibold uppercase tracking-wider"
+              title="Locked manually — rep set this on the Pricing tab. To re-sync with the engine, unlock it.">
+              🔒 Locked
+            </span>
+          ) : (
+            <span
+              className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 font-semibold uppercase tracking-wider"
+              title="Auto-priced — tracks the engine recommendation as you edit the system.">
+              ⚡ Live
+            </span>
+          )}
+          {marginPct != null && (
+            <span className="text-slate-500">
+              Margin <b className="text-slate-700">{marginPct.toFixed(1)}%</b>
+            </span>
+          )}
+        </div>
       </div>
 
       <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">

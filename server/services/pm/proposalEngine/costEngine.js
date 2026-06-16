@@ -268,9 +268,27 @@ export function computeCost(spec, bom, options = {}) {
   const totalListIncGst = r2(totalListExGst + totalGstOnList);
 
   // ── Customer Total (the price the customer pays) ───────────────────────
-  // spec.pricing.customer_price_inc_gst is the bottom-line sales rep has
-  // decided to charge. We back out the discount implicitly.
-  const customerTotalIncGst = r2(spec.pricing.customer_price_inc_gst);
+  // Two modes drive customer_total:
+  //
+  //   • AUTO-PRICED (customer_price_inc_gst == null, the new default):
+  //       customer_total = list - discount.applied_nzd
+  //     The discount intake field is the SOURCE OF TRUTH for any rep-given
+  //     discount in this mode. With applied_nzd = 0 (no discount), customer
+  //     total = full list. Set applied_nzd > 0 to push the customer total
+  //     down — engine recomputes margin against the new lower total.
+  //
+  //   • LOCKED (customer_price_inc_gst = a number):
+  //       customer_total = the locked price
+  //     The implicit discount is whatever (list - locked_price) is; the
+  //     client UI auto-fills applied_nzd to match for the audit trail.
+  //
+  // Margin is derived against the final customer_total in either mode.
+  const auto_priced = spec.pricing?.customer_price_inc_gst == null;
+  const appliedDiscountInput = Math.max(0,
+    Number(spec.pricing?.discount?.applied_nzd) || 0);
+  const customerTotalIncGst = auto_priced
+    ? r2(Math.max(0, totalListIncGst - appliedDiscountInput))
+    : r2(spec.pricing.customer_price_inc_gst);
   const customerTotalExGst = r2(customerTotalIncGst / (1 + gst));
   const discountAppliedIncGst = r2(totalListIncGst - customerTotalIncGst);
   const discountAppliedExGst = r2(totalListExGst - customerTotalExGst);
@@ -297,10 +315,12 @@ export function computeCost(spec, bom, options = {}) {
   else if (projectMarginPct >= marginFloor) marginFloorStatus = 'amber'; // amber zone
   else marginFloorStatus = 'below_floor';                            // red, blocks
 
-  // ── Discount-was-applied check ─────────────────────────────────────────
-  const declaredDiscount = spec.pricing?.discount?.applied_nzd || 0;
-  const declaredDiscountOk =
-    Math.abs(declaredDiscount - discountAppliedIncGst) < 1; // ±$1 tolerance
+  // ── Approval gate ──────────────────────────────────────────────────────
+  // ANY discount > $1 needs owner_approved, regardless of which path produced
+  // it (auto-mode discount field OR locked-below-list implicit gap). Uses the
+  // computed gap so a rep can't bypass the gate by locking the price and
+  // leaving applied_nzd at 0 in the audit log.
+  const hasDiscount = discountAppliedIncGst > 1;
 
   // ── Warnings ───────────────────────────────────────────────────────────
   const warnings = [];
@@ -313,20 +333,20 @@ export function computeCost(spec, bom, options = {}) {
                `~$${r0(totalCostExGst / (1 - marginFloor / 100) * (1 + gst))}.`,
     });
   }
-  if (declaredDiscount > 0 && !declaredDiscountOk) {
-    warnings.push({
-      severity: 'warn',
-      code: 'discount_declared_mismatch',
-      message: `Declared discount ($${declaredDiscount}) does not match ` +
-               `computed discount ($${discountAppliedIncGst}). ` +
-               `Check spec.pricing.discount.applied_nzd vs customer_price_inc_gst.`,
-    });
-  }
-  if (declaredDiscount > 0 && !spec.pricing.discount?.owner_approved) {
+  if (hasDiscount && !spec.pricing.discount?.owner_approved) {
     warnings.push({
       severity: 'error',
       code: 'discount_not_approved',
-      message: 'Discount applied but spec.pricing.discount.owner_approved is not true.',
+      message: `Discount of $${r0(discountAppliedIncGst)} applied but owner_approved is not true. ` +
+               `Admin must tick "Owner has approved" on the Pricing tab.`,
+    });
+  }
+  if (hasDiscount && !(spec.pricing.discount?.reason || '').trim()) {
+    warnings.push({
+      severity: 'error',
+      code: 'discount_reason_missing',
+      message: `Discount of $${r0(discountAppliedIncGst)} applied but no reason recorded. ` +
+               `Audit log requires a reason text for every discount.`,
     });
   }
 
@@ -344,6 +364,7 @@ export function computeCost(spec, bom, options = {}) {
     },
     totals: {
       system_kw: systemKw,
+      auto_priced,
       total_cost_ex_gst: totalCostExGst,
       total_list_ex_gst: totalListExGst,
       total_list_inc_gst: totalListIncGst,
@@ -360,7 +381,6 @@ export function computeCost(spec, bom, options = {}) {
       hw_margin_dollar: hwMarginDollar,
     },
     margin_floor_status: marginFloorStatus,
-    declared_discount_matches_computed: declaredDiscountOk,
     warnings,
     gst_rate: gst,
   };

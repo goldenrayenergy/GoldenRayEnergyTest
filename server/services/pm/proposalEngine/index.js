@@ -136,9 +136,12 @@ function runSingleTier(spec, childOpts, startedAt) {
     };
   }
 
-  // 2. Build BoM from spec
+  // 2. Build BoM from spec. Collect bomBuilder warnings (e.g. unmatched BoS
+  // roles, missing BMS) so they can be promoted to engineering hard_fails
+  // when severity is 'error'.
   let bom;
-  try { bom = buildBom(spec, childOpts); }
+  const bomWarnings = [];
+  try { bom = buildBom(spec, { ...childOpts, warnings: bomWarnings }); }
   catch (e) {
     return {
       ok: false,
@@ -149,6 +152,20 @@ function runSingleTier(spec, childOpts, startedAt) {
 
   // 3. Engineering validation
   const engineering = validateEngineering(spec, childOpts);
+
+  // 3b. Promote severity='error' BoM warnings to engineering hard_fails.
+  // Today these surface for missing BMS controller on a battery quote
+  // (AS/NZS 5139) — without a BMS, the system can't ship.
+  for (const w of bomWarnings) {
+    if (w.severity === 'error') {
+      engineering.hard_fails.push({
+        rule: w.code === 'bms_unmatched'
+          ? 'AS/NZS 5139 — BMS controller required'
+          : `BoM blocker — ${w.code}`,
+        message: w.message,
+      });
+    }
+  }
 
   // 4. Cost computation (always run — owner sees this even on hard_fail)
   let cost = null;
@@ -163,8 +180,17 @@ function runSingleTier(spec, childOpts, startedAt) {
   }
 
   // 5. Overall ship-ready check
+  // Any severity:'error' cost warning blocks the quote — covers
+  //   • below_margin_floor (the 10% floor)
+  //   • discount_not_approved (Phase E)
+  //   • discount_reason_missing (Phase E)
+  // Today the latter two also pre-block via configValidator when the rep
+  // declared the discount; the cost-side gate catches the locked-below-list
+  // case where applied_nzd is 0 but the computed gap > 0 (unapproved by audit).
+  const costErrorWarnings = (cost.warnings || []).filter(w => w.severity === 'error');
   const canShip = engineering.hard_fails.length === 0 &&
-                  cost.margin_floor_status !== 'below_floor';
+                  cost.margin_floor_status !== 'below_floor' &&
+                  costErrorWarnings.length === 0;
 
   return {
     ok: true,
@@ -172,9 +198,7 @@ function runSingleTier(spec, childOpts, startedAt) {
     can_ship: canShip,
     block_reasons: [
       ...engineering.hard_fails.map(f => `${f.rule}: ${f.message}`),
-      ...(cost.margin_floor_status === 'below_floor'
-          ? cost.warnings.filter(w => w.code === 'below_margin_floor').map(w => w.message)
-          : []),
+      ...costErrorWarnings.map(w => w.message),
     ],
     bom,
     engineering,

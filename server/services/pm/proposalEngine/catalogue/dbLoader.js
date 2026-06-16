@@ -49,7 +49,7 @@ const CATEGORY_BUCKETS = {
   INVERTERS: ['Inverters - Grid Tied', 'Inverters - Off Grid',
               'Inverters - Commercial', 'Fronius Tauro Eco'],
   BATTERIES: ['Batteries - Lithium'],
-  BMS_CONTROLLERS: ['BYD- BMS', 'Battery Accessories'],
+  BMS_CONTROLLERS: ['BMS', 'BYD- BMS', 'Battery Accessories'],
   SMART_METERS: ['Smart Meters'],
   EV_CHARGERS: ['EV Chargers Fronius'],
   BOS_ITEMS: ['Balance of System', 'Racking & Mounting', 'Roof Seal',
