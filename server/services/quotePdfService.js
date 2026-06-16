@@ -1,10 +1,13 @@
 // Detailed Quote PDF Generator
-// Generates a professional multi-section PDF with full savings breakdown
+// Generates a professional multi-section PDF with full savings breakdown.
+// Phase G1 — switched to shared launchHeadlessBrowser helper.
+
+import { launchHeadlessBrowser } from './pm/proposalEngine/headlessBrowser.js';
 
 export async function generateQuotePDF(customer, calc) {
+  let browser;
   try {
-    const puppeteer = await import('puppeteer');
-    const browser = await puppeteer.default.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    browser = await launchHeadlessBrowser();
     const page = await browser.newPage();
     const html = buildQuoteHTML(customer, calc);
     await page.setContent(html, { waitUntil: 'networkidle0' });
@@ -16,7 +19,8 @@ export async function generateQuotePDF(customer, calc) {
     await browser.close();
     return pdf;
   } catch (err) {
-    console.warn('Puppeteer not available, returning HTML buffer');
+    if (browser) try { await browser.close(); } catch {}
+    console.warn(`Chromium not available — returning HTML buffer. (${err.message})`);
     return Buffer.from(buildQuoteHTML(customer, calc));
   }
 }

@@ -272,12 +272,22 @@ router.post('/:id/generate',
       outputs: {
         customer_pdf: { storage_path: customerUpload.storage_path, sha256: customerUpload.sha256, size_bytes: customerUpload.size_bytes },
         sales_console_pdf: { storage_path: salesUpload.storage_path, sha256: salesUpload.sha256, size_bytes: salesUpload.size_bytes },
+        // Phase G3 — surface the silent failure. used_fallback=true means the
+        // upload above is actually raw HTML, not a real PDF. Phase G2 — concat
+        // tracks which manufacturer datasheets made it into the final PDF.
+        used_fallback: rendered.used_fallback === true,
+        fallback_reason: rendered.fallback_reason || null,
+        concat: rendered.concat || null,
       },
     }).then(() => {}).catch(() => {});  // non-fatal
 
     await writeAudit(req, {
       quote_id: quote.id, version_id: current.id, action: 'pdf.generated',
-      after: { customer_sha256: customerUpload.sha256, duration_ms: Date.now() - t0 },
+      after: {
+        customer_sha256: customerUpload.sha256,
+        duration_ms: Date.now() - t0,
+        used_fallback: rendered.used_fallback === true,
+      },
     });
 
     res.json({
@@ -288,6 +298,12 @@ router.post('/:id/generate',
       customer_pdf: customerUpload,
       sales_console_pdf: salesUpload,
       duration_ms: Date.now() - t0,
+      // Phase G3 — clients can now tell whether the upload is a real PDF or
+      // an HTML fallback (renderer failed). When true, the rep should re-try
+      // generate after the rendering pipeline is fixed.
+      used_fallback: rendered.used_fallback === true,
+      fallback_reason: rendered.fallback_reason || null,
+      concat: rendered.concat || null,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
