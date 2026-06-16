@@ -21,6 +21,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 
 import { getCatalogue } from '../catalogue/index.js';
+import { findBmsForBattery } from '../catalogue/bosRoles.js';
 import { REGIONS, WARRANTY_TERMS, requiredBmsCount } from '../data/engineeringRules.js';
 import { normalizeStringDesign } from '../stringDesignShape.js';
 
@@ -267,9 +268,11 @@ function hardwareDetailBlocks(spec, catalogue, costResult) {
   const battery = spec.system?.battery?.sku ? catalogue.BATTERIES[spec.system.battery.sku] : null;
   const meter = spec.system?.smart_meter?.sku ? catalogue.SMART_METERS[spec.system.smart_meter.sku] : null;
 
-  // BMS lines exist on the BoM; count needed BMS units per series.
+  // BMS resolved the same way bomBuilder does — by battery series, not hardcoded.
   const batteryModuleCount = spec.system?.battery?.module_count || 0;
   const batteryUsableKwh = battery ? +(batteryModuleCount * battery.module_kwh).toFixed(2) : 0;
+  const bms = battery ? findBmsForBattery(catalogue, battery.series) : null;
+  const bmsCount = battery ? requiredBmsCount(battery.series, batteryModuleCount) : null;
 
   // Effective continuous + peak — derived per the engineering rules. Falls
   // back to N/A strings if the spec hasn't been populated for a SKU.
@@ -326,6 +329,17 @@ function hardwareDetailBlocks(spec, catalogue, costResult) {
       chemistry: battery.chemistry || 'LFP',
       image_url: battery.image_url,
       datasheet_url: battery.datasheet_url,
+      warranty: w.battery,
+    } : null,
+
+    bms: bms && bmsCount ? {
+      sku: bms.sku,
+      name: bms.name,
+      brand: bms.brand,
+      count: bmsCount,
+      for_battery_series: bms.for_battery_series || battery?.series || null,
+      image_url: bms.image_url,
+      datasheet_url: bms.datasheet_url,
       warranty: w.battery,
     } : null,
 

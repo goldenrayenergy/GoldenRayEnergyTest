@@ -275,24 +275,23 @@ export function findBosByRole(catalogue, role) {
   return def.pick(catalogue);
 }
 
-// ── BMS picker (by battery series, not hardcoded SKU) ────────────────────
-// engineeringRules.js has BMS_RULES.HVM.bms_sku='GEN-BAC-ACC-HVM', but the
-// live catalogue has BYD-BAC-ACC-GEN. Look up by series match instead.
+// ── BMS picker (by battery series, exact match only) ─────────────────────
+// Returns the BMS controller whose specs.for_battery_series exactly matches
+// the requested battery series. Returns null on any miss — callers MUST
+// surface a hard error (not silently substitute a cable or wrong-series BMS).
+//
+// History: this used to fall back to brand-aligned generic accessories and
+// then to "any BMS controller" — that masked the missing-BMS-rows data gap
+// for months and shipped every battery quote with a Victron CAN-bus cable as
+// the BMS line. Exact-match only is the holistic fix.
 export function findBmsForBattery(catalogue, batterySeries) {
   if (!batterySeries) return null;
-  const bmsItems = Object.values(catalogue.BMS_CONTROLLERS || {});
-  // 1. Try exact for_battery_series match
-  const exact = bmsItems.find(i => i.for_battery_series === batterySeries);
-  if (exact) return exact;
-  // 2. Try brand-aligned generic accessory (e.g., BYD-BAC-ACC-GEN for any BYD)
-  const brandPrefix = batterySeries.startsWith('HV') ? 'BYD'   // HVM/HVS = BYD
-                    : batterySeries === 'Reserva'    ? 'Fronius'
-                    : batterySeries === 'LVL'        ? 'BYD'
-                    : null;
-  if (brandPrefix) {
-    const branded = bmsItems.find(i => i.brand?.startsWith(brandPrefix));
-    if (branded) return branded;
-  }
-  // 3. Last resort: any BMS controller (warn-and-use)
-  return bmsItems[0] || null;
+  const entries = Object.entries(catalogue.BMS_CONTROLLERS || {});
+  const hit = entries.find(([, v]) => v.for_battery_series === batterySeries);
+  if (!hit) return null;
+  // Ensure `sku` is on the returned object — JS-fallback catalogue stores the
+  // SKU as the map key and doesn't repeat it on the value, but every caller
+  // expects `.sku` for BoM emission.
+  const [sku, value] = hit;
+  return value.sku ? value : { ...value, sku };
 }

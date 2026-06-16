@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { pmQuotesAPI, pmContactsAPI, pmProposalEngineAPI } from '../services/pmQuotesApi';
 import { useAuth } from '../../context/AuthContext';
 
@@ -40,7 +40,25 @@ export default function QuoteFormPage() {
   const [saveResult, setSaveResult] = useState(null);    // { engine, scenarios } from server
   const [saveError, setSaveError] = useState(null);       // { error, config_errors[] }
   const [activeTab, setActiveTab] = useState('customer');
-  const [activeTierIdx, setActiveTierIdx] = useState(0);
+  // Active tier persisted in URL (?tier=N) so navigating away + back keeps the
+  // user on the same tier. Clamped to [0, tiers.length-1] downstream.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialUrlTier = (() => {
+    const n = Number(searchParams.get('tier'));
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  })();
+  const [activeTierIdx, setActiveTierIdx] = useState(initialUrlTier);
+  useEffect(() => {
+    setSearchParams(prev => {
+      const sp = new URLSearchParams(prev);
+      if (String(activeTierIdx) !== sp.get('tier')) {
+        sp.set('tier', String(activeTierIdx));
+      }
+      return sp;
+    }, { replace: true });
+    // setSearchParams is stable per react-router contract
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTierIdx]);
   // P6 — live preview state
   const [previewResult, setPreviewResult] = useState(null);
   const [previewing, setPreviewing] = useState(false);
@@ -151,6 +169,15 @@ export default function QuoteFormPage() {
   const activeTier = isMultiTier ? spec.tiers[safeActiveIdx] : null;
   const isTierScopedTab = isMultiTier && TIER_SCOPED_TABS.has(activeTab);
 
+  // Per the "tiers differ on features, not coverage" hard rule, System tab
+  // edits default to propagating across all tiers. Reps can opt out per quote
+  // via spec.tier_strip.lock_system_sizing=false (advanced mode).
+  const lockSystemSizing = spec?.tier_strip?.lock_system_sizing !== false;
+  const setLockSystemSizing = (next) => setSpec(prev => ({
+    ...prev,
+    tier_strip: { ...(prev.tier_strip || {}), lock_system_sizing: next },
+  }));
+
   // The view spec passed to the section: for shared tabs it's the real spec.
   // For tier-scoped tabs (System / Pricing) it's an "effective" view where
   // system/pricing reflect the active tier's overrides.
@@ -167,6 +194,11 @@ export default function QuoteFormPage() {
 
   // Wrapped update fn: shared tabs write to top-level spec; tier-scoped tabs
   // write System/Pricing/cost_overrides to the active tier.
+  //
+  // System tab + lock_system_sizing=true: the CHANGED top-level system fields
+  // (shallow diff between prev and next system objects) propagate to every
+  // tier's system_overrides — enforces the "tiers differ on features, not
+  // coverage" hard rule. Pricing + cost_overrides remain tier-local.
   const sectionUpdate = (updater) => {
     setSpec(prev => {
       const prevTiers = prev?.tiers || [];
@@ -181,16 +213,45 @@ export default function QuoteFormPage() {
         cost_overrides: prevActive.cost_overrides || { labour: [], compliance: [], custom: [] },
       };
       const next = typeof updater === 'function' ? updater(prevView) : updater;
-      const newTiers = [...prevTiers];
-      newTiers[safeActiveIdx] = {
-        ...prevActive,
-        system_overrides: next.system,
-        pricing: next.pricing,
-        cost_overrides: next.cost_overrides || prevActive.cost_overrides,
-      };
+      const shouldPropagateSystem = activeTab === 'system' && lockSystemSizing;
+      const systemDiff = shouldPropagateSystem
+        ? shallowDiff(prevView.system || {}, next.system || {})
+        : null;
+      const newTiers = prevTiers.map((tier, idx) => {
+        if (idx === safeActiveIdx) {
+          return {
+            ...prevActive,
+            system_overrides: next.system,
+            pricing: next.pricing,
+            cost_overrides: next.cost_overrides || prevActive.cost_overrides,
+          };
+        }
+        if (systemDiff && Object.keys(systemDiff).length > 0) {
+          return {
+            ...tier,
+            system_overrides: { ...(tier.system_overrides || {}), ...systemDiff },
+          };
+        }
+        return tier;
+      });
       return { ...prev, tiers: newTiers };
     });
   };
+
+  // Shallow diff of two objects — returns only the keys whose JSON-stringified
+  // values differ. Used to propagate just-changed System fields across tiers
+  // when lock_system_sizing is on, without clobbering tier-specific overrides
+  // for unchanged fields (battery, wattpilot_included, etc).
+  function shallowDiff(prev, next) {
+    const out = {};
+    const keys = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);
+    for (const k of keys) {
+      if (JSON.stringify(prev[k]) !== JSON.stringify(next[k])) {
+        out[k] = next[k];
+      }
+    }
+    return out;
+  }
 
   // Tier strip actions
   function handleTierRename(idx, newLabel) {
@@ -336,6 +397,11 @@ export default function QuoteFormPage() {
           sizeMode={spec.tier_strip?.size_mode || 'same_size'}
           canRecompose={canRecompose}
           recomposing={recomposing}
+          tierEngineCosts={(() => {
+            const eng = (previewResult || saveResult)?.engine;
+            if (!eng?.is_multi_tier) return [];
+            return (eng.tiers || []).map(t => t?.cost || null);
+          })()}
           onPickActive={setActiveTierIdx}
           onRename={handleTierRename}
           onMarkRec={handleTierMarkRec}
@@ -354,8 +420,21 @@ export default function QuoteFormPage() {
             <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
               Editing the <b>{activeTab}</b> for tier
               {' '}<b>"{activeTier.label}"</b>{activeTier.is_recommended && ' ★'}.
-              Changes only apply to this tier. To change shared fields
-              (Customer, Bills, Preferences, Site survey), switch to those tabs.
+              {activeTab === 'system' ? (
+                <label className="ml-3 inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={lockSystemSizing}
+                    onChange={e => setLockSystemSizing(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                  />
+                  <span>Apply changes to all tiers</span>
+                  <span className="text-amber-700/70">— tiers should differ on features, not coverage</span>
+                </label>
+              ) : (
+                <> Changes only apply to this tier. To change shared fields
+                  (Customer, Bills, Preferences, Site survey), switch to those tabs.</>
+              )}
             </div>
           )}
 
@@ -375,6 +454,45 @@ export default function QuoteFormPage() {
               </button>
             ))}
           </div>
+
+          {/* Coverage-drift warning — flags when tier panel counts diverge enough
+              that the tiers are effectively offering different system SIZES
+              rather than different feature bundles. Triggers when max-min > 3
+              panels (~1.5 kWp at 500W). Per the "tiers differ on features, not
+              coverage" hard rule, this almost always wants equalisation. */}
+          {isTierScopedTab && activeTab === 'system' && (() => {
+            const counts = (spec.tiers || []).map(t =>
+              Number(t.system_overrides?.panel?.count) || 0);
+            const max = Math.max(...counts), min = Math.min(...counts);
+            if (max - min <= 3) return null;
+            const recIdx = (spec.tiers || []).findIndex(t => t.is_recommended);
+            const targetCount = counts[recIdx >= 0 ? recIdx : 0];
+            const equalize = () => setSpec(prev => ({
+              ...prev,
+              tiers: (prev.tiers || []).map(t => ({
+                ...t,
+                system_overrides: {
+                  ...(t.system_overrides || {}),
+                  panel: { ...(t.system_overrides?.panel || {}), count: targetCount },
+                },
+              })),
+            }));
+            return (
+              <div className="mb-4 rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-900 flex items-center justify-between gap-3">
+                <div>
+                  <b>Panel count drift across tiers:</b> {counts.join(' / ')} panels (Δ {max - min}).
+                  Policy: tiers should differ on <b>features</b> (battery / backup / EV-ready),
+                  not on <b>coverage</b>. Match all tiers to the recommended tier's size?
+                </div>
+                <button
+                  type="button"
+                  onClick={equalize}
+                  className="px-2.5 py-1 rounded bg-yellow-200 hover:bg-yellow-300 text-yellow-900 font-semibold whitespace-nowrap">
+                  Equalize to {targetCount}
+                </button>
+              </div>
+            );
+          })()}
 
           {/* Active section — engineSnapshot prefers live preview over last-saved.
               billRecommendation feeds System tab L1 hints with engine-derived
@@ -526,9 +644,11 @@ export default function QuoteFormPage() {
           )}
 
           <div className="bg-white border border-slate-200 rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-slate-900 mb-2">Lifecycle</h3>
+            <h3 className="text-sm font-semibold text-slate-900 mb-2">Quote lifecycle</h3>
             <p className="text-xs text-slate-500 mb-3">
-              Generate PDFs, email, sign and deposit live on the quote detail page (Day 7).
+              Open the detail page to generate the customer PDF + sales console,
+              share the quote with the customer, capture their signature, and
+              record the deposit.
             </p>
             <Link to={`/pm/quotes/${id}`}
                   className="inline-block px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-medium">
@@ -750,7 +870,22 @@ function MultiTierValidationPanel({ saveResult, previewing }) {
                 </div>
               </div>
               <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
-                <span className="text-slate-500">Margin</span>
+                {/* Phase D2 — margin breakdown: list / cost / profit / % */}
+                {t.cost?.totals && <>
+                  <span className="text-slate-500">List price</span>
+                  <span className="text-right text-slate-700 font-mono">
+                    ${Math.round(t.cost.totals.total_list_inc_gst || 0).toLocaleString()}
+                  </span>
+                  <span className="text-slate-500">Build cost</span>
+                  <span className="text-right text-slate-700 font-mono">
+                    ${Math.round((t.cost.totals.total_cost_ex_gst || 0) * 1.15).toLocaleString()}
+                  </span>
+                  <span className="text-slate-500">Margin $</span>
+                  <span className={`text-right font-mono ${floorClass}`}>
+                    ${Math.round(t.cost.totals.profit_inc_gst || 0).toLocaleString()}
+                  </span>
+                </>}
+                <span className="text-slate-500">Margin %</span>
                 <span className={`text-right ${floorClass} font-semibold`}>{margin} · {floor}</span>
                 {expected && <>
                   <span className="text-slate-500">Yr1 save</span>

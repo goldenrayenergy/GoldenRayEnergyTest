@@ -102,17 +102,32 @@ export function buildBom(spec, options = {}) {
         group: 'hardware',
       });
 
-      // BMS controller — legacy uses BMS_RULES.bms_sku, DB picks by series
+      // BMS controller — legacy uses BMS_RULES.bms_sku, DB picks by series.
+      // Missing-BMS is a HARD error on battery quotes: every certified lithium
+      // battery system requires a BMS controller per AS/NZS 5139. The
+      // engineeringValidator picks up `severity: 'error'` warnings emitted
+      // here and surfaces them as hard_fails so the engine refuses to ship.
       const bmsCount = requiredBmsCount(batt.series, moduleCount);
       let bmsSku = null;
       if (legacy) {
         bmsSku = BMS_RULES[batt.series]?.bms_sku;
+        // Legacy path: also require the row to actually exist in the catalogue.
+        // Without this, a BMS_RULES.bms_sku pointing at a deleted row would
+        // silently push a phantom BoM line that costEngine would later fail on.
+        if (bmsSku && !catalogue.BMS_CONTROLLERS?.[bmsSku]) {
+          warnings.push({ severity: 'error', code: 'bms_unmatched',
+                          message: `BMS_RULES.${batt.series}.bms_sku='${bmsSku}' is not in the ` +
+                                   `catalogue. Add the row before this quote can ship.` });
+          bmsSku = null;
+        }
       } else {
         const bmsItem = findBmsForBattery(catalogue, batt.series);
         bmsSku = bmsItem?.sku;
         if (!bmsItem) {
-          warnings.push({ severity: 'warn', code: 'bms_unmatched',
-                          message: `No BMS controller in catalogue for battery series ${batt.series}.` });
+          warnings.push({ severity: 'error', code: 'bms_unmatched',
+                          message: `No BMS controller in catalogue for battery series ${batt.series}. ` +
+                                   `Add a product row with specs.for_battery_series='${batt.series}' before ` +
+                                   `this quote can ship.` });
         }
       }
       if (bmsSku && bmsCount && bmsCount > 0) {

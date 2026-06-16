@@ -221,9 +221,13 @@ function validateSystem(s, errors, catalogue) {
 
 function validatePricing(p, errors) {
   if (!p) { err(errors, 'pricing', 'pricing section required'); return; }
-  requireField(p.customer_price_inc_gst, 'pricing.customer_price_inc_gst', errors);
-  checkType(p.customer_price_inc_gst, 'number', 'pricing.customer_price_inc_gst', errors);
-  checkRange(p.customer_price_inc_gst, 1000, 200000, 'pricing.customer_price_inc_gst', errors);
+  // customer_price_inc_gst is OPTIONAL now (Phase D1). null/undefined means
+  // auto-priced — engine quotes the full list price. When set, it's a manual
+  // lock + must be a number in range.
+  if (p.customer_price_inc_gst != null) {
+    checkType(p.customer_price_inc_gst, 'number', 'pricing.customer_price_inc_gst', errors);
+    checkRange(p.customer_price_inc_gst, 1000, 200000, 'pricing.customer_price_inc_gst', errors);
+  }
 
   if (p.stage) checkEnum(p.stage, STAGES, 'pricing.stage', errors);
 

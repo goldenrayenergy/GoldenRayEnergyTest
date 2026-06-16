@@ -45,6 +45,13 @@ export function pageComponents(d, sectionNum, sectionsTotal) {
         specRows: batterySpecRows(h.battery),
       }) : ''}
 
+      ${h.bms ? componentBlock({
+        kind: 'Battery management system (BMS+BCU)',
+        countLabel: h.bms.count ? `× ${h.bms.count}` : '× 1',
+        product: h.bms,
+        specRows: bmsSpecRows(h.bms),
+      }) : ''}
+
       ${componentBlock({
         kind: 'Smart meter & monitoring',
         countLabel: '× 1',
@@ -126,6 +133,16 @@ function batterySpecRows(b) {
       : null,
     b.series ? ['Series',     b.series] : null,
     b.chemistry ? ['Chemistry', `${b.chemistry} (Lithium Iron Phosphate — safest residential battery chemistry)`] : null,
+  ];
+}
+
+function bmsSpecRows(b) {
+  if (!b) return [];
+  return [
+    b.for_battery_series ? ['Paired with', `${b.for_battery_series} battery series`] : null,
+    b.count ? ['Units in this system', `${b.count}× BMS+BCU controller`] : null,
+    ['Function', 'Monitors cell voltages + temperatures, manages charge/discharge, enforces safety cut-offs'],
+    ['Required', 'Yes — every lithium battery system requires a certified BMS per AS/NZS 5139'],
   ];
 }
 

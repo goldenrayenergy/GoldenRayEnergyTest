@@ -70,11 +70,11 @@ check('battery HVS @ 11 kWh',
 // ── 3. Pricing tab hints — fallback paths ───────────────────────────────────
 console.log('\n━━━ 3. Pricing tab hints — fallback when no engine run yet ━━━');
 check('customer price (no snapshot)',  customerPriceHint(null),
-      /Set the customer-facing total.*Save once to see the engine LIST/);
+      /Customer-facing total.*tracks the engine LIST/);
 check('customer price (snapshot, no totals)', customerPriceHint({}),
-      /Set the customer-facing total/);
+      /Customer-facing total/);
 check('discount (no snapshot)',        discountHint(null),
-      /Save once to see the cap \(11% of engine LIST\)/);
+      /Reason text and owner approval are required/);
 
 // ── 4. Pricing tab hints — real engine.cost block ───────────────────────────
 console.log('\n━━━ 4. Pricing tab hints — with real engine.cost from runEngine() ━━━');
@@ -123,19 +123,10 @@ const list = cost?.totals?.total_list_inc_gst;
 console.log(`  Engine ran: list=$${list} margin=${cost?.totals?.project_margin_pct}%`);
 check('customer price hint with real LIST',
       customerPriceHint(cost),
-      v => v.includes('Engine LIST: $') && v.includes('Floor (LIST − 11%):') && v.includes('owner approval'));
+      v => v.includes('Engine LIST: $') && v.includes('Auto-priced'));
 check('discount hint with real LIST',
       discountHint(cost),
-      v => v.includes('Cap: $') && v.includes('11% of') && v.includes('LIST'));
-
-// Verify the actual cap math: cap should be exactly 11% of list
-const expectedCap = list * 0.11;
-const discountStr = discountHint(cost);
-const capMatch = discountStr.match(/Cap: \$([\d,]+)/);
-const actualCap = capMatch ? Number(capMatch[1].replace(/,/g, '')) : null;
-check('cap math = 11% of LIST',
-      `expected≈$${expectedCap.toFixed(0)} got=$${actualCap}`,
-      v => Math.abs(actualCap - expectedCap) < 1);  // within $1 of expected
+      v => v.includes('Engine LIST: $') && v.includes('Owner approval'));
 
 console.log(`\n━━━ ${pass} pass · ${fail} fail ━━━`);
 if (fail > 0) process.exit(1);

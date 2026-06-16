@@ -35,7 +35,7 @@ const CUSTOM_CATEGORIES = [
   { value: 'other',      label: 'Other (rolls into labour subtotal)' },
 ];
 
-export default function CostsSection({ spec, update, engineSnapshot, quote }) {
+export default function CostsSection({ spec, update, engineSnapshot, costSnapshot, quote }) {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [showInternal, setShowInternal] = useState(false);
@@ -50,25 +50,25 @@ export default function CostsSection({ spec, update, engineSnapshot, quote }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Engine result for the active tier (already tier-scoped by QuoteFormPage)
+  // Engine cost for the active tier — QuoteFormPage now passes costSnapshot
+  // pre-scoped to spec.tiers[activeTierIdx].cost (multi-tier) or engine.cost
+  // (single-tier). Falls back to engineSnapshot picking the headline tier so
+  // historical callers without costSnapshot still get a sensible view.
   const engine = engineSnapshot?.engine;
-  let lines = [];
-  let sections = {};
-  let totals = {};
-  if (engine?.is_multi_tier) {
-    // QuoteFormPage's sectionViewSpec already merged the active tier;
-    // for engine readback we need to pick the right tier.
-    // The form passes engineSnapshot from the LATEST preview, which has
-    // ALL tiers in engine.tiers[]. Pick the headline tier as the default view.
-    // (TODO: have the form pass activeTierIdx so we read the actual edited tier.)
-    const headlineTier = engine.tiers.find(t => t.is_headline) || engine.tiers[0];
-    lines = headlineTier?.cost?.lines || [];
-    sections = headlineTier?.cost?.sections || {};
-    totals = headlineTier?.cost?.totals || {};
-  } else if (engine?.cost) {
-    lines = engine.cost.lines || [];
-    sections = engine.cost.sections || {};
-    totals = engine.cost.totals || {};
+  let lines = costSnapshot?.lines || [];
+  let sections = costSnapshot?.sections || {};
+  let totals = costSnapshot?.totals || {};
+  if (!costSnapshot) {
+    if (engine?.is_multi_tier) {
+      const headlineTier = engine.tiers.find(t => t.is_headline) || engine.tiers[0];
+      lines = headlineTier?.cost?.lines || [];
+      sections = headlineTier?.cost?.sections || {};
+      totals = headlineTier?.cost?.totals || {};
+    } else if (engine?.cost) {
+      lines = engine.cost.lines || [];
+      sections = engine.cost.sections || {};
+      totals = engine.cost.totals || {};
+    }
   }
 
   const hwLines = lines.filter(l => l.group === 'hardware');
