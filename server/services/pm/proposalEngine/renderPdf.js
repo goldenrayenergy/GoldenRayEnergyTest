@@ -232,10 +232,12 @@ export async function renderProposalPdfs(args = {}) {
     const d = buildMultiTierProposalData({ spec, engineResult, tierScenarios, options });
     const customerHtml = buildCustomerProposalHTML({ spec, engineResult, tierScenarios, options });
     const salesConsoleHtml = buildMultiTierSalesConsole(d, engineResult);
-    const [customerOut, salesOut] = await Promise.all([
-      renderAndConcat(customerHtml, spec, options?.catalogue, 'customer'),
-      htmlToPdf(salesConsoleHtml, 'sales-console'),
-    ]);
+    // Serialise the two renders. On Render's 512 MB free tier two Chromium
+    // instances can't co-exist — running them via Promise.all caused the
+    // second launch to OOM and silently fall back to HTML (the sales-
+    // console-as-HTML bug we hit after Phase G shipped).
+    const customerOut = await renderAndConcat(customerHtml, spec, options?.catalogue, 'customer');
+    const salesOut    = await htmlToPdf(salesConsoleHtml, 'sales-console');
     return {
       customer_pdf: customerOut.buffer,
       sales_console_pdf: salesOut.buffer,
@@ -269,10 +271,9 @@ export async function renderProposalPdfs(args = {}) {
     options,
   });
   const salesConsoleHtml = buildSalesConsole(d, engineResult.cost);
-  const [customerOut, salesOut] = await Promise.all([
-    renderAndConcat(customerHtml, spec, options?.catalogue, 'customer'),
-    htmlToPdf(salesConsoleHtml, 'sales-console'),
-  ]);
+  // Serialise the two renders — see multi-tier branch above for why.
+  const customerOut = await renderAndConcat(customerHtml, spec, options?.catalogue, 'customer');
+  const salesOut    = await htmlToPdf(salesConsoleHtml, 'sales-console');
   return {
     customer_pdf: customerOut.buffer,
     sales_console_pdf: salesOut.buffer,
