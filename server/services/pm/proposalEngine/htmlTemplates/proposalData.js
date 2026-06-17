@@ -24,6 +24,7 @@ import { getCatalogue } from '../catalogue/index.js';
 import { findBmsForBattery } from '../catalogue/bosRoles.js';
 import { REGIONS, WARRANTY_TERMS, requiredBmsCount } from '../data/engineeringRules.js';
 import { normalizeStringDesign } from '../stringDesignShape.js';
+import { simulateTypicalDays } from '../dailyProfile.js';
 
 const fmt$ = n => '$' + Math.round(n).toLocaleString('en-NZ');
 const fmtNum = n => Math.round(n).toLocaleString('en-NZ');
@@ -61,9 +62,32 @@ function bomDisplayRow(item, catalogue) {
     qty: item.qty,
     name: cat?.name || item.sku,
     brand: cat?.brand || '',
+    category: cat?.category || null,
     reason: item.reason,
     group: item.group,
   };
+}
+
+// Phase H6 — map inverter brand → monitoring portal name + URL hint.
+// Used by systemSummary, pricing, typicalDays etc. so the customer PDF
+// doesn't claim "SolarWeb" when a Victron inverter is being quoted.
+export function monitoringPortalForBrand(brand) {
+  const b = String(brand || '').toLowerCase();
+  if (b.includes('fronius'))   return { name: 'SolarWeb',          app: 'Solar.web app' };
+  if (b.includes('victron'))   return { name: 'VRM Portal',         app: 'VRM Portal app' };
+  if (b.includes('enphase'))   return { name: 'Enphase Enlighten',  app: 'Enlighten Mobile' };
+  if (b.includes('sma'))       return { name: 'Sunny Portal',       app: 'SMA Energy app' };
+  if (b.includes('huawei'))    return { name: 'FusionSolar',        app: 'FusionSolar app' };
+  return { name: 'cloud monitoring portal', app: 'monitoring app' };
+}
+
+// Phase H6 — find a BoM row whose name matches a regex (for pulling the
+// actual mounting kit / DC conduit / cable / etc. on this quote rather
+// than hardcoding "Hopergy tin kit" or "Solarflex").
+export function findBomRowByPattern(bomRows, pattern, group) {
+  if (!Array.isArray(bomRows)) return null;
+  return bomRows.find(r => (!group || r.group === group) &&
+                            pattern.test(String(r.name || '')));
 }
 
 function batteryLabel(catalogue, batterySku, moduleCount) {
@@ -229,6 +253,7 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
       region: spec.customer.address.region,
       region_label: region?.label || spec.customer.address.region,
       yield_kwh_per_kwp: region?.yield_kwh_per_kwp_per_year || null,
+      losses_pct: region?.base_losses_pct ?? null,
       hardware_rows: hardwareRows,
       bos_rows: bosRows,
     },
@@ -248,7 +273,155 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
     },
     warranties: warrantyTerms(spec, catalogue),
     hardware: hardwareDetailBlocks(spec, catalogue, costResult),
+    // Phase H6 — thread preferences through so SLD / scenarios can adapt
+    // backup-circuit list, financing options, etc. to THIS customer.
+    preferences: {
+      backup_priority: spec.preferences?.backup_priority || null,
+      decision_makers: spec.preferences?.decision_makers || null,
+      financing: spec.preferences?.financing || null,
+    },
+    // Phase H1 — bill_analysis-sourced sections. Null when no bill on file
+    // (those pages just don't render). financial.kwhYr1 + Expected scenario
+    // are used to derive environmental + cash flow.
+    insights: buildInsights({
+      billAnalysis: options.billAnalysis || null,
+      scenarios,
+      annualKwh,
+      annualSpend,
+      systemKw,
+      usableKwh,
+      // Phase H2 — 4 typical-day simulations: summer/winter × sunny/cloudy.
+      // Engine-derived from this customer's system kWp + bills + region.
+      typical_days: simulateTypicalDays({ spec, catalogue }),
+    }),
   };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase H1 — Insights derived from bill_analysis + engine scenarios.
+// Five sections, each optional (null when source data missing):
+//   • do_nothing      — 25-yr trajectory of paying retail forever
+//   • tariff          — engine-recommended retailer/plan switch + savings
+//   • patterns        — seasonal/daily usage patterns from the bill parser
+//   • environmental   — CO2 saved + equivalents over 25 yrs
+//   • cash_flow       — yearly net position (Expected scenario)
+// ────────────────────────────────────────────────────────────────────────────
+function buildInsights({ billAnalysis, scenarios, annualKwh, annualSpend, systemKw, usableKwh, typical_days }) {
+  const out = { do_nothing: null, tariff: null, patterns: null,
+                environmental: null, cash_flow: null, typical_days: typical_days || null };
+
+  // ── Do nothing — bill_analysis.scenarios[do-nothing] ────────────────────
+  const doNothing = billAnalysis?.scenarios?.find?.(s => s.id === 'do-nothing');
+  if (doNothing) {
+    out.do_nothing = {
+      year_1_cost: doNothing.year_1_cost,
+      year_10_cost: doNothing.year_10_cost,
+      year_25_cost: doNothing.year_25_cost,
+      net_25yr: doNothing.net_25yr,
+      label: doNothing.label,
+      // Trajectory points for charting (yr 1 / 5 / 10 / 15 / 20 / 25 cumulative)
+      // Estimated via geometric interpolation between known knots
+      trajectory: estimateCumulativeTrajectory(doNothing),
+    };
+  } else if (annualKwh && annualSpend) {
+    // Fallback: project from annual spend + 7% energy inflation (engine default)
+    const yrly = [];
+    let cum = 0;
+    for (let y = 1; y <= 25; y++) {
+      cum += annualSpend * Math.pow(1.07, y - 1);
+      if ([1, 5, 10, 15, 20, 25].includes(y)) yrly.push({ year: y, cum_cost: Math.round(cum) });
+    }
+    out.do_nothing = {
+      year_1_cost: annualSpend,
+      year_10_cost: yrly.find(p => p.year === 10)?.cum_cost,
+      year_25_cost: yrly.find(p => p.year === 25)?.cum_cost,
+      net_25yr: yrly[yrly.length - 1].cum_cost,
+      label: 'Pay retail rates for 25 years',
+      trajectory: yrly,
+      derived: true,
+    };
+  }
+
+  // ── Recommended tariff (post-install) ───────────────────────────────────
+  if (billAnalysis?.switch_recommended && billAnalysis?.switch_to_retailer) {
+    out.tariff = {
+      switch_to_retailer: billAnalysis.switch_to_retailer,
+      switch_to_plan: billAnalysis.switch_to_plan || null,
+      annual_saving: billAnalysis.switch_annual_saving || 0,
+      current_retailer: billAnalysis.retailer || null,
+      current_plan: billAnalysis.plan_name || null,
+    };
+  }
+
+  // ── Usage patterns (winter spike / high baseline / etc.) ────────────────
+  if (Array.isArray(billAnalysis?.patterns) && billAnalysis.patterns.length > 0) {
+    out.patterns = billAnalysis.patterns.map(p => ({
+      code: p.code,
+      label: p.label,
+      details: p.details,
+      severity: p.severity || 'info',
+      recommendation: p.recommendation || null,
+    }));
+  }
+
+  // ── Environmental impact ─────────────────────────────────────────────────
+  // NZ grid average emission factor: 0.085 kg CO2 per kWh (MBIE 2024)
+  // 25-year solar generation = systemKw × 1250 kWh/kWp/yr × 25 × degradation
+  // Approximated as 21,000 kWh/kWp over 25 years (~6% lifetime degradation)
+  if (systemKw > 0) {
+    const lifetimeKwh = Math.round(systemKw * 21000);
+    const kgCo2Saved = Math.round(lifetimeKwh * 0.085);
+    out.environmental = {
+      yr1_kwh_generated: Math.round(systemKw * 1250),
+      lifetime_kwh: lifetimeKwh,
+      lifetime_co2_kg: kgCo2Saved,
+      // Equivalents — sourced from EPA/NZTA reference figures
+      equiv_trees:  Math.round(kgCo2Saved / 22),           // 22 kg CO2/yr per mature tree × 25 yrs ≈ 550 → divide
+      equiv_cars_off_road_years: Math.round(kgCo2Saved / 4600), // 4600 kg CO2/yr per average car
+      equiv_flights_AKL_LON: Math.round(kgCo2Saved / 3500),  // ~3500 kg CO2 per return AKL→LON economy
+    };
+  }
+
+  // ── 30-year cash flow (Expected scenario) ───────────────────────────────
+  if (scenarios?.expected?.yearly && Array.isArray(scenarios.expected.yearly)) {
+    let cumulative = -Math.abs(scenarios.expected.upfront_cost || 0);
+    const points = scenarios.expected.yearly.map((row, idx) => {
+      const net = (row.savings || 0) - (row.maintenance_cost || 0);
+      cumulative += net;
+      return { year: idx + 1, net_annual: Math.round(net), cumulative: Math.round(cumulative) };
+    });
+    const payback = points.find(p => p.cumulative >= 0);
+    out.cash_flow = {
+      upfront_cost: scenarios.expected.upfront_cost || 0,
+      points,
+      payback_year: payback?.year || null,
+      final_cumulative: points[points.length - 1]?.cumulative || 0,
+    };
+  }
+
+  return out;
+}
+
+// Project a cumulative-cost trajectory from the known year-1/10/25 knots that
+// the bill parser emits, using geometric growth between them.
+function estimateCumulativeTrajectory(doNothing) {
+  const knots = [
+    { year: 1,  cum_cost: doNothing.year_1_cost },
+    { year: 10, cum_cost: doNothing.year_10_cost },
+    { year: 25, cum_cost: doNothing.year_25_cost },
+  ].filter(k => k.cum_cost != null);
+  if (knots.length < 2) return knots;
+  const out = [];
+  for (const yr of [1, 5, 10, 15, 20, 25]) {
+    // Find surrounding knots
+    const lower = knots.filter(k => k.year <= yr).slice(-1)[0] || knots[0];
+    const upper = knots.find(k => k.year >= yr) || knots[knots.length - 1];
+    if (lower.year === upper.year) { out.push({ year: yr, cum_cost: Math.round(lower.cum_cost) }); continue; }
+    const t = (yr - lower.year) / (upper.year - lower.year);
+    const interpolated = lower.cum_cost + (upper.cum_cost - lower.cum_cost) * t;
+    out.push({ year: yr, cum_cost: Math.round(interpolated) });
+  }
+  return out;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

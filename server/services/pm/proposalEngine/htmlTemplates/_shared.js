@@ -113,6 +113,21 @@ export const PROPOSAL_CSS = `
   .terms p{font-size:10px;margin:4px 0}
   .terms h4{margin-top:8px}
   .terms ol li{font-size:10px;margin:2px 0}
+
+  /* Phase H5 — How-it-works grid (4 scenario cards w/ icons) */
+  .hiw-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .hiw{border:1px solid #D9DCE1;border-radius:8px;padding:10px;background:#fff}
+  .hiw .hiw-title{font-size:10.5px;font-weight:700;color:#0B0F1A;margin-bottom:6px;text-align:center}
+  .hiw-diagram{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:9px;text-align:center}
+  .hiw-node{padding:4px;border:1px solid #E5E7EB;border-radius:6px;background:#fff}
+  .hiw-node .icon{font-size:18px;color:#F5A623;display:block;margin-bottom:1px}
+  .hiw-node .lbl{font-size:8.5px;font-weight:700;color:#0B0F1A;letter-spacing:.3px}
+  .hiw-arrows{font-size:8px;color:#9CA3AF;text-align:center;margin-top:4px;font-style:italic}
+
+  /* Phase H5 — Flow-legend for stacked daily flow charts */
+  .flow-legend{display:flex;gap:14px;font-size:9px;color:#5C6470;margin-bottom:8px;flex-wrap:wrap}
+  .flow-legend span{display:flex;align-items:center;gap:3px}
+  .flow-legend .sw{width:10px;height:10px;border-radius:2px;display:inline-block}
 `;
 
 export function brandMark(d) {
