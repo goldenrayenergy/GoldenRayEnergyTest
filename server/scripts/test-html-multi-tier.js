@@ -126,8 +126,8 @@ console.log(`  ✓ Wrote ${(html.length / 1024).toFixed(1)} KB to ${outFile}`);
 section('Step 4 — Structural assertions');
 
 const pageCount = (html.match(/<section class="page">/g) || []).length;
-// Phase C-1 added the Components page between system summary and monthly profile.
-check(`7 customer pages rendered (got ${pageCount})`, pageCount === 7);
+// Multi-tier base 7 + H1 (3) + H2 + H3 + H4 + H5 = 14. Patterns + tariff hidden.
+check(`14 customer pages rendered (got ${pageCount})`, pageCount === 14);
 
 check('Three packages heading present', html.includes('Three packages — pick what fits'));
 check('"Solar only" tier label rendered', html.includes('Solar only'));
@@ -212,8 +212,8 @@ section('Step 5 — Single-tier (legacy) input still works');
     options: { quote_ref: 'PR-AVALA-2026-LEGACY' },
   });
   const legacyPageCount = (legacyHtml.match(/<section class="page">/g) || []).length;
-  // Phase C-1 added the Components page → single-tier is now 6 pages.
-  check('Legacy single-tier still renders 6 pages', legacyPageCount === 6);
+  // Legacy single-tier base 6 + H1 (3) + H2 + H3 + H4 + H5 = 13.
+  check('Legacy single-tier renders 13 pages (6 base + 7 H1-H5 derived)', legacyPageCount === 13);
   check('Legacy single-tier has NO tier comparison page',
         !legacyHtml.includes('Three packages — pick what fits'));
 }

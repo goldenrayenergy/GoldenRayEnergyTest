@@ -1,10 +1,37 @@
 // Page — Pricing & investment
+//
+// Phase H6 — equipment + labour bullets derived from BoM (no more
+// hardcoded "Hopergy tin kit" or "SolarWeb"). Mounting kit name pulled
+// from the actual BoS row; monitoring portal derived from inverter brand.
 
 import { pageHead, pageFoot } from '../_shared.js';
-import { fmt$ } from '../proposalData.js';
+import { fmt$, monitoringPortalForBrand, findBomRowByPattern } from '../proposalData.js';
 
 export function pagePricing(d, sectionNum, sectionsTotal) {
   const p = d.pricing;
+  const inverter = d.hardware?.inverter;
+  const battery  = d.hardware?.battery;
+  const portal   = monitoringPortalForBrand(inverter?.brand);
+
+  // Pull actual BoS items from the bos_rows list so the customer sees what's
+  // really on this quote, not a template Hopergy + Solarflex line.
+  const bosRows = d.system?.bos_rows || [];
+  const mountingKit = findBomRowByPattern(bosRows, /kit|rail|mount|hook|tin/i)?.name
+                   || 'Mounting rails + brackets';
+  const conduitItem = findBomRowByPattern(bosRows, /conduit|cable|solarflex|sf/i)?.name
+                   || 'DC conduit + cable';
+  const isolatorItem = findBomRowByPattern(bosRows, /isolator/i)?.name
+                   || 'DC + AC isolators';
+  const spdItem = findBomRowByPattern(bosRows, /spd|surge/i)?.name
+                   || 'Surge protection';
+
+  const equipmentList = [
+    `All ${d.system.panels} solar panels, ${inverter?.brand || ''} inverter${battery ? `, ${battery.brand} battery + BMS` : ''}, smart meter`,
+    `Mounting: ${mountingKit}`,
+    `Cabling: ${conduitItem}`,
+    `Electrical: ${isolatorItem} · ${spdItem}`,
+    'AS/NZS 4777-compliant labels + earthing',
+  ];
 
   return `<section class="page">
     ${pageHead(d, 'Your investment')}
@@ -30,24 +57,21 @@ export function pagePricing(d, sectionNum, sectionsTotal) {
       <div class="grid2">
         <div class="card">
           <h4>Equipment</h4>
-          <p>• All solar panels, inverter${d.system.battery_sku ? ', battery + BMS' : ''}, smart meter<br/>
-          • Mounting kit + rails (Hopergy tin kit)<br/>
-          • Cabling, conduit, isolators, surge protection<br/>
-          • AS/NZS 4777-compliant labels + earthing</p>
+          <p>${equipmentList.map(line => `• ${line}`).join('<br/>')}</p>
         </div>
         <div class="card">
           <h4>Labour &amp; commissioning</h4>
           <p>• Installation crew (${d.system.kw < 8 ? '1-2 days' : d.system.kw <= 12 ? '2-3 days' : '3-4 days'})<br/>
-          ${d.system.battery_sku ? '• Battery installation premium (BMS commissioning + training)<br/>' : ''}
+          ${battery ? '• Battery installation premium (BMS commissioning + training)<br/>' : ''}
           • Site supervisor + travel + logistics<br/>
-          • SolarWeb cloud monitoring setup + customer training</p>
+          • ${portal.name} monitoring setup + customer training</p>
         </div>
         <div class="card">
           <h4>Compliance &amp; certification</h4>
           <p>• System design &amp; engineering certificate<br/>
           • Independent electrical inspection + Record of Inspection (ROI)<br/>
           • Certificate of Compliance (CoC)<br/>
-          • Distributed Generation application to network operator</p>
+          • Distributed Generation application to ${d.system.region_label?.split('(')[1]?.replace(')','') || 'network operator'}</p>
         </div>
         <div class="card">
           <h4>Warranties</h4>

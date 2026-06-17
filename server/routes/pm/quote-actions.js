@@ -128,6 +128,25 @@ router.post('/:id/generate',
       singleTierScenarios = runThreeScenarios(current.spec, engine.cost, {}, engineOptions);
     }
 
+    // Phase H1 — pull the latest bill analysis for this contact so the
+    // customer PDF can render the "cost of doing nothing", recommended
+    // tariff, seasonal usage patterns, and environmental impact pages.
+    // Optional — if no bill analysis on file, those pages just don't render.
+    let billAnalysis = null;
+    if (quote.contact_id) {
+      try {
+        const { data } = await sb().from('bill_analyses')
+          .select('*')
+          .eq('contact_id', quote.contact_id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        billAnalysis = data || null;
+      } catch (e) {
+        console.warn('quote-actions /generate: bill_analysis load failed:', e.message);
+      }
+    }
+
     // ── Render PDFs. renderProposalPdfs auto-routes on engine.is_multi_tier.
     //    Catalogue is threaded through so any DB-only product field
     //    (image_url, datasheet_url, etc.) surfaces in the PDF — without
@@ -142,6 +161,7 @@ router.post('/:id/generate',
         quote_ref: quote.quote_ref,
         quote_date: new Date().toISOString(),
         catalogue: engineOptions.catalogue,
+        billAnalysis,
       },
     });
 

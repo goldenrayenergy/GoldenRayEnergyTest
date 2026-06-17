@@ -106,8 +106,9 @@ console.log(`✓ Sales console written:   ${salesPath} (${(salesHTML.length / 10
 section('Customer proposal HTML — structural checks');
 
 const pageCount = (customerHTML.match(/<section class="page">/g) || []).length;
-// Phase C-1 added the Components page between system summary and monthly profile.
-expect(`6 customer pages rendered (got ${pageCount})`, pageCount === 6);
+// Base 6 + Components + H1 (3) + H2 + H3 + H4 + H5 (four_scenarios) = 13.
+// Patterns + tariff need bill_analysis (hidden in this test).
+expect(`13 customer pages rendered (got ${pageCount})`, pageCount === 13);
 
 expect('Customer name interpolated', customerHTML.includes('Mr Naga Sai Krishna Avala'));
 expect('Quote ref shown', customerHTML.includes('PR-AVALA-2026-001'));
