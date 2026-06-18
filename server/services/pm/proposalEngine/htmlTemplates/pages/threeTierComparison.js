@@ -35,7 +35,7 @@ function tierCard(t) {
     <ul class="tier-financials">
       <li><span class="lbl">Year-1 savings</span><span class="val">${fmt$(t.headline_savings_yr1 || 0)}</span></li>
       <li><span class="lbl">Payback</span><span class="val">${t.headline_payback_yrs || '—'} yrs</span></li>
-      <li><span class="lbl">30-yr net (Expected)</span><span class="val">${fmt$(t.headline_30yr_net || 0)}</span></li>
+      <li><span class="lbl">25-yr net (Expected)</span><span class="val">${fmt$(t.headline_30yr_net || 0)}</span></li>
       <li><span class="lbl">IRR / annualised return</span><span class="val">${t.headline_irr_pct || '—'}%</span></li>
     </ul>
   </div>`;

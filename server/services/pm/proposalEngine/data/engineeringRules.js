@@ -187,7 +187,7 @@ export const FINANCIAL_DEFAULTS = {
   gst_rate: 0.15,
   energy_inflation_pct_per_year: 7.0,    // NZ MBIE 10-yr retail trend
   npv_discount_rate_pct: 5.0,            // internal use only
-  projection_horizon_years: 30,
+  projection_horizon_years: 25,
   minimum_project_margin_pct: 10.0,      // hard floor before discount approval needed
   default_buyback_rate_nzd_per_kwh: 0.09, // Mercury current
   // Buyback decline curve (year → rate). Linearly interpolated between knots.

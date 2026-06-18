@@ -1,7 +1,7 @@
 // Page — Financial outlook (Conservative / Expected / Optimistic)
 //
 // THE credibility page. Shows three scenarios side-by-side instead of a single
-// 30-year projection, so customers see the range rather than just the best
+// 25-year projection, so customers see the range rather than just the best
 // case. Expected column is highlighted as "recommended" planning case.
 
 import { pageHead, pageFoot } from '../_shared.js';
@@ -9,15 +9,13 @@ import { fmt$ } from '../proposalData.js';
 
 const r0 = n => Math.round(n);
 
-function scenarioCol(s, isExpected) {
-  const classes = `scenario-col${isExpected ? ' expected' : ''}`;
-  return `<div class="${classes}">
-    ${isExpected ? `<div class="ribbon">★ RECOMMENDED PLANNING CASE</div>` : ''}
+function scenarioCol(s) {
+  return `<div class="scenario-col">
     <div class="scenario-name">${s.label}</div>
     <div class="scenario-desc">${s.description}</div>
 
     <div class="metric">
-      <div class="metric-lbl">30-year net savings</div>
+      <div class="metric-lbl">25-year net savings</div>
       <div class="metric-val big">${fmt$(s.lifetime_net_savings)}</div>
     </div>
 
@@ -58,16 +56,16 @@ export function pageFinancialOutlook(d, sectionNum, sectionsTotal) {
     ${pageHead(d, 'Your financial outlook — three scenarios')}
 
     <div class="page-content-grow">
-      <h2>Three scenarios — your savings outlook over 30 years</h2>
+      <h2>Three scenarios — your savings outlook over 25 years</h2>
       <p>Single-number projections sound impressive but rarely tell the full story.
       We show you the same system under three sets of assumptions so you can plan
-      with a realistic range. The middle column — <b>Expected</b> — is what we use
-      throughout the rest of this proposal.</p>
+      with a realistic range — pick the scenario that matches your own view of
+      future energy prices and panel performance.</p>
 
       <div class="scenario-grid">
-        ${scenarioCol(cons, false)}
-        ${scenarioCol(exp, true)}
-        ${scenarioCol(opt, false)}
+        ${scenarioCol(cons)}
+        ${scenarioCol(exp)}
+        ${scenarioCol(opt)}
       </div>
 
       <h3 style="margin-top:18px">What's the same across all three scenarios?</h3>

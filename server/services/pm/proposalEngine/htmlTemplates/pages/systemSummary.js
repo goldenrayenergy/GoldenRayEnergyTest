@@ -37,6 +37,25 @@ export function pageSystemSummary(d, sectionNum, sectionsTotal) {
         <div class="card kpi"><div class="lbl">Year-1 savings</div><div class="val savings">${fmt$(exp.yr1_savings)}</div><div class="sub">vs current bill</div></div>
       </div>
 
+      ${(d.pricing?.discount_inc_gst > 0 && !d.meta.final_mode) ? `
+      <div style="margin-top:14px;background:linear-gradient(135deg,#FFF7ED,#FFE4CC);border:2px solid #FF6A00;border-radius:8px;padding:12px 16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;align-items:center">
+        <div>
+          <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#7C2D12;font-weight:700;margin-bottom:2px">List price</div>
+          <div style="font-size:16px;font-weight:700;color:#0B0F1A;text-decoration:line-through;text-decoration-color:#9CA3AF">${fmt$(d.pricing.list_inc_gst)}</div>
+        </div>
+        <div style="text-align:center;border-left:1px solid #FED7AA;border-right:1px solid #FED7AA;padding:0 8px">
+          <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#7C2D12;font-weight:700;margin-bottom:2px">Your discount</div>
+          <div style="font-size:18px;font-weight:900;color:#FF6A00">−${fmt$(d.pricing.discount_inc_gst)}</div>
+          <div style="font-size:9px;color:#7C2D12">${(d.pricing.discount_pct_of_list || 0).toFixed(1)}% off list</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#14532D;font-weight:700;margin-bottom:2px">You pay</div>
+          <div style="font-size:20px;font-weight:900;color:#14532D">${fmt$(d.pricing.customer_inc_gst)}</div>
+          <div style="font-size:9px;color:#14532D">inc GST</div>
+        </div>
+      </div>
+      ` : ''}
+
       <p class="small" style="margin-top:14px;color:#5C6470;font-style:italic">
         Full hardware specification — including ${meter ? `the ${meter.brand} ${meter.name?.split(' ').slice(-3).join(' ') || 'smart meter'}` : 'the smart meter'}, ${inverter ? `${inverter.brand} inverter` : 'inverter'}${battery ? `, ${battery.brand} ${battery.series} battery` : ''}, photos, datasheet links, and warranty terms — appears on the next page.
       </p>

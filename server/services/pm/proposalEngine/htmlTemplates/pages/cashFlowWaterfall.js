@@ -1,4 +1,4 @@
-// Page — 30-year cash flow (Expected scenario)
+// Page — 25-year cash flow (Expected scenario)
 //
 // Year-by-year cumulative net position. Starts negative (upfront cost),
 // crosses zero at payback year, finishes deeply positive. Visualised as
@@ -47,7 +47,7 @@ export function pageCashFlowWaterfall(d, sectionNum, sectionsTotal) {
   }).join('');
 
   return `<section class="page">
-    ${pageHead(d, '30-year cash flow — your installation')}
+    ${pageHead(d, '25-year cash flow — your installation')}
 
     <div class="page-content-grow">
       <p style="font-size:11px;color:#5C6470;margin:0 0 14px">

@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth.js';
 import { supabaseAdmin as supabaseFromConfig } from '../../config/supabase.js';
+import { splitNzAddress } from '../billAnalysis.js';
 
 let _supabaseAdmin = supabaseFromConfig;
 export function __setSupabaseForTests(client) { _supabaseAdmin = client; }
@@ -34,7 +35,7 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
         annual_kwh, annual_spend_nzd, effective_rate_nzd,
         fixed_charge_total_nzd, variable_charge_total_nzd,
         period_start, period_end, months_covered,
-        region, postcode, status, created_at,
+        region, postcode, icp_number, status, created_at,
         recommended_system_kw, recommended_battery_kwh, recommended_orientation
       `)
       .eq('contact_id', req.params.id)
@@ -44,6 +45,27 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
 
     if (error) throw error;
     if (!data) return res.status(204).end();   // no analyses for this contact
+
+    // Bug #6 fix — pull street/suburb/city from bill_uploads.service_address
+    // so the new-quote page can prefill the full address, not just postcode.
+    let parsedStreet = null, parsedSuburb = null, parsedCity = null;
+    try {
+      const { data: addrRow } = await sb()
+        .from('bill_uploads')
+        .select('service_address')
+        .eq('analysis_id', data.id)
+        .not('service_address', 'is', null)
+        .limit(1)
+        .maybeSingle();
+      if (addrRow?.service_address) {
+        const s = splitNzAddress(addrRow.service_address);
+        parsedStreet = s.street || null;
+        parsedSuburb = s.suburb || null;
+        parsedCity   = s.city   || null;
+      }
+    } catch (e) {
+      console.warn('latest-bill-analysis: address parse failed (non-fatal):', e.message);
+    }
 
     // Map analysis → quote-spec bills shape.
     //
@@ -94,12 +116,15 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
       region: data.region,                 // raw bill-analysis region tag
       engine_region: engineRegion,         // mapped to engine key (may be null)
 
-      // P5 — address fields the engine spec needs. Bill analyses only carry
-      // region + postcode in structured form; street/suburb/city stay manual.
+      // Bug #6 — address_prefill now also carries street/suburb/city parsed
+      // from bill_uploads.service_address, plus icp_number from the analysis.
       address_prefill: {
         region: engineRegion,              // engine-key region OR null
         postcode: data.postcode || null,
-        // street, suburb, city not parseable from bills — rep types manually
+        street: parsedStreet,
+        suburb: parsedSuburb,
+        city:   parsedCity,
+        icp_number: data.icp_number || null,
       },
 
       // P5 — system sizing from the analyser's recommendation engine.

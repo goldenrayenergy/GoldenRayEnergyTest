@@ -106,9 +106,9 @@ console.log(`✓ Sales console written:   ${salesPath} (${(salesHTML.length / 10
 section('Customer proposal HTML — structural checks');
 
 const pageCount = (customerHTML.match(/<section class="page">/g) || []).length;
-// Base 6 + Components + H1 (3) + H2 + H3 + H4 + H5 (four_scenarios) = 13.
+// Base 6 + Components + H1 (3) + H2 + H3 + H4 + H5 (four_scenarios) + H7 (quotation + signature) = 15.
 // Patterns + tariff need bill_analysis (hidden in this test).
-expect(`13 customer pages rendered (got ${pageCount})`, pageCount === 13);
+expect(`15 customer pages rendered (got ${pageCount})`, pageCount === 15);
 
 expect('Customer name interpolated', customerHTML.includes('Mr Naga Sai Krishna Avala'));
 expect('Quote ref shown', customerHTML.includes('PR-AVALA-2026-001'));
@@ -117,7 +117,9 @@ expect('Three-scenario heading present', customerHTML.includes('Your financial o
 expect('Conservative scenario rendered', customerHTML.includes('Conservative'));
 expect('Expected scenario rendered', customerHTML.includes('Expected'));
 expect('Optimistic scenario rendered', customerHTML.includes('Optimistic'));
-expect('Recommended ribbon on Expected', customerHTML.includes('★ RECOMMENDED PLANNING CASE'));
+// Three scenarios shown without highlighting any one as "recommended" — the
+// customer picks the scenario that matches their own price/performance view.
+expect('No recommended-ribbon highlight on Expected', !customerHTML.includes('★ RECOMMENDED PLANNING CASE'));
 
 expect('System kW (14.28) shown', customerHTML.includes('14.28'));
 expect('Battery label rendered (13.8 kWh)', /BYD HVM 13\.8 kWh/.test(customerHTML));
