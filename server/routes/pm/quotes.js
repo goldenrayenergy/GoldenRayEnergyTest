@@ -22,6 +22,7 @@ import { runThreeScenarios } from '../../services/pm/proposalEngine/financialMod
 import { getCachedCatalogue } from '../../services/pm/proposalEngine/catalogue/cachedDbLoader.js';
 import { composeThreeTiers, topLevelSystemFromTier }
   from '../../services/pm/proposalEngine/threeTierComposer.js';
+import { composeSystem } from '../../services/pm/proposalEngine/systemComposer.js';
 import { REGIONS, BMS_RULES, COMPATIBILITY, TIER_STRIP_SETTINGS }
   from '../../services/pm/proposalEngine/data/engineeringRules.js';
 import {
@@ -174,8 +175,18 @@ router.post('/', authorize('admin', 'sales_mgr', 'sales_exec', 'proposal_mgr'),
   async (req, res) => {
   try {
     if (!sb()) return res.status(503).json({ error: 'Database not configured.' });
-    const { contact_id, spec, stage = 'stage_1_estimate',
-            final_mode = true, assigned_user_id, bill_analysis_id } = req.body;
+    const { contact_id, spec, stage: requestedStage,
+            final_mode = true, assigned_user_id, bill_analysis_id,
+            mode = 'multi_tier' } = req.body;
+    // mode: 'multi_tier' (default — composes 3 tiers for Stage 1 proposal)
+    //       'direct_firm' (skip Stage 1 — single-tier Stage 2 firm offer for
+    //                     customers who already know what they want)
+    if (!['multi_tier', 'direct_firm'].includes(mode)) {
+      return res.status(400).json({ error: `mode must be 'multi_tier' or 'direct_firm', got '${mode}'.` });
+    }
+    // direct_firm always lands at Stage 2; multi_tier defaults to Stage 1.
+    const stage = mode === 'direct_firm' ? 'stage_2_firm'
+                : (requestedStage || 'stage_1_estimate');
 
     if (!contact_id) return res.status(400).json({ error: 'contact_id is required.' });
     if (!spec || typeof spec !== 'object') return res.status(400).json({ error: 'spec must be an object.' });
@@ -216,25 +227,68 @@ router.post('/', authorize('admin', 'sales_mgr', 'sales_exec', 'proposal_mgr'),
     let composeResult = null;
     try {
       const catalogue = await getCachedCatalogue(sb());
-      composeResult = composeThreeTiers({
-        billAnalysis, phase, region, sizeMode,
-        catalogue, COMPATIBILITY, BMS_RULES, TIER_STRIP_SETTINGS,
-      });
-      // Populate spec.tiers + top-level system from the recommended tier.
-      spec.tiers = composeResult.tiers;
-      spec.tier_strip = { size_mode: composeResult.size_mode };
-      const recIdx = Math.max(0, Math.min(composeResult.recommended_index || 0, spec.tiers.length - 1));
-      spec.system = topLevelSystemFromTier(spec.tiers[recIdx], spec.system);
-      // Carry phase + smart_meter through (composer doesn't touch them)
-      spec.system.phase = phase;
-      // Sync each tier's pricing.stage with the quote's stage
-      for (const t of spec.tiers) t.pricing.stage = stage;
+
+      if (mode === 'direct_firm') {
+        // ── Direct firm path — skip composeThreeTiers, build single-tier ──
+        // Customer already knows what they want (returning customer adding
+        // to system, customer who saw a competitor quote, etc.). No spec.tiers
+        // array, no Stage 1 PDF, jumps straight to Stage 2 single-tier.
+        const targetKwp = Number(billAnalysis?.recommended_system_kw) || 5;
+        const targetBatteryKwh = Number(billAnalysis?.recommended_battery_kwh) || null;
+        const composed = composeSystem({
+          targetDcKwp: targetKwp,
+          phase,
+          targetBatteryUsableKwh: targetBatteryKwh,
+          hasEv: false,
+          region,
+          catalogue,
+          COMPATIBILITY,
+          BMS_RULES,
+        });
+        spec.system = {
+          ...(spec.system || {}),
+          panel:    composed.panel    || spec.system?.panel,
+          inverter: composed.inverter || spec.system?.inverter,
+          battery:  composed.battery  || spec.system?.battery || null,
+          string_topology: composed.string_design?.topology || 'series',
+          string_design: composed.string_design || {
+            topology: 'series',
+            groups: [{ panels_per_string: composed.panel?.count || 12, string_count: 1 }],
+          },
+          cable_run_metres_estimate: spec.system?.cable_run_metres_estimate || 24,
+          phase,
+          smart_meter: spec.system?.smart_meter || { sku: null, phase },
+          wattpilot_included: !!composed.wattpilot_included,
+        };
+        // Explicitly NO spec.tiers — single-tier firm offer.
+        delete spec.tiers;
+        delete spec.tier_strip;
+      } else {
+        // ── Default multi-tier path (Stage 1 proposal) ──
+        composeResult = composeThreeTiers({
+          billAnalysis, phase, region, sizeMode,
+          catalogue, COMPATIBILITY, BMS_RULES, TIER_STRIP_SETTINGS,
+        });
+        // Populate spec.tiers + top-level system from the recommended tier.
+        spec.tiers = composeResult.tiers;
+        spec.tier_strip = { size_mode: composeResult.size_mode };
+        const recIdx = Math.max(0, Math.min(composeResult.recommended_index || 0, spec.tiers.length - 1));
+        spec.system = topLevelSystemFromTier(spec.tiers[recIdx], spec.system);
+        // Carry phase + smart_meter through (composer doesn't touch them)
+        spec.system.phase = phase;
+        // Sync each tier's pricing.stage with the quote's stage
+        for (const t of spec.tiers) t.pricing.stage = stage;
+      }
     } catch (e) {
       // Composer failed entirely (DB down, catalogue load error, etc.).
       // Don't refuse the create — store what the client sent + flag.
-      console.warn('[quote-create] composeThreeTiers threw:', e?.message);
+      console.warn(`[quote-create] composer (${mode}) threw:`, e?.message);
       spec.__composer_error = e?.message || String(e);
     }
+
+    // Canonicalise spec.pricing.stage so it matches the quotes.stage column.
+    if (!spec.pricing) spec.pricing = {};
+    spec.pricing.stage = stage;
 
     // Try to run the engine, but DON'T refuse on config errors at creation time.
     // Reps need to be able to start a quote and fill it in via the edit form.
