@@ -10,6 +10,9 @@ export default function QuoteNewPage() {
   const [contacts, setContacts] = useState([]);
   const [contactId, setContactId] = useState('');
   const [stage, setStage] = useState('stage_1_estimate');
+  // 'multi_tier' (default) = Stage 1 proposal with 3 packages.
+  // 'direct_firm' = skip Stage 1, jump straight to single-tier Stage 2.
+  const [mode, setMode] = useState('multi_tier');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -87,12 +90,16 @@ export default function QuoteNewPage() {
       if (billAnalysis?.system_recommendation?.recommended_system_kw) {
         spec.system.__auto_sized_from_bill_analysis_id = billAnalysis.analysis_id;
       }
-      spec.pricing.stage = stage;
+      // Server canonicalises stage anyway, but set what the form wants:
+      // direct_firm always lands on Stage 2, multi_tier uses the dropdown.
+      const effectiveStage = mode === 'direct_firm' ? 'stage_2_firm' : stage;
+      spec.pricing.stage = effectiveStage;
 
       const r = await pmQuotesAPI.create({
         contact_id: contactId,
         spec,
-        stage,
+        stage: effectiveStage,
+        mode,
         bill_analysis_id: billAnalysis?.analysis_id || null,   // links Quote.bill_analysis_id
       });
       navigate(`/pm/quotes/${r.data.quote.id}/edit`);
@@ -201,15 +208,47 @@ export default function QuoteNewPage() {
           </div>
         )}
 
-        <label className="block">
-          <span className="text-sm font-medium text-slate-700">Opening stage</span>
-          <select value={stage} onChange={e => setStage(e.target.value)}
-                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white
-                             focus:outline-none focus:ring-2 focus:ring-amber-500">
-            <option value="stage_1_estimate">Stage 1 — Initial estimate (no site survey)</option>
-            <option value="stage_2_firm">Stage 2 — Firm offer (site surveyed)</option>
-          </select>
-        </label>
+        <div>
+          <span className="block text-sm font-medium text-slate-700 mb-2">Quote mode</span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label className={`block border rounded-md p-3 cursor-pointer transition-colors ${
+              mode === 'multi_tier' ? 'border-amber-500 bg-amber-50' : 'border-slate-200 hover:bg-slate-50'
+            }`}>
+              <input type="radio" name="quote-mode" value="multi_tier"
+                     checked={mode === 'multi_tier'}
+                     onChange={() => setMode('multi_tier')}
+                     className="mr-2" />
+              <span className="text-sm font-semibold text-slate-900">Multi-tier proposal</span>
+              <div className="text-xs text-slate-500 mt-1 ml-5">
+                Stage 1 — 3 packages (Solar / Solar+battery / Solar+battery+EV) for the customer to choose from.
+              </div>
+            </label>
+            <label className={`block border rounded-md p-3 cursor-pointer transition-colors ${
+              mode === 'direct_firm' ? 'border-sky-500 bg-sky-50' : 'border-slate-200 hover:bg-slate-50'
+            }`}>
+              <input type="radio" name="quote-mode" value="direct_firm"
+                     checked={mode === 'direct_firm'}
+                     onChange={() => setMode('direct_firm')}
+                     className="mr-2" />
+              <span className="text-sm font-semibold text-slate-900">Direct firm quote</span>
+              <div className="text-xs text-slate-500 mt-1 ml-5">
+                Stage 2 single-tier — customer already knows what they want. Skips the 3-package proposal.
+              </div>
+            </label>
+          </div>
+        </div>
+
+        {mode === 'multi_tier' && (
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">Opening stage</span>
+            <select value={stage} onChange={e => setStage(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white
+                               focus:outline-none focus:ring-2 focus:ring-amber-500">
+              <option value="stage_1_estimate">Stage 1 — Initial estimate (no site survey)</option>
+              <option value="stage_2_firm">Stage 2 — Firm offer (site surveyed)</option>
+            </select>
+          </label>
+        )}
 
         {error && (
           <div className="p-3 bg-rose-50 border border-rose-200 rounded text-sm text-rose-700">{error}</div>
