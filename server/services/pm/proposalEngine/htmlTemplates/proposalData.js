@@ -494,6 +494,7 @@ function hardwareDetailBlocks(spec, catalogue, costResult) {
       peak_efficiency_pct: inverter.peak_efficiency_pct,
       image_url: inverter.image_url,
       datasheet_url: inverter.datasheet_url,
+      marketing_claims: inverter.marketing_claims || null,
       warranty: w.inverter,
     } : null,
 
@@ -508,6 +509,7 @@ function hardwareDetailBlocks(spec, catalogue, costResult) {
       chemistry: battery.chemistry || 'LFP',
       image_url: battery.image_url,
       datasheet_url: battery.datasheet_url,
+      marketing_claims: battery.marketing_claims || null,
       warranty: w.battery,
     } : null,
 

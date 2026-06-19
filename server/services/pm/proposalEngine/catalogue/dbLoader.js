@@ -127,6 +127,7 @@ function mapInverter(row) {
     datasheet_filename: s.inverter_datasheet || null,
     image_url:     row.image_url || null,
     datasheet_url: row.datasheet_url || null,
+    marketing_claims: row.marketing_claims || null,
   };
 }
 
@@ -144,6 +145,7 @@ function mapBattery(row) {
     datasheet_filename: s.datasheet_filename || null,
     image_url:     row.image_url || null,
     datasheet_url: row.datasheet_url || null,
+    marketing_claims: row.marketing_claims || null,
   };
 }
 
@@ -267,7 +269,7 @@ export async function loadCatalogueFromDb(supabase) {
   const wantedCategories = Object.values(CATEGORY_BUCKETS).flat();
   const { data: productRows, error: prodErr } = await supabase
     .from('products')
-    .select('id, sku, brand, name, category, subcategory, cost_nzd, default_margin_pct, specs, is_active, image_url, datasheet_url')
+    .select('id, sku, brand, name, category, subcategory, cost_nzd, default_margin_pct, specs, is_active, image_url, datasheet_url, marketing_claims')
     .eq('is_active', true)
     .in('category', wantedCategories);
   if (prodErr) throw new Error(`Products query failed: ${prodErr.message}`);
