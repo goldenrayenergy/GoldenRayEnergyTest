@@ -476,6 +476,7 @@ function hardwareDetailBlocks(spec, catalogue, costResult) {
       peak_efficiency_pct: panel.peak_efficiency_pct ?? null,
       image_url: panel.image_url,
       datasheet_url: panel.datasheet_url,
+      marketing_claims: panel.marketing_claims || null,
       warranty: w.panel,
     } : null,
 

@@ -15,6 +15,16 @@ import { pageHead, pageFoot } from '../_shared.js';
 // These are inline rather than DB-seeded because they describe an industry
 // average, not a specific product. Update here when market shifts.
 const COMPETITOR_REFERENCE = {
+  panel: {
+    cell_technology: 'PERC (older)',
+    bifaciality: 'Mono-facial',
+    peak_efficiency_pct: '19 – 20',
+    bloomberg_tier: 'Often Tier 2/3',
+    warranty_product_yrs: '10 – 12',
+    warranty_performance_yrs: 25,
+    warranty_endpoint_pct: 80,
+    temp_coefficient: '−0.34 to −0.40%/°C',
+  },
   inverter: {
     origin: 'Generic offshore',
     warranty_yrs: '5 – 10',
@@ -33,14 +43,16 @@ const COMPETITOR_REFERENCE = {
 };
 
 export function pagePremiumHardware(d, sectionNum, sectionsTotal) {
+  const pan = d.hardware?.panel;
   const inv = d.hardware?.inverter;
   const bat = d.hardware?.battery;
 
+  const panClaims = pan?.marketing_claims;
   const invClaims = inv?.marketing_claims;
   const batClaims = bat?.marketing_claims;
 
   // Lazy page — drop out when nothing to say.
-  if (!invClaims && !batClaims) return '';
+  if (!panClaims && !invClaims && !batClaims) return '';
 
   return `<section class="page">
     ${pageHead(d, 'Premium hardware — why we picked this kit')}
@@ -50,6 +62,15 @@ export function pagePremiumHardware(d, sectionNum, sectionsTotal) {
         Solar systems live on your roof for 20-30 years. The difference between premium kit and budget kit
         isn't visible at install — it shows up in year 8, year 10, year 15. Here's why we chose your hardware.
       </p>
+
+      ${panClaims ? brandSection({
+        kind: `SOLAR PANELS — ${pan.count || '?'} × ${pan.watts || '?'} W`,
+        productName: `${pan.brand} ${pan.name || ''}`,
+        accent: '#16A34A',
+        bgAccent: 'linear-gradient(135deg,#F0FDF4,#D1FAE5)',
+        borderAccent: '#BBF7D0',
+        claims: panClaims,
+      }) : ''}
 
       ${invClaims ? brandSection({
         kind: 'INVERTER',
@@ -69,9 +90,9 @@ export function pagePremiumHardware(d, sectionNum, sectionsTotal) {
         claims: batClaims,
       }) : ''}
 
-      ${comparisonTable(invClaims, batClaims)}
+      ${comparisonTable(panClaims, invClaims, batClaims)}
 
-      ${manufacturerBlurbs(inv, bat, invClaims, batClaims)}
+      ${manufacturerBlurbs(pan, inv, bat, panClaims, invClaims, batClaims)}
     </div>
 
     ${pageFoot(d, sectionNum, sectionsTotal)}
@@ -113,15 +134,27 @@ function brandSection({ kind, productName, accent, bgAccent, borderAccent, claim
 }
 
 // ── Side-by-side comparison table ──────────────────────────────────────────
-function comparisonTable(invClaims, batClaims) {
+function comparisonTable(panClaims, invClaims, batClaims) {
   const rows = [];
 
+  if (panClaims?.comparison) {
+    const c = panClaims.comparison;
+    const ref = COMPETITOR_REFERENCE.panel;
+    if (c.cell_technology) rows.push({ label: 'Panel cell technology', yours: c.cell_technology, theirs: ref.cell_technology });
+    if (c.bifaciality) rows.push({ label: 'Panel bifaciality', yours: c.bifaciality, theirs: ref.bifaciality });
+    if (c.peak_efficiency_pct) rows.push({ label: 'Panel efficiency', yours: `${c.peak_efficiency_pct}%`, theirs: `${ref.peak_efficiency_pct}%` });
+    if (c.bloomberg_tier) rows.push({ label: 'Bloomberg NEF tier', yours: c.bloomberg_tier, theirs: ref.bloomberg_tier });
+    if (c.warranty_product_yrs) rows.push({ label: 'Panel product warranty', yours: `${c.warranty_product_yrs} yrs`, theirs: `${ref.warranty_product_yrs} yrs` });
+    if (c.warranty_performance_yrs && c.warranty_endpoint_pct) {
+      rows.push({ label: 'Panel performance warranty', yours: `${c.warranty_performance_yrs} yrs to ${c.warranty_endpoint_pct}%`, theirs: `${ref.warranty_performance_yrs} yrs to ${ref.warranty_endpoint_pct}%` });
+    }
+  }
   if (invClaims?.comparison) {
     const c = invClaims.comparison;
     const ref = COMPETITOR_REFERENCE.inverter;
     if (c.origin) rows.push({ label: 'Inverter origin', yours: c.origin, theirs: ref.origin });
     if (c.warranty_yrs) rows.push({ label: 'Inverter warranty', yours: `${c.warranty_yrs} yrs`, theirs: `${ref.warranty_yrs} yrs` });
-    if (c.peak_efficiency_pct) rows.push({ label: 'Peak efficiency', yours: `${c.peak_efficiency_pct}%`, theirs: `${ref.peak_efficiency_pct}%` });
+    if (c.peak_efficiency_pct) rows.push({ label: 'Inverter peak efficiency', yours: `${c.peak_efficiency_pct}%`, theirs: `${ref.peak_efficiency_pct}%` });
     if (c.backup_capability) rows.push({ label: 'Backup capability', yours: c.backup_capability, theirs: ref.backup_capability });
     if (c.vpp_ready) rows.push({ label: 'VPP-ready (future income)', yours: c.vpp_ready, theirs: ref.vpp_ready });
   }
@@ -165,24 +198,29 @@ function comparisonTable(invClaims, batClaims) {
 }
 
 // ── "Built by global leaders" footer ───────────────────────────────────────
-function manufacturerBlurbs(inv, bat, invClaims, batClaims) {
+function manufacturerBlurbs(pan, inv, bat, panClaims, invClaims, batClaims) {
+  // Dedupe — if panel + inverter + battery share a brand, only show once
+  const seen = new Set();
   const items = [];
-  if (invClaims?.manufacturer_blurb) {
-    items.push({ brand: inv.brand, blurb: invClaims.manufacturer_blurb });
-  }
-  if (batClaims?.manufacturer_blurb) {
-    items.push({ brand: bat.brand, blurb: batClaims.manufacturer_blurb });
-  }
+  const push = (brand, blurb) => {
+    if (!brand || !blurb || seen.has(brand)) return;
+    seen.add(brand);
+    items.push({ brand, blurb });
+  };
+  if (panClaims?.manufacturer_blurb) push(pan.brand, panClaims.manufacturer_blurb);
+  if (invClaims?.manufacturer_blurb) push(inv.brand, invClaims.manufacturer_blurb);
+  if (batClaims?.manufacturer_blurb) push(bat.brand, batClaims.manufacturer_blurb);
   if (!items.length) return '';
 
+  const cols = items.length >= 3 ? '1fr 1fr 1fr' : items.length === 2 ? '1fr 1fr' : '1fr';
   return `
-    <div style="margin-top:8px;display:grid;grid-template-columns:${items.length > 1 ? '1fr 1fr' : '1fr'};gap:10px">
+    <div style="margin-top:8px;display:grid;grid-template-columns:${cols};gap:8px">
       ${items.map(it => `
-        <div style="background:#fff7ed;border-left:3px solid #FF6A00;padding:8px 11px;border-radius:0 4px 4px 0">
+        <div style="background:#fff7ed;border-left:3px solid #FF6A00;padding:7px 10px;border-radius:0 4px 4px 0">
           <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#92400e;font-weight:800;margin-bottom:2px">
             About ${escape(it.brand)}
           </div>
-          <div style="font-size:9.5px;color:#0B0F1A;line-height:1.45">${escape(it.blurb)}</div>
+          <div style="font-size:9px;color:#0B0F1A;line-height:1.4">${escape(it.blurb)}</div>
         </div>
       `).join('')}
     </div>

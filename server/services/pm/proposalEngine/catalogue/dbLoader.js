@@ -79,9 +79,11 @@ function mapPanel(row) {
     power_temp_coef_pct_per_c:   num(s.power_temp_coef_pct_per_c   ?? s.temp_coeff_pmax_pct_c),
     cost_nzd: num(row.cost_nzd),
     margin_pct: num(row.default_margin_pct) ?? 30,
+    peak_efficiency_pct: num(s.peak_efficiency_pct),
     datasheet_filename: s.datasheet_filename || null,
     image_url:     row.image_url || null,
     datasheet_url: row.datasheet_url || null,
+    marketing_claims: row.marketing_claims || null,
   };
 }
 
