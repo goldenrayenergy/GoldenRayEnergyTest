@@ -9,9 +9,10 @@ export default function QuoteNewPage() {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState([]);
   const [contactId, setContactId] = useState('');
-  const [stage, setStage] = useState('stage_1_estimate');
   // 'multi_tier' (default) = Stage 1 proposal with 3 packages.
   // 'direct_firm' = skip Stage 1, jump straight to single-tier Stage 2.
+  // Stage is no longer a separate input — it's derived from mode:
+  // multi_tier → stage_1_estimate, direct_firm → stage_2_firm.
   const [mode, setMode] = useState('multi_tier');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -90,9 +91,8 @@ export default function QuoteNewPage() {
       if (billAnalysis?.system_recommendation?.recommended_system_kw) {
         spec.system.__auto_sized_from_bill_analysis_id = billAnalysis.analysis_id;
       }
-      // Server canonicalises stage anyway, but set what the form wants:
-      // direct_firm always lands on Stage 2, multi_tier uses the dropdown.
-      const effectiveStage = mode === 'direct_firm' ? 'stage_2_firm' : stage;
+      // Stage is now strictly derived from mode — no dropdown, no ambiguity.
+      const effectiveStage = mode === 'direct_firm' ? 'stage_2_firm' : 'stage_1_estimate';
       spec.pricing.stage = effectiveStage;
 
       const r = await pmQuotesAPI.create({
@@ -239,15 +239,17 @@ export default function QuoteNewPage() {
         </div>
 
         {mode === 'multi_tier' && (
-          <label className="block">
-            <span className="text-sm font-medium text-slate-700">Opening stage</span>
-            <select value={stage} onChange={e => setStage(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white
-                               focus:outline-none focus:ring-2 focus:ring-amber-500">
-              <option value="stage_1_estimate">Stage 1 — Initial estimate (no site survey)</option>
-              <option value="stage_2_firm">Stage 2 — Firm offer (site surveyed)</option>
-            </select>
-          </label>
+          <div className="block">
+            <div className="text-sm font-medium text-slate-700">Opening stage</div>
+            <div className="mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm text-slate-700 flex items-center gap-2">
+              <span className="font-medium">Stage 1 — Initial estimate</span>
+              <span className="text-xs text-slate-500">(multi-tier proposals always start at Stage 1)</span>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              To reach Stage 2, either pick <b>Direct firm quote</b> above (skips Stage 1 entirely),
+              or open the proposal later and use <b>Convert to firm quote</b> after the customer picks a package.
+            </p>
+          </div>
         )}
 
         {error && (

@@ -184,9 +184,19 @@ router.post('/', authorize('admin', 'sales_mgr', 'sales_exec', 'proposal_mgr'),
     if (!['multi_tier', 'direct_firm'].includes(mode)) {
       return res.status(400).json({ error: `mode must be 'multi_tier' or 'direct_firm', got '${mode}'.` });
     }
-    // direct_firm always lands at Stage 2; multi_tier defaults to Stage 1.
-    const stage = mode === 'direct_firm' ? 'stage_2_firm'
-                : (requestedStage || 'stage_1_estimate');
+    // INVARIANT: spec.tiers exists  ⟺  stage === 'stage_1_estimate'.
+    // The only way to create a Stage 2 quote is via mode=direct_firm at
+    // creation, OR via POST /:id/convert-to-firm on an existing multi-tier
+    // quote. Reject any other combination loudly — the old hybrid state
+    // (multi-tier spec stamped stage_2_firm) was the cause of the "discount
+    // shows $0 / Convert button still appears in Stage 2" UI bugs.
+    if (mode === 'multi_tier' && requestedStage === 'stage_2_firm') {
+      return res.status(400).json({
+        error: 'Multi-tier quotes always start at Stage 1. To create a Stage 2 firm offer directly, use mode=direct_firm. To promote an existing multi-tier quote to Stage 2, use POST /:id/convert-to-firm.',
+      });
+    }
+    // direct_firm always lands at Stage 2; multi_tier always Stage 1.
+    const stage = mode === 'direct_firm' ? 'stage_2_firm' : 'stage_1_estimate';
 
     if (!contact_id) return res.status(400).json({ error: 'contact_id is required.' });
     if (!spec || typeof spec !== 'object') return res.status(400).json({ error: 'spec must be an object.' });
