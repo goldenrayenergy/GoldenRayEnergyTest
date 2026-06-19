@@ -118,7 +118,7 @@ const NZ_CITIES = new Set([
   'QUEENSTOWN','WANAKA','OAMARU','ASHBURTON',
 ]);
 
-function splitNzAddress(addr) {
+export function splitNzAddress(addr) {
   if (!addr || typeof addr !== 'string') return {};
   let cleaned = addr.replace(/\s+/g, ' ').trim();
   // Strip "NEW ZEALAND" / "AOTEAROA" / "NZ" country suffix when present —
@@ -193,31 +193,41 @@ function splitNzAddress(addr) {
 //   • SKIPS fields that are already populated on the contact — never
 //     overwrites rep-entered data with parser output
 // ────────────────────────────────────────────────────────────────────────────
-async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode, service_address, customer_name }) {
+// Bug #6 fix — placeholder detector. Loosens the "never overwrite" guard for
+// values that are clearly auto-generated boilerplate (empty / "Unknown" /
+// "Website Enquiry" / quote-ref-style names). Real rep-typed addresses are
+// still protected.
+function isPlaceholderText(s) {
+  if (!s) return true;
+  const t = String(s).trim();
+  if (!t) return true;
+  if (/^(unknown|n\/?a|null|none|-+|website enquiry)$/i.test(t)) return true;
+  if (/^[A-Z]{2,4}-\d{4}/.test(t)) return true;  // e.g. "PR-KRISHAN-2026-001"
+  return false;
+}
+
+async function writeAddressThroughToContact(supabaseAdmin, contactId, { region, postcode, service_address, customer_name, icp_number }) {
   if (!supabaseAdmin || !contactId) return;
-  if (!region && !postcode && !service_address && !customer_name) return;
+  if (!region && !postcode && !service_address && !customer_name && !icp_number) return;
   try {
     const { data: existing } = await supabaseAdmin
       .from('contacts')
-      .select('id, name, postcode, street, suburb, city')
+      .select('id, name, postcode, street, suburb, city, icp_number')
       .eq('id', contactId)
       .maybeSingle();
     if (!existing) return;
     const updates = {};
-    if (postcode && !existing.postcode) updates.postcode = postcode;
-    // P5 (A2)+(A3) Customer name — capture from bill header. Only writes if
-    // contact has a placeholder or empty name; never overwrites rep-entered.
-    // Placeholders we replace: empty, "Unknown", a quote_ref-style ID.
-    const looksPlaceholder = !existing.name
-                          || /^unknown$/i.test(existing.name)
-                          || /^[A-Z]{2,4}-\d{4}/.test(existing.name);
-    if (customer_name && looksPlaceholder) updates.name = customer_name;
+    if (postcode && isPlaceholderText(existing.postcode)) updates.postcode = postcode;
+    // P5 (A2)+(A3) Customer name — capture from bill header.
+    if (customer_name && isPlaceholderText(existing.name)) updates.name = customer_name;
+    // Bug #6 fix — propagate ICP from bill analysis to contact.
+    if (icp_number && isPlaceholderText(existing.icp_number)) updates.icp_number = icp_number;
     if (service_address) {
       const split = splitNzAddress(service_address);
-      if (split.street   && !existing.street)   updates.street   = split.street;
-      if (split.suburb   && !existing.suburb)   updates.suburb   = split.suburb;
-      if (split.city     && !existing.city)     updates.city     = split.city;
-      if (split.postcode && !existing.postcode && !updates.postcode) updates.postcode = split.postcode;
+      if (split.street   && isPlaceholderText(existing.street))   updates.street   = split.street;
+      if (split.suburb   && isPlaceholderText(existing.suburb))   updates.suburb   = split.suburb;
+      if (split.city     && isPlaceholderText(existing.city))     updates.city     = split.city;
+      if (split.postcode && isPlaceholderText(existing.postcode) && !updates.postcode) updates.postcode = split.postcode;
     }
     if (Object.keys(updates).length === 0) return;
     await supabaseAdmin.from('contacts').update(updates).eq('id', contactId);
@@ -367,10 +377,29 @@ function regionFromPostcode(postcode) {
 
 // Map our internal analysis result onto the bill_analyses + bill_uploads
 // schema for persistence.
-function buildAnalysisRow(analysis, { region, postcode, email, contactId }) {
+// Bug #6 fix — most-frequent ICP across the bills in the analysis. Handles
+// the (rare) landlord case where two bills carry different ICPs; tied counts
+// fall back to the first-seen value.
+function pickDominantIcp(bills) {
+  const counts = new Map();
+  for (const b of bills || []) {
+    const icp = (b?.icp_number || '').trim();
+    if (!icp) continue;
+    counts.set(icp, (counts.get(icp) || 0) + 1);
+  }
+  if (counts.size === 0) return null;
+  let bestIcp = null, bestN = -1;
+  for (const [icp, n] of counts) {
+    if (n > bestN) { bestIcp = icp; bestN = n; }
+  }
+  return bestIcp;
+}
+
+function buildAnalysisRow(analysis, { region, postcode, email, contactId, bills = [] }) {
   return {
     contact_id:                contactId || null,
     email:                     email || null,
+    icp_number:                pickDominantIcp(bills),
     bills_uploaded:            analysis.aggregate.months_covered || 0,
     period_start:              analysis.aggregate.period_start || null,
     period_end:                analysis.aggregate.period_end || null,
@@ -577,6 +606,7 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       postcode: req.body.postcode,
       email:    req.body.email,
       contactId: partialContactId,
+      bills:    usableBills,
     });
 
     const { data: inserted, error: insErr } = await supabaseAdmin
@@ -593,6 +623,7 @@ router.post('/', upload.array('files', 12), async (req, res) => {
       region, postcode: req.body.postcode,
       service_address: usableBills.find(b => b.service_address)?.service_address || null,
       customer_name:   usableBills.find(b => b.customer_name)?.customer_name     || null,
+      icp_number:      pickDominantIcp(usableBills),
     });
 
     // Fire-and-forget escalation when review_required + partial linked.
@@ -794,6 +825,7 @@ router.post('/estimate', async (req, res) => {
     const partialEnquiryId = req.body.enquiry_id || null;
     const row = buildAnalysisRow(analysis, {
       region, postcode: req.body.postcode, email: req.body.email, contactId: partialContactId,
+      bills: [syntheticBill],
     });
     row.bills_uploaded = 0;  // marker: no bills uploaded for this analysis
 
@@ -944,6 +976,7 @@ router.post('/tabular', async (req, res) => {
     const partialEnquiryId = req.body.enquiry_id || null;
     const row = buildAnalysisRow(analysis, {
       region, postcode: req.body.postcode, email: req.body.email, contactId: partialContactId,
+      bills,
     });
     row.bills_uploaded = bills.length;
 
@@ -1117,6 +1150,13 @@ router.post('/:id/promote-to-quote', async (req, res) => {
       .not('service_address', 'is', null)
       .limit(1)
       .maybeSingle();
+    // Bug #6 fix — also propagate ICP to the linked contact. Pull from the
+    // canonical bill_analyses.icp_number we wrote at insert time.
+    const { data: anaRow } = await supabaseAdmin
+      .from('bill_analyses')
+      .select('icp_number')
+      .eq('id', req.params.id)
+      .maybeSingle();
     // Customer name is not stored as a column on bill_uploads — re-extract
     // from OCR text excerpt at link time using the shared helper.
     const { data: ocrRow } = await supabaseAdmin
@@ -1142,6 +1182,7 @@ router.post('/:id/promote-to-quote', async (req, res) => {
       postcode: analysis.postcode,
       service_address: addrRow?.service_address || null,
       customer_name:   claimedCustomerName,
+      icp_number:      anaRow?.icp_number || null,
     });
 
     // 5. Sales follow-up task (high priority, due tomorrow)
@@ -1231,6 +1272,7 @@ router.post('/:id/reanalyze', async (req, res) => {
       postcode:  analysis.region_postcode,
       email:     existing.email,
       contactId: existing.contact_id,
+      bills,
     });
     delete updated.contact_id;        // don't overwrite who owns it
     delete updated.email;

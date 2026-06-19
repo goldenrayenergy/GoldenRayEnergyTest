@@ -42,6 +42,9 @@ import { pageSLD } from './pages/sld.js';
 import { pageBillComparison } from './pages/billComparison.js';
 // Phase H5 — conceptual "Four typical scenarios" cards page
 import { pageFourScenarios } from './pages/fourScenarios.js';
+// Phase H7 — formal quotation summary + customer signature acceptance
+import { pageFormalQuotation } from './pages/formalQuotation.js';
+import { pageSignatureAcceptance } from './pages/signatureAcceptance.js';
 
 export const TEMPLATE_VERSION = '1.5.0';
 
@@ -65,10 +68,12 @@ const SINGLE_TIER_PAGES = [
   { id: 'monthly',       label: 'Year-1 monthly breakdown',          build: pageMonthlyProfile },
   { id: 'do_nothing',    label: 'The cost of doing nothing',         build: pageDoNothing },
   { id: 'outlook',       label: 'Financial outlook',                 build: pageFinancialOutlook },
-  { id: 'cash_flow',     label: '30-year cash flow',                 build: pageCashFlowWaterfall },
+  { id: 'cash_flow',     label: '25-year cash flow',                 build: pageCashFlowWaterfall },
   { id: 'environmental', label: 'Environmental impact',              build: pageEnvironmentalImpact },
   { id: 'tariff',        label: 'Recommended tariff (post-install)', build: pageTariffRecommendation },
   { id: 'pricing',       label: 'Investment & pricing',              build: pagePricing },
+  { id: 'quotation',     label: 'Formal Quotation',                  build: pageFormalQuotation },
+  { id: 'signature',     label: 'Sign & lock in your install',       build: pageSignatureAcceptance },
 ];
 
 // Multi-tier inserts the comparison page between cover and system summary.
@@ -85,10 +90,12 @@ const MULTI_TIER_PAGES = [
   { id: 'monthly',       label: 'Year-1 monthly breakdown',          build: pageMonthlyProfile },
   { id: 'do_nothing',    label: 'The cost of doing nothing',         build: pageDoNothing },
   { id: 'outlook',       label: 'Financial outlook',                 build: pageFinancialOutlook },
-  { id: 'cash_flow',     label: '30-year cash flow',                 build: pageCashFlowWaterfall },
+  { id: 'cash_flow',     label: '25-year cash flow',                 build: pageCashFlowWaterfall },
   { id: 'environmental', label: 'Environmental impact',              build: pageEnvironmentalImpact },
   { id: 'tariff',        label: 'Recommended tariff (post-install)', build: pageTariffRecommendation },
   { id: 'pricing',       label: 'Investment & pricing',              build: pagePricing },
+  { id: 'quotation',     label: 'Formal Quotation',                  build: pageFormalQuotation },
+  { id: 'signature',     label: 'Sign & lock in your install',       build: pageSignatureAcceptance },
 ];
 
 // ────────────────────────────────────────────────────────────────────────────

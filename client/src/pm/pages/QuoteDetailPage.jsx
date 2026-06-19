@@ -70,6 +70,11 @@ const AUDIT_ACTION_META = {
   'discount.approved':   { icon: '✅', label: 'Discount approved',       tone: 'emerald' },
   'discount.rejected':   { icon: '❌', label: 'Discount rejected',       tone: 'rose'    },
   'spec.changed':        { icon: '✏️',  label: 'Spec edited',           tone: 'slate' },
+  // Bug #4 versioning — distinguish in-place draft edits from version bumps.
+  'spec.changed.in_place':       { icon: '✏️',  label: 'Spec edited (draft)',        tone: 'slate' },
+  'spec.changed.bumped_version': { icon: '🆕', label: 'New version created',        tone: 'sky'   },
+  // Stage 1 → Stage 2 collapse
+  'stage.converted_to_firm':     { icon: '📌', label: 'Converted to Stage 2 firm',  tone: 'sky'   },
   'quote.created':       { icon: '✨', label: 'Quote created',          tone: 'slate' },
   'validate.run':        { icon: '⚙️',  label: 'Validation re-run',     tone: 'slate' },
   'archived':            { icon: '🗄️',  label: 'Archived',              tone: 'slate' },
@@ -92,6 +97,12 @@ export default function QuoteDetailPage() {
   const [data, setData] = useState(null);
   const [auditLog, setAuditLog] = useState([]);
   const [error, setError] = useState('');
+  // Live engine snapshot — fetched via preview-validate after the quote loads
+  // so the discount modal + spec snapshot panel can show the engine list
+  // price + customer-pays even when the spec is in AUTO mode (customer_price
+  // is null). Without this the modal showed $0 list / $0 customer for any
+  // un-generated quote where the rep typed a discount.
+  const [livePreview, setLivePreview] = useState(null);
 
   // Global "which action is in-flight" — disables other action buttons while
   // one is running so we don't race the server with stale status guards.
@@ -100,7 +111,7 @@ export default function QuoteDetailPage() {
   const [actionErr, setActionErr]   = useState('');
 
   // Modal state — one open at a time.
-  const [openModal, setOpenModal] = useState(null);     // 'discount' | 'email' | 'sign' | 'countersign' | 'deposit'
+  const [openModal, setOpenModal] = useState(null);     // 'discount' | 'email' | 'sign' | 'countersign' | 'deposit' | 'convertToFirm'
   // Phase F — multi-tier detail page. Default to 0; auto-switches to the
   // recommended tier when data lands (useEffect below). Must be declared at
   // the TOP of the component, before any early returns, per Rules of Hooks.
@@ -126,6 +137,19 @@ export default function QuoteDetailPage() {
       const rec = tiers.findIndex(t => t.is_recommended === true);
       if (rec >= 0) setDetailTierIdx(rec);
     }
+  }, [data?.current_version?.id]);
+
+  // Fetch a fresh engine preview against the current spec so we have cost
+  // totals (list price, customer pays, margin) for the discount modal + snap.
+  // Runs once per version_id; failures are silent (modal degrades to $0).
+  useEffect(() => {
+    const spec = data?.current_version?.spec;
+    if (!spec) { setLivePreview(null); return; }
+    let cancelled = false;
+    pmQuotesAPI.previewValidate(spec)
+      .then(r => { if (!cancelled) setLivePreview(r.data); })
+      .catch(() => { if (!cancelled) setLivePreview(null); });
+    return () => { cancelled = true; };
   }, [data?.current_version?.id]);
 
   function flashMsg(m) { setActionMsg(m); setTimeout(() => setActionMsg(''), 3000); }
@@ -192,6 +216,38 @@ export default function QuoteDetailPage() {
     ? (selectedTier?.pricing || {})
     : (spec.pricing || {});
 
+  // Bug #2a — Discount workflow always anchors to the RECOMMENDED tier in
+  // multi-tier mode (single discount per quote, attached to the package the
+  // customer chose). Single-tier reads from top-level pricing.
+  const recommendedTier = isMultiTier
+    ? (tiers.find(t => t.is_recommended) || tiers[0] || null)
+    : null;
+  const recommendedTierIdx = isMultiTier
+    ? Math.max(0, tiers.findIndex(t => t.is_recommended))
+    : -1;
+  const discountPricing = isMultiTier
+    ? (recommendedTier?.pricing || {})
+    : (spec.pricing || {});
+  const discountTierLabel = isMultiTier
+    ? (recommendedTier?.label || 'Recommended tier')
+    : null;
+  // The list price for the discount modal — sourced from the LIVE engine
+  // preview, not from spec.pricing.customer_price_inc_gst (which is null in
+  // AUTO mode and shows $0 in the modal). Falls back to the spec value when
+  // the preview hasn't landed yet.
+  const livePreviewListPrice = (() => {
+    const eng = livePreview?.engine;
+    if (!eng) return null;
+    if (eng.is_multi_tier) {
+      const t = eng.tiers?.[recommendedTierIdx] || eng.tiers?.[0];
+      return t?.cost?.totals?.total_list_inc_gst ?? null;
+    }
+    return eng.cost?.totals?.total_list_inc_gst ?? null;
+  })();
+  const discountListPrice = livePreviewListPrice
+    ?? discountPricing?.customer_price_inc_gst
+    ?? 0;
+
   return (
     <div>
       {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -214,10 +270,32 @@ export default function QuoteDetailPage() {
                 Edit spec
               </Link>
             )}
-            {!isArchived && !pending_discount && (
+            {/* Stage 1 → Stage 2 collapse — only when the spec is still
+                multi-tier (rep is mid-conversation with customer) AND the
+                quote is in an editable state. After click, the chosen tier
+                becomes the canonical single-tier firm offer. */}
+            {!isArchived && isMultiTier
+              && ['draft', 'pending_owner_review', 'ready_to_generate', 'generated'].includes(quote.status) && (
+              <button onClick={() => setOpenModal('convertToFirm')}
+                      className="px-3 py-1.5 border border-sky-400 text-sky-700 hover:bg-sky-50 rounded text-sm"
+                      title="Customer picked a package — collapse to that tier as a Stage 2 firm offer">
+                Convert to firm quote
+              </button>
+            )}
+
+            {/* Bug #2a fix — entry point is the Pricing tab on the RECOMMENDED
+                tier (multi-tier) or top-level (single-tier). Button only
+                surfaces AFTER the rep has typed a discount + saved. Modal
+                pre-fills amount + reason — no re-typing. */}
+            {!isArchived && !pending_discount
+              && (discountPricing?.discount?.applied_nzd > 0)
+              && !discountPricing?.discount?.owner_approved && (
               <button onClick={() => setOpenModal('discount')}
-                      className="px-3 py-1.5 border border-amber-400 text-amber-700 hover:bg-amber-50 rounded text-sm">
-                Request discount
+                      className="px-3 py-1.5 border border-amber-400 text-amber-700 hover:bg-amber-50 rounded text-sm"
+                      title={isMultiTier
+                        ? `Send the ${discountTierLabel} discount for owner approval`
+                        : 'Send the discount currently in this spec for owner approval'}>
+                Send for owner approval
               </button>
             )}
             {isAdmin && !isArchived && (
@@ -343,7 +421,7 @@ export default function QuoteDetailPage() {
             <PendingDiscountPanel
               req={pending_discount}
               isAdmin={isAdmin}
-              currentPriceIncGst={current_version?.spec?.pricing?.customer_price_inc_gst || 0}
+              currentPriceIncGst={discountListPrice}
               onDecided={load}
               quoteId={id}
             />
@@ -382,9 +460,24 @@ export default function QuoteDetailPage() {
       {openModal === 'discount' && (
         <RequestDiscountModal
           quoteId={id}
-          currentPriceIncGst={current_version?.spec?.pricing?.customer_price_inc_gst || 0}
+          currentPriceIncGst={discountListPrice}
+          presetDiscountAmount={discountPricing?.discount?.applied_nzd || 0}
+          presetReason={discountPricing?.discount?.reason || ''}
+          tierLabel={discountTierLabel}
           onClose={() => setOpenModal(null)}
           onSubmitted={() => { setOpenModal(null); load(); }}
+        />
+      )}
+      {openModal === 'convertToFirm' && (
+        <ConvertToFirmModal
+          quoteId={id}
+          tiers={tiers}
+          onClose={() => setOpenModal(null)}
+          onConverted={(label) => {
+            setOpenModal(null);
+            flashMsg(`Converted to Stage 2 firm offer — ${label}`);
+            load();
+          }}
         />
       )}
       {openModal === 'email' && (
@@ -1013,13 +1106,27 @@ function Buttons({ primaryLabel, primaryClass, onPrimary, primaryDisabled, onCan
 // Rep-side: request a discount. Shows projected margin server-computed only
 // after submit (the modal stays a thin form — engine is the source of truth).
 // ────────────────────────────────────────────────────────────────────────────
-function RequestDiscountModal({ quoteId, currentPriceIncGst, onClose, onSubmitted }) {
-  const [amount, setAmount] = useState(0);
-  const [reason, setReason] = useState('');
+function RequestDiscountModal({
+  quoteId,
+  currentPriceIncGst,
+  presetDiscountAmount = 0,
+  presetReason = '',
+  tierLabel = null,
+  onClose,
+  onSubmitted,
+}) {
+  // Bug #2a fix — discount AMOUNT is set in the Pricing tab; this modal only
+  // collects the reason and submits the approval request. Amount displayed as
+  // a read-only summary so the rep + owner see the same number.
+  const amount = presetDiscountAmount;
+  const [reason, setReason] = useState(presetReason);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const newPrice = Math.max(0, currentPriceIncGst - amount);
-  const pctOff = currentPriceIncGst > 0 ? (amount / currentPriceIncGst * 100) : 0;
+  // currentPriceIncGst is the engine list price snapshotted into spec on save.
+  // The customer pays this minus the pending discount amount.
+  const listPrice = currentPriceIncGst;
+  const customerPays = Math.max(0, listPrice - amount);
+  const pctOff = listPrice > 0 ? (amount / listPrice * 100) : 0;
   const canSubmit = amount > 0 && reason.trim().length >= 10 && !busy;
 
   async function submit() {
@@ -1038,29 +1145,41 @@ function RequestDiscountModal({ quoteId, currentPriceIncGst, onClose, onSubmitte
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-lg p-6 max-w-lg w-full">
         <h3 className="font-bold text-lg mb-1">Request owner discount</h3>
+        {tierLabel && (
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+            Applies to: {tierLabel}
+          </div>
+        )}
         <p className="text-xs text-slate-500 mb-4">
           Admin will see this request and decide. The engine recomputes margin against the discounted price —
           requests that would push the project below floor can still be raised but admin will see the projected margin.
         </p>
 
-        <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+        <div className="grid grid-cols-3 gap-3 text-sm mb-4">
           <div>
-            <div className="text-xs text-slate-500">Current price (inc GST)</div>
-            <div className="font-semibold">{fmt$(currentPriceIncGst)}</div>
+            <div className="text-xs text-slate-500">List price</div>
+            <div className="font-semibold">{fmt$(listPrice)}</div>
           </div>
           <div>
-            <div className="text-xs text-slate-500">Customer would pay</div>
-            <div className="font-semibold text-amber-700">{fmt$(newPrice)}</div>
+            <div className="text-xs text-slate-500">Discount</div>
+            <div className="font-semibold text-rose-700">
+              −{fmt$(amount)}
+              {amount > 0 && (
+                <span className="ml-1 text-[10px] font-normal text-slate-500">
+                  ({pctOff.toFixed(1)}%)
+                </span>
+              )}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-500">Customer pays</div>
+            <div className="font-semibold text-amber-700">{fmt$(customerPays)}</div>
           </div>
         </div>
 
-        <label className="block text-xs font-medium text-slate-700 mb-1">Discount amount ($ NZD inc GST)</label>
-        <input type="number" min={0} value={amount}
-               onChange={e => setAmount(Number(e.target.value) || 0)}
-               className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-sm" />
-        {amount > 0 && (
-          <p className="text-[11px] text-slate-500 mt-1">≈ {pctOff.toFixed(1)}% off current list</p>
-        )}
+        <div className="text-[11px] text-slate-500 mb-3">
+          Amount is set in the Pricing tab. To change it, close this modal and edit there.
+        </div>
 
         <label className="block text-xs font-medium text-slate-700 mt-3 mb-1">
           Reason for admin <span className="text-red-700">*</span>
@@ -1196,6 +1315,95 @@ function PendingDiscountPanel({ req, isAdmin, currentPriceIncGst, onDecided, quo
       )}
 
       {error && <div className="mt-3 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">{error}</div>}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ConvertToFirmModal — Stage 1 → Stage 2 collapse.
+// Rep picks which of the 3 tiers the customer chose; that tier becomes the
+// canonical single-tier firm offer. Defaults to the recommended tier.
+// ────────────────────────────────────────────────────────────────────────────
+function ConvertToFirmModal({ quoteId, tiers, onClose, onConverted }) {
+  const recIdx = Math.max(0, tiers.findIndex(t => t.is_recommended));
+  const [chosenIdx, setChosenIdx] = useState(recIdx);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const chosen = tiers[chosenIdx];
+
+  async function submit() {
+    setBusy(true); setError('');
+    try {
+      const r = await pmQuotesAPI.convertToFirm(quoteId, { tier_id: chosen?.tier_id || chosen?.id || undefined });
+      onConverted(r.data.chosen_tier_label || chosen?.label || 'Stage 2 firm offer');
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-lg p-6 max-w-2xl w-full">
+        <h3 className="font-bold text-lg mb-1">Convert to Stage 2 firm offer</h3>
+        <p className="text-xs text-slate-500 mb-4">
+          The customer reviewed the 3-package proposal and picked one. This action collapses the
+          quote to that single package — System / Pricing / Cost overrides are promoted into the
+          top-level spec, tiers array is removed, and the stage flips to <b>Stage 2 firm</b>.
+          Status drops back to <b>draft</b> so you can refine the firm offer before generating.
+        </p>
+
+        <div className="space-y-2 mb-4">
+          {tiers.map((t, i) => (
+            <label key={t.tier_id || i}
+                   className={`block border rounded-md p-3 cursor-pointer transition-colors ${
+                     i === chosenIdx
+                       ? 'border-sky-500 bg-sky-50'
+                       : 'border-slate-200 hover:bg-slate-50'
+                   }`}>
+              <input type="radio"
+                     name="convert-tier"
+                     checked={i === chosenIdx}
+                     onChange={() => setChosenIdx(i)}
+                     className="mr-2" />
+              <span className="font-semibold text-sm">
+                {t.is_recommended && <span className="text-amber-600 mr-1">★</span>}
+                {t.label || `Tier ${i + 1}`}
+              </span>
+              <div className="text-xs text-slate-500 mt-1 ml-5">
+                {t.pricing?.customer_price_inc_gst != null
+                  ? `${fmt$(t.pricing.customer_price_inc_gst)} inc GST`
+                  : 'Auto-priced'}
+                {t.system_overrides?.panel?.count
+                  ? ` · ${t.system_overrides.panel.count} panels`
+                  : ''}
+                {t.system_overrides?.battery?.sku
+                  ? ` · battery: ${t.system_overrides.battery.sku}`
+                  : ''}
+                {t.system_overrides?.wattpilot_included ? ' · EV charger' : ''}
+              </div>
+            </label>
+          ))}
+        </div>
+
+        {error && (
+          <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+            {error}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button onClick={submit} disabled={busy || !chosen}
+                  className="px-4 py-1.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white rounded text-sm font-medium">
+            {busy ? 'Converting…' : `Convert to "${chosen?.label || 'this tier'}"`}
+          </button>
+          <button onClick={onClose}
+                  className="px-4 py-1.5 border border-slate-300 hover:bg-slate-50 rounded text-sm">
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

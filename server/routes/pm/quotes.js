@@ -448,62 +448,110 @@ router.patch('/:id/spec', authorize('admin', 'sales_mgr', 'sales_exec', 'proposa
     }
 
     // ── Pricing rule (memory: feedback_pricing_always_from_cost_engine) ──
-    // Overwrite each tier's customer_price_inc_gst from the engine's LIST
-    // price (BoM × margins + labour + compliance + GST). Every save →
-    // fresh price reflecting the live catalogue. Margin floor compliant by
-    // construction. Discount workflow continues to apply on top via
-    // tier.pricing.discount.applied_nzd.
+    // Engine list price is computed fresh from BoM × margins + labour +
+    // compliance + GST on every render (cost.totals.total_list_inc_gst) — no
+    // need to snapshot it into spec.pricing.customer_price_inc_gst.
     //
-    // Edge case — when the rep has explicitly set a discount, we still
-    // overwrite the base list price; the discount stays in spec.pricing.discount
-    // and the customer-facing total = list - discount.
-    if (evaluated.engine.is_multi_tier && Array.isArray(evaluated.engine.tiers) && Array.isArray(spec.tiers)) {
+    // IMPORTANT: spec.pricing.customer_price_inc_gst is the "LOCKED at this
+    // customer-pays price" field. When non-null, the cost engine treats the
+    // spec as LOCKED mode and the discount.applied_nzd field is IGNORED in
+    // favour of an implicit discount = (list - locked). When null (AUTO
+    // mode), customer pays list - discount.applied_nzd.
+    //
+    // OLD behaviour unconditionally wrote customer_price_inc_gst = list, which
+    // pinned every quote into LOCKED mode at FULL LIST = no discount possible.
+    // This was the "discount disappears after save" bug end users hit. Now we
+    // preserve the rep's input: locked stays locked, auto stays auto.
+    //
+    // Per-tier housekeeping (zero discount on non-recommended tiers) is
+    // still needed — discount workflow attaches to the recommended tier only.
+    if (evaluated.engine.is_multi_tier && Array.isArray(spec.tiers)) {
       for (let i = 0; i < spec.tiers.length; i++) {
-        const tr = evaluated.engine.tiers[i];
-        const enginePrice = tr?.cost?.totals?.total_list_inc_gst;
-        if (enginePrice != null && Number.isFinite(enginePrice)) {
-          if (!spec.tiers[i].pricing) spec.tiers[i].pricing = {};
-          spec.tiers[i].pricing.customer_price_inc_gst = Math.round(enginePrice);
+        if (!spec.tiers[i].is_recommended && spec.tiers[i].pricing?.discount?.applied_nzd > 0) {
+          spec.tiers[i].pricing.discount = { applied_nzd: 0, owner_approved: false, reason: null };
         }
       }
-    } else if (evaluated.engine.cost?.totals?.total_list_inc_gst != null) {
-      // Single-tier path
-      if (!spec.pricing) spec.pricing = {};
-      spec.pricing.customer_price_inc_gst = Math.round(evaluated.engine.cost.totals.total_list_inc_gst);
     }
 
+    // Bug #4 fix — generate-bumped versioning.
+    //
+    // OLD: every PATCH /spec inserted a brand-new quote_versions row, so a
+    // single editing session (Customer → Bills → System → Costs → Pricing →
+    // Preferences → Site survey) created 7 versions before the rep ever hit
+    // Generate. Versions stopped meaning anything customer-facing.
+    //
+    // NEW: a version is bumped only when the rep has already generated a PDF
+    // from the current version (so editing after the customer has seen v_N
+    // creates v_N+1; otherwise saves update v_N in place). v1, v2, v3 = the
+    // PDFs the customer actually sees.
     const oldCurrent = await getCurrentVersion(quote.id);
-    const nextVersionNum = (oldCurrent?.version_number || 0) + 1;
+    const alreadyGenerated = !!oldCurrent?.generated_at;
 
-    // Flip old version off-current first to avoid violating the partial unique index.
-    if (oldCurrent) {
+    let newVersion;
+    let nextVersionNum = oldCurrent?.version_number || 1;
+    let newQuoteStatus = quote.status;
+
+    if (!oldCurrent || !alreadyGenerated) {
+      // ── UPDATE IN PLACE — current version hasn't been generated yet ─────
+      if (oldCurrent) {
+        const { data: updated, error: upErr } = await sb()
+          .from('quote_versions')
+          .update({
+            spec,
+            validator_output: getEngineeringOutput(evaluated),
+            financial_model_output: getFinancialSummary(evaluated),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', oldCurrent.id)
+          .select('*')
+          .single();
+        if (upErr) throw upErr;
+        newVersion = updated;
+      } else {
+        // No current version yet (shouldn't happen for an existing quote, but
+        // be defensive — fall back to inserting v1).
+        const { data: created, error: insErr } = await sb()
+          .from('quote_versions')
+          .insert({
+            quote_id: quote.id, version_number: 1, spec,
+            validator_output: getEngineeringOutput(evaluated),
+            financial_model_output: getFinancialSummary(evaluated),
+            is_current: true,
+          })
+          .select('*')
+          .single();
+        if (insErr) throw insErr;
+        newVersion = created;
+        nextVersionNum = 1;
+      }
+    } else {
+      // ── BUMP VERSION — current already has a generated PDF the customer saw
+      nextVersionNum = oldCurrent.version_number + 1;
+      // Flip old version off-current first to avoid violating the partial unique index.
       await sb().from('quote_versions')
         .update({ is_current: false, superseded_at: new Date().toISOString() })
         .eq('id', oldCurrent.id);
-    }
-
-    const { data: newVersion, error: newVErr } = await sb()
-      .from('quote_versions')
-      .insert({
-        quote_id: quote.id,
-        version_number: nextVersionNum,
-        spec,
-        validator_output: getEngineeringOutput(evaluated),
-        financial_model_output: getFinancialSummary(evaluated),
-        is_current: true,
-      })
-      .select('*')
-      .single();
-    if (newVErr) throw newVErr;
-
-    if (oldCurrent) {
+      const { data: created, error: newVErr } = await sb()
+        .from('quote_versions')
+        .insert({
+          quote_id: quote.id,
+          version_number: nextVersionNum,
+          spec,
+          validator_output: getEngineeringOutput(evaluated),
+          financial_model_output: getFinancialSummary(evaluated),
+          is_current: true,
+        })
+        .select('*')
+        .single();
+      if (newVErr) throw newVErr;
+      newVersion = created;
       await sb().from('quote_versions')
         .update({ superseded_by_version_id: newVersion.id })
         .eq('id', oldCurrent.id);
     }
 
     // Revising a sent-back or pending_owner_review quote drops it back to draft.
-    const newQuoteStatus = ['pending_owner_review', 'ready_to_generate', 'generated'].includes(quote.status)
+    newQuoteStatus = ['pending_owner_review', 'ready_to_generate', 'generated'].includes(quote.status)
       ? 'draft' : quote.status;
 
     await sb().from('quotes')
@@ -516,7 +564,8 @@ router.patch('/:id/spec', authorize('admin', 'sales_mgr', 'sales_exec', 'proposa
       .eq('id', quote.id);
 
     await writeAudit(req, {
-      quote_id: quote.id, version_id: newVersion.id, action: 'spec.changed',
+      quote_id: quote.id, version_id: newVersion.id,
+      action: alreadyGenerated ? 'spec.changed.bumped_version' : 'spec.changed.in_place',
       before: { version_number: oldCurrent?.version_number, status: quote.status },
       after: { version_number: nextVersionNum, status: newQuoteStatus },
     });
@@ -827,17 +876,41 @@ router.post('/:id/discount-approve', authorize('admin'),
     if (decision !== 'rejected') {
       const current = await getCurrentVersion(req.params.id);
       const updatedSpec = JSON.parse(JSON.stringify(current.spec));
+      const approvalFields = {
+        applied_nzd: finalAmount,
+        owner_approved: true,
+        approved_by: req.user.id,
+        approved_at: new Date().toISOString(),
+        reason: request.reason,
+      };
+      // Bug #2a multi-tier — discount lives at spec.tiers[i].pricing.discount,
+      // NOT spec.pricing.discount, for multi-tier quotes. Without this branch,
+      // admin approval silently wrote to top-level only and the tier-level
+      // owner_approved stayed false → rep saw "discount still pending" in the
+      // lifecycle and had to re-tick the checkbox manually, which then dropped
+      // the status back to draft. Mirror the approval to EVERY tier that has a
+      // matching applied_nzd > 0 so the spec is consistent.
+      //
+      // ALSO null out the tier's customer_price_inc_gst so the spec lands in
+      // AUTO mode — otherwise the legacy LOCKED-at-list snapshot would make
+      // the cost engine ignore the discount entirely.
+      if (Array.isArray(updatedSpec.tiers) && updatedSpec.tiers.length > 0) {
+        for (const t of updatedSpec.tiers) {
+          if (!t.pricing) t.pricing = {};
+          const existing = t.pricing.discount || {};
+          if (existing.applied_nzd > 0) {
+            t.pricing.discount = { ...existing, ...approvalFields };
+            t.pricing.customer_price_inc_gst = null;
+          }
+        }
+      }
+      // Single-tier path (and as a fallback marker for multi-tier audit) —
+      // top-level discount also reflects the approval.
       const baseList = updatedSpec.pricing?.customer_price_inc_gst || 0;
       updatedSpec.pricing = {
         ...updatedSpec.pricing,
         customer_price_inc_gst: Math.max(0, baseList - finalAmount),
-        discount: {
-          applied_nzd: finalAmount,
-          owner_approved: true,
-          approved_by: req.user.id,
-          approved_at: new Date().toISOString(),
-          reason: request.reason,
-        },
+        discount: approvalFields,
       };
 
       // Verify engine still accepts the discounted spec.
@@ -887,6 +960,167 @@ router.post('/:id/discount-approve', authorize('admin'),
 // Unarchive restores to 'draft' (a known-safe state). If you need to send
 // again, use the existing lifecycle actions to transition.
 // ────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────
+// POST /:id/convert-to-firm  — collapse a Stage 1 multi-tier quote into a
+// Stage 2 single-tier firm offer, anchored on the customer's chosen package.
+//
+// Body: { tier_id?: string }  — defaults to the recommended tier
+//
+// Reps trigger this after the customer has reviewed the 3-tier proposal and
+// said which package they want. The spec is rewritten so:
+//   • spec.system    ← top-level + chosen tier's system_overrides merged
+//   • spec.pricing   ← chosen tier's pricing + stage flipped to stage_2_firm
+//   • spec.cost_overrides ← chosen tier's cost_overrides
+//   • spec.tiers / spec.tier_strip removed
+//
+// Versioning per Bug #4: in-place update if current version hasn't been
+// generated yet, otherwise bump to v+1.
+// ────────────────────────────────────────────────────────────────────────────
+router.post('/:id/convert-to-firm',
+  authorize('admin', 'sales_mgr', 'sales_exec', 'proposal_mgr'),
+  async (req, res) => {
+  try {
+    if (!sb()) return res.status(503).json({ error: 'Database not configured.' });
+
+    const { tier_id } = req.body || {};
+
+    const { data: quote, error: qErr } = await sb()
+      .from('quotes').select('*').eq('id', req.params.id).maybeSingle();
+    if (qErr) throw qErr;
+    if (!quote) return res.status(404).json({ error: 'Quote not found.' });
+
+    // Guard — only editable / pre-sent statuses can be converted.
+    if (!['draft', 'pending_owner_review', 'ready_to_generate', 'generated'].includes(quote.status)) {
+      return res.status(409).json({ error: `Cannot convert when quote is ${quote.status}.` });
+    }
+
+    const current = await getCurrentVersion(quote.id);
+    if (!current) return res.status(404).json({ error: 'No current version found.' });
+
+    const spec = JSON.parse(JSON.stringify(current.spec));
+    if (!Array.isArray(spec.tiers) || spec.tiers.length === 0) {
+      return res.status(400).json({ error: 'Quote is already single-tier.' });
+    }
+
+    // Find the target tier — explicit id or first recommended, else first.
+    const chosen = tier_id
+      ? spec.tiers.find(t => t.tier_id === tier_id || t.id === tier_id)
+      : (spec.tiers.find(t => t.is_recommended) || spec.tiers[0]);
+    if (!chosen) return res.status(400).json({ error: 'Target tier not found in spec.' });
+
+    // Build the collapsed single-tier spec.
+    const newSpec = {
+      ...spec,
+      system: { ...(spec.system || {}), ...(chosen.system_overrides || {}) },
+      pricing: {
+        ...(spec.pricing || {}),
+        ...(chosen.pricing || {}),
+        stage: 'stage_2_firm',
+      },
+      cost_overrides: chosen.cost_overrides || spec.cost_overrides || { labour: [], compliance: [], custom: [] },
+    };
+    // Carry Wattpilot flag through (it lives on system_overrides for tiers)
+    if (chosen.system_overrides?.wattpilot_included != null) {
+      newSpec.system.wattpilot_included = chosen.system_overrides.wattpilot_included;
+    }
+    delete newSpec.tiers;
+    delete newSpec.tier_strip;
+    // Unlock the spec — the chosen tier's pricing.customer_price_inc_gst was
+    // a legacy LOCKED-at-list snapshot from the old PATCH /spec writeback. If
+    // we let it survive into the single-tier spec, the cost engine would treat
+    // it as a locked customer-pays price = full list = discount IGNORED. Force
+    // AUTO mode so the approved discount.applied_nzd is honoured by the engine.
+    // Rep can re-lock explicitly via the "Lock at this price" button later.
+    newSpec.pricing.customer_price_inc_gst = null;
+
+    // Run the engine on the new single-tier spec to capture validator + financial.
+    const evaluated = await evaluateSpec(newSpec);
+    if (!evaluated.ok) {
+      return res.status(400).json({
+        error: 'Collapsed spec failed engine validation.',
+        config_errors: evaluated.engine.config_errors,
+        bom_error: evaluated.engine.bom_error,
+        cost_error: evaluated.engine.cost_error,
+      });
+    }
+
+    // Persist — bump version if current was already generated, else update in place
+    // (matches Bug #4 generate-bumped versioning model).
+    const alreadyGenerated = !!current.generated_at;
+    let resultVersion;
+    let nextVersionNum = current.version_number;
+
+    if (alreadyGenerated) {
+      nextVersionNum = current.version_number + 1;
+      await sb().from('quote_versions')
+        .update({ is_current: false, superseded_at: new Date().toISOString() })
+        .eq('id', current.id);
+      const { data: inserted, error: insErr } = await sb()
+        .from('quote_versions').insert({
+          quote_id: quote.id,
+          version_number: nextVersionNum,
+          spec: newSpec,
+          validator_output: getEngineeringOutput(evaluated),
+          financial_model_output: getFinancialSummary(evaluated),
+          is_current: true,
+        })
+        .select('*').single();
+      if (insErr) throw insErr;
+      resultVersion = inserted;
+      await sb().from('quote_versions')
+        .update({ superseded_by_version_id: inserted.id })
+        .eq('id', current.id);
+    } else {
+      const { data: updated, error: upErr } = await sb()
+        .from('quote_versions').update({
+          spec: newSpec,
+          validator_output: getEngineeringOutput(evaluated),
+          financial_model_output: getFinancialSummary(evaluated),
+          updated_at: new Date().toISOString(),
+        }).eq('id', current.id)
+        .select('*').single();
+      if (upErr) throw upErr;
+      resultVersion = updated;
+    }
+
+    // Status — convert always lands in draft so the rep can refine the firm
+    // offer (adjust labour overrides, pricing nudges, etc.) before generate.
+    await sb().from('quotes').update({
+      status: 'draft',
+      current_version_id: resultVersion.id,
+      current_version_number: nextVersionNum,
+      stage: 'stage_2_firm',
+      updated_at: new Date().toISOString(),
+    }).eq('id', quote.id);
+
+    await writeAudit(req, {
+      quote_id: quote.id, version_id: resultVersion.id,
+      action: 'stage.converted_to_firm',
+      before: {
+        stage: spec.pricing?.stage,
+        tier_count: spec.tiers.length,
+        status: quote.status,
+        version_number: current.version_number,
+      },
+      after: {
+        stage: 'stage_2_firm',
+        chosen_tier_label: chosen.label || null,
+        status: 'draft',
+        version_number: nextVersionNum,
+      },
+    });
+
+    res.json({
+      ok: true,
+      chosen_tier_label: chosen.label || null,
+      version: resultVersion,
+      version_bumped: alreadyGenerated,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/:id/archive', authorize('admin'), async (req, res) => {
   try {
     if (!sb()) return res.status(503).json({ error: 'Database not configured.' });

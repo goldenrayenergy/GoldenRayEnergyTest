@@ -69,6 +69,11 @@ export const pmQuotesAPI = {
   decideDiscount:  (id, body) =>
     api.post(`/pm/quotes/${id}/discount-approve`, body),
 
+  // Stage 1 → Stage 2 collapse — promotes the chosen tier into a single-tier
+  // firm quote. `body.tier_id` optional; defaults to the recommended tier.
+  convertToFirm: (id, body = {}) =>
+    api.post(`/pm/quotes/${id}/convert-to-firm`, body),
+
   // P9 — Admin archive / unarchive (soft-archive, preserves history)
   archive:     (id, reason) => api.post(`/pm/quotes/${id}/archive`, { reason }),
   unarchive:   (id)         => api.post(`/pm/quotes/${id}/unarchive`),

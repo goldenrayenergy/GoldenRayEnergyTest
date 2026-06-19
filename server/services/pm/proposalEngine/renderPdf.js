@@ -81,7 +81,10 @@ function collectDatasheetSkus(spec, catalogue) {
   push(sys.panel?.sku);
   push(sys.inverter?.sku);
   push(sys.battery?.sku);
-  push(sys.smart_meter?.sku);
+  // Bug #3 fix — composer leaves smart_meter.sku null until the rep flips
+  // phase manually. Fall back to the 1ϕ default (which the BoM uses) so the
+  // datasheet still concatenates.
+  push(sys.smart_meter?.sku || 'FRN-MTR-63-S1P');
   // BMS controller: resolved from catalogue by battery series
   if (sys.battery?.sku && catalogue?.BATTERIES?.[sys.battery.sku]) {
     const series = catalogue.BATTERIES[sys.battery.sku].series;

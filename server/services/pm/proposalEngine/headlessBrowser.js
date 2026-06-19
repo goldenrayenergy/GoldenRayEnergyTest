@@ -33,34 +33,99 @@ const CHROMIUM_PACK_URL_OVERRIDE = process.env.CHROMIUM_PACK_URL || CHROMIUM_PAC
 
 let _cachedExecPath = null;
 
+// Common system-Chrome / Edge install paths per platform. Used when no
+// PUPPETEER_EXECUTABLE_PATH is set and we're NOT in a serverless/Linux env.
+// Order matters — Chrome before Edge.
+function localChromiumCandidates() {
+  const fs = require('node:fs');
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const platform = process.platform;
+  let candidates = [];
+  if (platform === 'win32') {
+    candidates = [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      `${home}\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe`,
+      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    ];
+  } else if (platform === 'darwin') {
+    candidates = [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    ];
+  } else {
+    // Linux desktop dev — not the Render path
+    candidates = [
+      '/usr/bin/google-chrome',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/microsoft-edge',
+    ];
+  }
+  return candidates.filter(p => { try { return fs.existsSync(p); } catch { return false; } });
+}
+
+// Heuristic — are we in the Render/Lambda-style env where chromium-min works?
+// Render sets RENDER=true. AWS Lambda sets AWS_LAMBDA_FUNCTION_NAME. Both Linux.
+function isServerlessLinuxEnv() {
+  if (process.platform !== 'linux') return false;
+  return !!(process.env.RENDER || process.env.AWS_LAMBDA_FUNCTION_NAME ||
+            process.env.VERCEL || process.env.NETLIFY);
+}
+
 export async function launchHeadlessBrowser({ args: extraArgs = [] } = {}) {
   const puppeteer = (await import('puppeteer-core')).default;
+  const { createRequire } = await import('node:module');
+  global.require = global.require || createRequire(import.meta.url);
 
-  // 1) If the operator has set PUPPETEER_EXECUTABLE_PATH (typical for local
-  //    dev with a system Chrome), use that directly. Skips the download step.
+  const standardArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+  ];
+
+  // 1) Explicit override (any platform).
   const explicitPath = process.env.PUPPETEER_EXECUTABLE_PATH;
   if (explicitPath) {
     return puppeteer.launch({
       headless: true,
       executablePath: explicitPath,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        ...extraArgs,
-      ],
+      args: [...standardArgs, ...extraArgs],
     });
   }
 
-  // 2) Production / containerised path — Sparticuz/chromium-min. Cached on
-  //    first call; subsequent calls reuse the downloaded binary path.
-  const chromium = (await import('@sparticuz/chromium-min')).default;
-  if (!_cachedExecPath) {
-    _cachedExecPath = await chromium.executablePath(CHROMIUM_PACK_URL_OVERRIDE);
+  // 2) Serverless Linux env (Render, Lambda) — Sparticuz/chromium-min.
+  if (isServerlessLinuxEnv()) {
+    const chromium = (await import('@sparticuz/chromium-min')).default;
+    if (!_cachedExecPath) {
+      _cachedExecPath = await chromium.executablePath(CHROMIUM_PACK_URL_OVERRIDE);
+    }
+    return puppeteer.launch({
+      headless: chromium.headless,
+      executablePath: _cachedExecPath,
+      args: [...chromium.args, ...extraArgs],
+    });
   }
-  return puppeteer.launch({
-    headless: chromium.headless,
-    executablePath: _cachedExecPath,
-    args: [...chromium.args, ...extraArgs],
-  });
+
+  // 3) Local dev — auto-detect system Chrome / Edge. Avoids the "PDF came out
+  //    as HTML" trap users hit when they forget to set the env var.
+  const detected = localChromiumCandidates();
+  if (detected.length > 0) {
+    return puppeteer.launch({
+      headless: true,
+      executablePath: detected[0],
+      args: [...standardArgs, ...extraArgs],
+    });
+  }
+
+  // 4) Nothing usable — throw LOUDLY so renderPdf.js's catch block surfaces it
+  //    rather than silently falling back to HTML buffers. The earlier silent
+  //    fallback was the cause of both "PDFs are HTML" bugs (prod + local).
+  throw new Error(
+    'No Chromium available. ' +
+    `Platform=${process.platform}, RENDER=${!!process.env.RENDER}. ` +
+    'Set PUPPETEER_EXECUTABLE_PATH in .env to your local Chrome / Edge binary, ' +
+    'or install Google Chrome to a standard location.'
+  );
 }

@@ -17,6 +17,7 @@ import { flattenEngineErrors, refusalFromPreview } from '../utils/engineErrorHin
 // Sections that scope to the active tier (System, Costs, Pricing). All others shared.
 const TIER_SCOPED_TABS = new Set(['system', 'costs', 'pricing']);
 
+// Default tab order for stage 1 (estimate) — Site survey hidden until stage 2.
 const TABS = [
   { id: 'customer',    label: 'Customer' },
   { id: 'bills',       label: 'Bills' },
@@ -26,6 +27,18 @@ const TABS = [
   { id: 'preferences', label: 'Preferences' },
   { id: 'site_survey', label: 'Site survey', stage2Only: true },
 ];
+
+// Bug #5 fix — In stage 2 (firm quote) the rep is on-site and fills the survey
+// FIRST, then revises the System spec against actual measurements. Reorder so
+// site_survey appears between Bills and System for stage 2 only.
+const STAGE_2_TAB_ORDER = ['customer', 'bills', 'site_survey', 'system', 'costs', 'pricing', 'preferences'];
+
+function tabsForStage(isStage2) {
+  const visible = TABS.filter(t => !t.stage2Only || isStage2);
+  if (!isStage2) return visible;
+  const byId = Object.fromEntries(visible.map(t => [t.id, t]));
+  return STAGE_2_TAB_ORDER.map(id => byId[id]).filter(Boolean);
+}
 
 export default function QuoteFormPage() {
   const { id } = useParams();
@@ -149,7 +162,7 @@ export default function QuoteFormPage() {
   }
 
   const isStage2 = spec?.pricing?.stage === 'stage_2_firm';
-  const visibleTabs = TABS.filter(t => !t.stage2Only || isStage2);
+  const visibleTabs = tabsForStage(isStage2);
 
   // P6 — Hard-fail count from the latest preview (multi-tier sums across tiers)
   const previewEngine = (previewResult || saveResult)?.engine;
@@ -383,8 +396,9 @@ export default function QuoteFormPage() {
           </div>
         </div>
         <p className="text-sm text-slate-500 mt-1">
-          Edit any section, then Save. Saving creates a new version and runs the engine. The Validation panel
-          on the right shows the result.
+          Edit any section, then Save. Saving updates this draft in place and runs the engine.
+          A new version is created only when you click <b>Generate PDF</b> on a version the customer has already seen.
+          The Validation panel on the right shows the result.
         </p>
       </div>
 
@@ -514,6 +528,9 @@ export default function QuoteFormPage() {
                 return eng.cost || null;
               })()}
               quote={quote}
+              // Bug #2a — discount workflow only on the recommended tier in
+              // multi-tier mode. Single-tier always allows it.
+              discountAllowed={!isMultiTier || !!activeTier?.is_recommended}
             />
           )}
 
@@ -892,7 +909,7 @@ function MultiTierValidationPanel({ saveResult, previewing }) {
                   <span className="text-right text-slate-700">
                     ${Math.round(expected.yr1_savings).toLocaleString()}
                   </span>
-                  <span className="text-slate-500">30-yr (Expected)</span>
+                  <span className="text-slate-500">25-yr (Expected)</span>
                   <span className="text-right text-slate-700">
                     ${Math.round(expected.lifetime_net_savings).toLocaleString()}
                   </span>

@@ -20,7 +20,7 @@ import { discountHint } from '../../utils/fieldHints';
 // configValidator enforces those as hard gates; UI surfaces them inline.
 // ────────────────────────────────────────────────────────────────────────────
 
-export default function PricingSection({ spec, update, errors = {}, engineSnapshot, costSnapshot = null }) {
+export default function PricingSection({ spec, update, errors = {}, engineSnapshot, costSnapshot = null, discountAllowed = true }) {
   const p = spec.pricing || {};
   const d = p.discount || { applied_nzd: 0 };
   const setP = (key, val) => update(s => ({ ...s, pricing: { ...s.pricing, [key]: val } }));
@@ -153,45 +153,57 @@ export default function PricingSection({ spec, update, errors = {}, engineSnapsh
             </Field>
           ) : null}
 
-          <Field label={isLocked ? 'Implicit discount (auto-derived)' : 'Discount to apply (inc GST)'}
-                 hint={discountHint(cost)}>
-            <div className="flex items-center gap-2">
-              <NumberInput
-                value={discountVal}
-                onChange={isLocked ? () => {} : setAutoDiscount}
-                disabled={isLocked}
-                placeholder="0" />
-              {isLocked && (
-                <span className="text-[11px] text-slate-500 italic">
-                  derived from list − locked price
-                </span>
-              )}
+          {!discountAllowed ? (
+            <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded px-2.5 py-2">
+              Discounts apply to the <b>recommended tier</b> only. Switch to the recommended tier
+              (★) to enter a discount.
             </div>
-          </Field>
+          ) : (
+            <>
+              <Field label={isLocked ? 'Implicit discount (auto-derived)' : 'Discount to apply (inc GST)'}
+                     hint={discountHint(cost)}>
+                <div className="flex items-center gap-2">
+                  <NumberInput
+                    value={discountVal}
+                    onChange={isLocked ? () => {} : setAutoDiscount}
+                    disabled={isLocked}
+                    placeholder="0" />
+                  {isLocked && (
+                    <span className="text-[11px] text-slate-500 italic">
+                      derived from list − locked price
+                    </span>
+                  )}
+                </div>
+              </Field>
 
-          <Field label="Reason" error={errors['pricing.discount.reason']}
-                 hint={discountVal > 0 ? 'Required when any discount is applied.' : ''}>
-            <TextInput value={d.reason || ''}
-                       onChange={v => setD('reason', v)}
-                       placeholder="Repeat customer / referral / package deal …" />
-          </Field>
+              <Field label="Reason" error={errors['pricing.discount.reason']}
+                     hint={discountVal > 0 ? 'Required when any discount is applied.' : ''}>
+                <TextInput value={d.reason || ''}
+                           onChange={v => setD('reason', v)}
+                           placeholder="Repeat customer / referral / package deal …" />
+              </Field>
 
-          <div className="flex items-center gap-3 flex-wrap">
-            <CheckBox checked={d.owner_approved === true}
-                      onChange={v => setD('owner_approved', v)}
-                      label="Owner has approved this discount" />
-            <span className="text-xs text-slate-500">
-              Admin role only — discounts won't ship without this ticked.
-            </span>
-          </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <CheckBox checked={d.owner_approved === true}
+                          onChange={v => setD('owner_approved', v)}
+                          label="Owner has approved this discount" />
+                <span className="text-xs text-slate-500">
+                  Admin role only — discounts won't ship without this ticked.
+                </span>
+              </div>
+            </>
+          )}
 
           {/* Inline validation hints */}
-          {needsApproval && (
+          {discountAllowed && needsApproval && (
             <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2.5 py-1.5">
               ⚠ Discount of ${Math.round(computedDiscount).toLocaleString()} applied — needs owner approval before this quote can ship.
+              <div className="mt-1 text-rose-800 font-medium">
+                Save this spec, then click <b>“Send for owner approval”</b> on the quote detail page.
+              </div>
             </div>
           )}
-          {needsReason && (
+          {discountAllowed && needsReason && (
             <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2.5 py-1.5">
               ⚠ Reason text is required when a discount is applied.
             </div>

@@ -65,12 +65,20 @@ export default function QuoteNewPage() {
           ),
         };
       }
-      // P5 — A1: region + postcode from bill analysis (only when contact didn't already have them)
+      // Bug #6 fix — fall back to bill-analysis address fields when the contact
+      // is empty. Contact wins when it has real values; analysis fills the gaps.
+      // ICP comes from bill_analyses.icp_number (parser → analysis → contact).
       if (billAnalysis?.address_prefill) {
         const a = billAnalysis.address_prefill;
-        if (a.region && !c?.region)     spec.customer.address.region   = a.region;
+        if (a.region   && !c?.region)   spec.customer.address.region   = a.region;
         if (a.postcode && !c?.postcode) spec.customer.address.postcode = a.postcode;
+        if (a.street   && !c?.street)   spec.customer.address.street   = a.street;
+        if (a.suburb   && !c?.suburb)   spec.customer.address.suburb   = a.suburb;
+        if (a.city     && !c?.city)     spec.customer.address.city     = a.city;
+        if (a.icp_number && !c?.icp_number) spec.customer.icp_number = a.icp_number;
       }
+      // ICP from the contact itself (if writeAddressThrough already populated it).
+      if (c?.icp_number && !spec.customer.icp_number) spec.customer.icp_number = c.icp_number;
       // Option 4c (b) — Server-side composition.
       // The /pm/quotes create endpoint reads the bill_analysis_id, runs
       // composeThreeTiers internally, and returns a fully-populated spec

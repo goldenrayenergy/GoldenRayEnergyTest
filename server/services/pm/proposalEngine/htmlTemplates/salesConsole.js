@@ -279,7 +279,7 @@ ${p.floor_status === 'below_floor' ? `
 
 <h3 style="margin-top:14px">Three-scenario sensitivity</h3>
 <table class="tight">
-  <tr><th>Scenario</th><th class="num">Yr1 save</th><th class="num">Payback</th><th class="num">30-yr net</th><th class="num">ROI</th><th class="num">IRR</th><th class="num">NPV @5%</th></tr>
+  <tr><th>Scenario</th><th class="num">Yr1 save</th><th class="num">Payback</th><th class="num">25-yr net</th><th class="num">ROI</th><th class="num">IRR</th><th class="num">NPV @5%</th></tr>
   ${d.scenarios.summary.map(s => `
     <tr style="${s.key === 'expected' ? 'background:#fff7ed;font-weight:700' : ''}">
       <td>${s.label}${s.key === 'expected' ? ' (Expected)' : ''}</td>

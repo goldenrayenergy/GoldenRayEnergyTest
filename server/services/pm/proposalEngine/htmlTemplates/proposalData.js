@@ -162,6 +162,7 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
     discount_ex_gst: t.discount_applied_ex_gst,
     discount_inc_gst: t.discount_applied_inc_gst,
     discount_pct_of_list: t.discount_pct_of_list,
+    discount_reason: spec.pricing?.discount?.reason || null,
     customer_ex_gst: t.customer_total_ex_gst,
     customer_inc_gst: t.customer_total_inc_gst,
     gst_on_customer: t.gst_on_customer_total,
@@ -382,7 +383,7 @@ function buildInsights({ billAnalysis, scenarios, annualKwh, annualSpend, system
     };
   }
 
-  // ── 30-year cash flow (Expected scenario) ───────────────────────────────
+  // ── 25-year cash flow (Expected scenario) ───────────────────────────────
   if (scenarios?.expected?.yearly && Array.isArray(scenarios.expected.yearly)) {
     let cumulative = -Math.abs(scenarios.expected.upfront_cost || 0);
     const points = scenarios.expected.yearly.map((row, idx) => {
@@ -439,7 +440,12 @@ function hardwareDetailBlocks(spec, catalogue, costResult) {
   const panel = catalogue.PANELS[spec.system.panel.sku];
   const inverter = catalogue.INVERTERS[spec.system.inverter.sku];
   const battery = spec.system?.battery?.sku ? catalogue.BATTERIES[spec.system.battery.sku] : null;
-  const meter = spec.system?.smart_meter?.sku ? catalogue.SMART_METERS[spec.system.smart_meter.sku] : null;
+  // Bug #3 fix — mirror the bomBuilder default. Composer leaves smart_meter.sku
+  // null until the rep flips the phase manually, but the customer PDF still
+  // needs to surface the meter that will actually be installed. Fall back to
+  // the 1ϕ default (which the BoM also uses) when sku is null.
+  const meterSku = spec.system?.smart_meter?.sku || 'FRN-MTR-63-S1P';
+  const meter = catalogue.SMART_METERS?.[meterSku] || null;
 
   // BMS resolved the same way bomBuilder does — by battery series, not hardcoded.
   const batteryModuleCount = spec.system?.battery?.module_count || 0;

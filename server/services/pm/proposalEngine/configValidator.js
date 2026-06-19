@@ -234,14 +234,16 @@ function validatePricing(p, errors) {
   if (p.discount) {
     checkType(p.discount.applied_nzd, 'number', 'pricing.discount.applied_nzd', errors);
     if (p.discount.applied_nzd > 0) {
+      // Bug #2a unblock — reason is the only hard SAVE-time requirement; the
+      // owner_approved / approved_by / approved_at fields are checked at
+      // GENERATE-time by the engineering validator (engine.can_ship gate) so
+      // a sales rep can save a pending-approval discount and then click
+      // "Send for owner approval" on the quote detail page. The old behaviour
+      // refused the save outright, creating a chicken-and-egg deadlock — the
+      // rep needed the discount in the spec to request approval, but
+      // couldn't save the spec until the approval was already granted.
       requireField(p.discount.reason, 'pricing.discount.reason', errors,
         'discount reason is required whenever discount.applied_nzd > 0');
-      if (p.discount.owner_approved !== true) {
-        err(errors, 'pricing.discount.owner_approved',
-          'discount.owner_approved must be true when discount.applied_nzd > 0');
-      }
-      requireField(p.discount.approved_by, 'pricing.discount.approved_by', errors);
-      requireField(p.discount.approved_at, 'pricing.discount.approved_at', errors);
     }
   }
 }
