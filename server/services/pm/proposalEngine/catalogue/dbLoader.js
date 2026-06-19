@@ -79,9 +79,11 @@ function mapPanel(row) {
     power_temp_coef_pct_per_c:   num(s.power_temp_coef_pct_per_c   ?? s.temp_coeff_pmax_pct_c),
     cost_nzd: num(row.cost_nzd),
     margin_pct: num(row.default_margin_pct) ?? 30,
+    peak_efficiency_pct: num(s.peak_efficiency_pct),
     datasheet_filename: s.datasheet_filename || null,
     image_url:     row.image_url || null,
     datasheet_url: row.datasheet_url || null,
+    marketing_claims: row.marketing_claims || null,
   };
 }
 
@@ -127,6 +129,7 @@ function mapInverter(row) {
     datasheet_filename: s.inverter_datasheet || null,
     image_url:     row.image_url || null,
     datasheet_url: row.datasheet_url || null,
+    marketing_claims: row.marketing_claims || null,
   };
 }
 
@@ -144,6 +147,7 @@ function mapBattery(row) {
     datasheet_filename: s.datasheet_filename || null,
     image_url:     row.image_url || null,
     datasheet_url: row.datasheet_url || null,
+    marketing_claims: row.marketing_claims || null,
   };
 }
 
@@ -267,7 +271,7 @@ export async function loadCatalogueFromDb(supabase) {
   const wantedCategories = Object.values(CATEGORY_BUCKETS).flat();
   const { data: productRows, error: prodErr } = await supabase
     .from('products')
-    .select('id, sku, brand, name, category, subcategory, cost_nzd, default_margin_pct, specs, is_active, image_url, datasheet_url')
+    .select('id, sku, brand, name, category, subcategory, cost_nzd, default_margin_pct, specs, is_active, image_url, datasheet_url, marketing_claims')
     .eq('is_active', true)
     .in('category', wantedCategories);
   if (prodErr) throw new Error(`Products query failed: ${prodErr.message}`);

@@ -45,6 +45,8 @@ import { pageFourScenarios } from './pages/fourScenarios.js';
 // Phase H7 — formal quotation summary + customer signature acceptance
 import { pageFormalQuotation } from './pages/formalQuotation.js';
 import { pageSignatureAcceptance } from './pages/signatureAcceptance.js';
+// Phase H8 — marketing-grade "why we picked this kit" page (catalogue-driven)
+import { pagePremiumHardware } from './pages/premiumHardware.js';
 
 export const TEMPLATE_VERSION = '1.5.0';
 
@@ -60,6 +62,7 @@ const SINGLE_TIER_PAGES = [
   { id: 'cover',         label: 'Cover & welcome',                   build: pageCover },
   { id: 'system',        label: 'System summary',                    build: pageSystemSummary },
   { id: 'components',    label: 'Your solution — components',        build: pageComponents },
+  { id: 'premium_hw',    label: 'Premium hardware — why we picked it', build: pagePremiumHardware },
   { id: 'sld',           label: 'System layout (single-line diagram)', build: pageSLD },
   { id: 'patterns',      label: 'Patterns from your bills',          build: pagePatternsAcrossYear },
   { id: 'four_scenarios',label: 'How your system works',             build: pageFourScenarios },
@@ -82,6 +85,7 @@ const MULTI_TIER_PAGES = [
   { id: 'tiers',         label: 'Three packages at a glance',        build: pageThreeTierComparison },
   { id: 'system',        label: 'System summary',                    build: pageSystemSummary },
   { id: 'components',    label: 'Your solution — components',        build: pageComponents },
+  { id: 'premium_hw',    label: 'Premium hardware — why we picked it', build: pagePremiumHardware },
   { id: 'sld',           label: 'System layout (single-line diagram)', build: pageSLD },
   { id: 'patterns',      label: 'Patterns from your bills',          build: pagePatternsAcrossYear },
   { id: 'four_scenarios',label: 'How your system works',             build: pageFourScenarios },
