@@ -230,6 +230,27 @@
       "datasheet_url": null,
       "skip_datasheet": true,
       "confidence": "high"
+    },
+
+    {
+      "skus": ["GEN-BAC-ACC-HVS", "GEN-BAC-ACC-HVM"],
+      "kind": "bms",
+      "label": "BYD HV BCU + Base (HVS/HVM series)",
+      "image_url": "https://www.windandsun.co.uk/cdn/shop/files/BYD_HVS-HVM_BCU_and_Base.png?v=1743092702",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high",
+      "notes": "Combined BCU + Base render shared across HVS and HVM since they use the same controller hardware"
+    },
+    {
+      "skus": ["FRN-BAC-ACC-RSV"],
+      "kind": "bms",
+      "label": "Fronius Reserva BMS + Base",
+      "image_url": "https://www.solarheroes.com.au/wp-content/uploads/2026/01/fronius-reserva-bms-base-aus-nz-600x600.jpg",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "medium",
+      "notes": "Image via Solar Heroes AU (NZ-compatible AUS-NZ Reserva BMS variant) — Fronius's own Reserva product page 404'd"
     }
   ]
 }

@@ -206,7 +206,12 @@ export function emptySpec(contactDefaults = {}) {
       phase: 1,
     },
     pricing: {
-      customer_price_inc_gst: 45000,
+      // AUTO mode — price tracks the live engine list (hardware + BoS + labour +
+      // margin from costEngine.computeCost). Rep can flip to LOCKED on the
+      // Pricing tab to type a fixed customer price; configValidator routes the
+      // implicit discount through the reason + owner_approved gate either way.
+      // Never hardcode a default $ — that bypasses the cost engine.
+      customer_price_inc_gst: null,
       stage: 'stage_1_estimate',
       final_mode: true,
       discount: { applied_nzd: 0, owner_approved: false, reason: null },
