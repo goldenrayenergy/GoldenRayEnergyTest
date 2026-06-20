@@ -1,0 +1,235 @@
+{
+  "_meta": {
+    "purpose": "Source manifest for upload-product-assets.js — downloads each source URL, re-uploads to Supabase storage buckets, and sets products.image_url / products.datasheet_url. Researched 2026-06-19 via web search; URLs verified resolving with real binary content.",
+    "image_bucket": "pm-product-images",
+    "datasheet_bucket": "product-datasheets",
+    "image_path_template": "{kind}/{sku}.{ext}",
+    "datasheet_path_template": "{kind}/{sku}.pdf",
+    "match_strategy": "Match products by sku where present; for entries with sku:null use name_match regex"
+  },
+  "families": [
+    {
+      "skus": ["FRN-INV-30-G24", "FRN-INV-40-G24", "FRN-INV-50-G24", "FRN-INV-60-G24", "FRN-INV-80-G24-1P", "FRN-INV-100-G24-1P"],
+      "kind": "inverters",
+      "label": "Fronius Primo GEN24 1ϕ (base)",
+      "image_url": "https://www.fronius.com/-/media/imported-media/120001-123357/121340-121360/121360.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+    {
+      "skus": ["FRN-INV-30-G24P-1P", "FRN-INV-40-G24P-1P", "FRN-INV-50-G24P-1P", "FRN-INV-60-G24P-1P", "FRN-INV-80-G24P-1P"],
+      "kind": "inverters",
+      "label": "Fronius Primo GEN24 Plus 1ϕ (hybrid)",
+      "image_url": "https://www.fronius.com/-/media/imported-media/120001-123357/121340-121360/121360.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+    {
+      "skus": ["FRN-INV-60-SYMO", "FRN-INV-80-SYMO", "FRN-INV-100-SYMO", "FRN-INV-120-SYMO-3P"],
+      "kind": "inverters",
+      "label": "Fronius Symo GEN24 3ϕ (base)",
+      "image_url": "https://www.fronius.com/-/media/imported-media/160944-169998/162795-162796/162795.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+    {
+      "skus": ["FRN-INV-60-SYMP-3P", "FRN-INV-80-SYMP-3P", "FRN-INV-100-SYMP-3P", "FRN-INV-120-SYMP-3P"],
+      "kind": "inverters",
+      "label": "Fronius Symo GEN24 Plus 3ϕ (hybrid)",
+      "image_url": "https://www.fronius.com/-/media/imported-media/160944-169998/162795-162796/162795.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+    {
+      "skus": ["FRN-INV-150-VRTO-3P", "FRN-INV-200-VRTO-3P", "FRN-INV-250-VRTO-3P", "FRN-INV-300-VRTO-3P", "FRN-INV-333-VRTO-3P"],
+      "kind": "inverters",
+      "label": "Fronius Verto 3ϕ commercial (non-hybrid)",
+      "image_url": "https://www.fronius.com/-/media/international/solar-energy-2-0/installers/product-pages/verto-content-page/verto-front-side-trans-169.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+    {
+      "skus": ["FRN-INV-150-VRTP-3P", "FRN-INV-200-VRTP-3P", "FRN-INV-250-VRTP-3P", "FRN-INV-300-VRTP-3P", "FRN-INV-333-VRTP-3P"],
+      "kind": "inverters",
+      "label": "Fronius Verto Plus 3ϕ commercial (hybrid)",
+      "image_url": "https://www.fronius.com/-/media/oneweb/solar-and-energy/solar-solutions/photovoltaics/verto-and-verto-plus/se-verto-plus-25-33-product-trans-1440x1260.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+
+    {
+      "skus": ["FRN-EVC-220-WPF"],
+      "kind": "ev-chargers",
+      "label": "Fronius Wattpilot Flex Home 22 C6",
+      "image_url": "https://www.fronius.com/-/media/imported-media/170086-177841/173512-173514/173512.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+
+    {
+      "skus": ["FRN-MTR-63-T3P"],
+      "kind": "smart-meters",
+      "label": "Fronius Smart Meter 63A-3 three-phase",
+      "image_url": "https://www.fronius.com/-/media/oneweb/solar-and-energy/solar-solutions/energy-management/smart-meter/se_product_image_smart_meter_overview_1540x866.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "medium",
+      "notes": "family overview image — model-specific render 404'd"
+    },
+    {
+      "skus": ["FRN-MTR-WR-T3P"],
+      "kind": "smart-meters",
+      "label": "Fronius Smart Meter WR 100-600V three-phase",
+      "image_url": "https://www.fronius.com/-/media/oneweb/solar-and-energy/solar-solutions/energy-management/smart-meter/se_product_image_smart_meter_overview_1540x866.webp",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "medium",
+      "notes": "family overview image — model-specific page 404'd"
+    },
+    {
+      "skus": ["FRN-MTR-IP-S3P"],
+      "kind": "smart-meters",
+      "label": "Fronius Smart Meter IP 5kA-3 single/three-phase",
+      "image_url": "https://www.fronius.com/-/media/imported-media/140300-148306/148214-148299/148214.webp",
+      "datasheet_url": "https://www.fronius.com/en/~/downloads/Solar%20Energy/Datasheets/SE_DS_Fronius_SmartMeter_EN.pdf",
+      "confidence": "high"
+    },
+    {
+      "skus": ["FRN-MTR-100", "FRN-MTR-250", "FRN-MTR-400"],
+      "kind": "smart-meters",
+      "label": "Fronius Smart Meter CT split-core clamps (CT V + CT A series)",
+      "image_url": "https://www.fronius.com/-/media/imported-media/110102-119998/118931-118988/118954.webp",
+      "datasheet_url": "https://www.fronius.com/en/~/downloads/Solar%20Energy/Datasheets/SE_DS_Fronius_SmartMeter_EN.pdf",
+      "confidence": "high",
+      "notes": "Fronius reuses same CT render across CT V (333mV) and CT A (5A) series. FRN-MTR-250 (250A/5A) is CT A — flagged for sales to confirm"
+    },
+
+    {
+      "skus": ["BYD-BAT-256-HVS"],
+      "kind": "batteries",
+      "label": "BYD Battery Box Premium HVS module 2.56 kWh",
+      "image_url": "https://www.windandsun.co.uk/cdn/shop/files/BYD_HVS_Module.png?v=1743092013",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+    {
+      "skus": ["BYD-BAT-276-HVM"],
+      "kind": "batteries",
+      "label": "BYD Battery Box Premium HVM module 2.76 kWh",
+      "image_url": "https://www.windandsun.co.uk/cdn/shop/files/BYDHVMModuleAngleLeft.png?v=1743092223",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+    {
+      "skus": ["BYD-BAT-1540-LVL-A"],
+      "kind": "batteries",
+      "label": "BYD Battery Box Premium LVL 15.4 kWh 48V",
+      "image_url": "https://www.windandsun.co.uk/cdn/shop/files/BYDBatteryBox-PremiumLVL_2021_AngleFrontRight.png?v=1684060397",
+      "datasheet_url": "https://www.bydbatterybox.com/uploads/downloads/BBOX_LVL_Datasheet_EN_V1.0_240626_L-668f948a29616.pdf",
+      "confidence": "high"
+    },
+
+    {
+      "skus": ["FRW-BAT-500-ETW"],
+      "kind": "batteries",
+      "label": "Freedom Won eTower module 5 kWh",
+      "image_url": "https://www.freedomwon.co.za/wp-content/uploads/eTower-Grouping-2-4-Stack-768x667.png",
+      "datasheet_url": "https://www.freedomwon.co.za/wp-content/uploads/Freedom-Won-eTower-Range-Overview-Sheet-3-3.pdf",
+      "confidence": "high"
+    },
+    {
+      "skus": ["311274"],
+      "kind": "batteries",
+      "label": "Freedom Won LiTE2 Home 10/8",
+      "image_url": "https://www.freedomwon.co.za/wp-content/uploads/LiTE-Home-10_8-view-1.webp",
+      "datasheet_url": "https://www.freedomwon.co.za/wp-content/uploads/Spec-Sheet-LiTE-Home-52V-B-10_8.pdf",
+      "confidence": "high"
+    },
+
+    {
+      "skus": ["311293"],
+      "kind": "batteries",
+      "label": "ZYC SIMPO Indoor Cabinet 6",
+      "image_url": "https://acsolarwarehouse.com/web/image/product.product/12171/image_1024/%5BSIMPO%20Cabinet6F%5D%20ZYC%20SIMPO%20Cabinet6%20Indoor",
+      "datasheet_url": "https://zyc-website.oss-eu-central-1.aliyuncs.com/file/SIMPO%205000%20Installation%20%26%20Operating%20Manual_V1.4%2020240712.pdf",
+      "confidence": "medium",
+      "notes": "Image via AC Solar Warehouse (AU distributor — ZYC's own CDN was unreachable). Datasheet is the SIMPO 5000 install manual which covers the Cabinet"
+    },
+    {
+      "skus": ["ZYC-BAT-512-SMP"],
+      "kind": "batteries",
+      "label": "ZYC SIMPO 5000 module 5.12 kWh LFP",
+      "image_url": "https://acsolarwarehouse.com/web/image/product.product/12170/image_1024/%5BSIMPO5000%5D%20ZYC%20SIMPO%205000%20Battery%20Module%20-%2048V%20-%205.12kWh",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "medium",
+      "notes": "Image via AC Solar Warehouse (AU distributor — ZYC's own CDN was unreachable)"
+    },
+
+    {
+      "skus": ["VIC-MTR-100"],
+      "kind": "smart-meters",
+      "label": "Victron Energy Meter ET112 (1-phase, 100A)",
+      "image_url": "https://www.victronenergy.com/upload/documents/Energy%20Meter%20ET112%20%28right%29.png",
+      "datasheet_url": "https://www.victronenergy.com/upload/documents/Energy_Meter_ET112/113406-Energy_Meters-pdf-en.pdf",
+      "confidence": "high"
+    },
+    {
+      "skus": ["VIC-MTR-65-T3P"],
+      "kind": "smart-meters",
+      "label": "Victron Energy Meter ET340 (3-phase, 65A/phase)",
+      "image_url": "https://www.victronenergy.com/upload/documents/Energy%20Meter%20ET340%20%28right%29.png",
+      "datasheet_url": "https://www.victronenergy.com/upload/documents/Energy_Meter_ET340/113406-Energy_Meters-pdf-en.pdf",
+      "confidence": "high"
+    },
+    {
+      "skus": [null],
+      "sku_name_match": "VM-3P75CT",
+      "kind": "smart-meters",
+      "label": "Victron Energy Meter VM-3P75CT (3-phase, 75A CT-based)",
+      "image_url": "https://www.victronenergy.com/upload/documents/Energy%20Meter%20%28front-angle%29.png",
+      "datasheet_url": "https://www.victronenergy.com/upload/documents/Energy_Meter_VM-3P75CT_Manual/155987-Victron_VM-3P75CT_Energy_Meter-pdf-en.pdf",
+      "confidence": "high",
+      "notes": "DB row has no SKU — matched by name regex"
+    },
+
+    {
+      "skus": ["REC-PNL-470-APX"],
+      "kind": "panels",
+      "label": "REC Alpha Pure-RX 470W HJT",
+      "image_url": "https://www.recgroup.com/sites/default/files/products/Teaser_Alpha_Pure_RX.png",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    },
+    {
+      "skus": ["REC-PNL-370"],
+      "kind": "panels",
+      "label": "REC TwinPeak 4 370W mono",
+      "image_url": "https://www.solarelectricsupply.com/media/catalog/product/cache/a7b04c369a11f1759a10135521241284/r/e/rec370tp4-370w-solar-panel_1.png",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "medium",
+      "notes": "REC retired TwinPeak 4 — image via Solar Electric Supply (US distributor) using REC-supplied product render"
+    },
+
+    {
+      "skus": ["PHN-PNL-595-DRC"],
+      "kind": "panels",
+      "label": "Phono Solar Draco 595W N-TopCon bifacial",
+      "image_url": "https://www.phonosolar.com/static/upload/image/20241122/1732248815661935.jpg",
+      "datasheet_url": null,
+      "skip_datasheet": true,
+      "confidence": "high"
+    }
+  ]
+}

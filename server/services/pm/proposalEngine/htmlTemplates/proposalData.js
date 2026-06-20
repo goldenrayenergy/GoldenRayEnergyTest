@@ -205,7 +205,7 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
       consultant: options.consultant || {
         name: 'Rajeshwar Reddy',
         phone: '+64 21 839 356',
-        office: '0800 999 1999',
+        office: '0800 999 199',
         email: 'reddy@gripl.co',
         title: 'Senior Solar Consultant',
       },
