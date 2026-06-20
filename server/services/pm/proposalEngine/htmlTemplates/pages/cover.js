@@ -1,7 +1,7 @@
 // Page 1 — Cover & welcome letter
 // Headline number comes from Expected scenario (never Optimistic).
 
-import { pageFoot } from '../_shared.js';
+import { brandMark, pageFoot } from '../_shared.js';
 import { fmt$, fmtNum } from '../proposalData.js';
 
 export function pageCover(d, sectionNum, sectionsTotal) {
@@ -10,7 +10,9 @@ export function pageCover(d, sectionNum, sectionsTotal) {
   const headlinePayback = d.scenarios.summary.find(s => s.key === 'expected').payback_yrs;
 
   return `<section class="page">
-    <div style="text-align:center;margin-top:24px">
+    <div class="cover-logo">${brandMark(d).replace('class="logo-img"', 'class="logo-img" style="height:150px"')}</div>
+
+    <div style="text-align:center;margin-top:6px">
       <div style="font-size:11px;color:#5C6470;text-transform:uppercase;letter-spacing:.6px;font-weight:700">Solar Energy System Proposal — prepared for</div>
       <h1 style="font-size:30px;margin:4px 0 0">${d.customer.name}</h1>
       <div style="font-size:12px;color:#5C6470;margin-top:1px">${d.customer.address_one_line}</div>

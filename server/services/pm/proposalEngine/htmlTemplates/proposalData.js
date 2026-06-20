@@ -20,6 +20,10 @@
 //   warranties:   term-by-component
 // ────────────────────────────────────────────────────────────────────────────
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
 import { getCatalogue } from '../catalogue/index.js';
 import { findBmsForBattery } from '../catalogue/bosRoles.js';
 import { REGIONS, WARRANTY_TERMS, requiredBmsCount } from '../data/engineeringRules.js';
@@ -28,6 +32,20 @@ import { simulateTypicalDays } from '../dailyProfile.js';
 
 const fmt$ = n => '$' + Math.round(n).toLocaleString('en-NZ');
 const fmtNum = n => Math.round(n).toLocaleString('en-NZ');
+
+// ── Goldenray logo — loaded once at module init, embedded into every
+//    proposal as a data URI so PDFs don't depend on external image loads
+//    (Puppeteer can fail silently on remote img fetches). Falls back to
+//    the orange "G" gradient if the file is missing from the deploy.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LOGO_DATA_URI = (() => {
+  try {
+    const buf = readFileSync(path.resolve(__dirname, '../../../../assets/logo.jpg'));
+    return `data:image/jpeg;base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
+})();
 const fmtPct = (n, decimals = 1) => n.toFixed(decimals) + '%';
 
 function surnameOf(fullName) {
@@ -209,7 +227,7 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
         email: 'reddy@gripl.co',
         title: 'Senior Solar Consultant',
       },
-      logo_data_uri: options.logo_data_uri || null,
+      logo_data_uri: options.logo_data_uri || LOGO_DATA_URI,
     },
     customer: {
       name: spec.customer.full_name,
