@@ -130,16 +130,12 @@ export const PROPOSAL_CSS = `
   .flow-legend .sw{width:10px;height:10px;border-radius:2px;display:inline-block}
 `;
 
-export function brandMark(d) {
-  const logo = d.meta.logo_data_uri;
-  return logo
-    ? `<img class="logo-img" src="${logo}" alt="Goldenray Energy NZ" />`
-    : `<div class="logo-fallback">G</div>`;
+export function brandMark() {
+  return '';
 }
 
 export function pageHead(d, label) {
   return `<div class="page-head">
-    <div class="brand">${brandMark(d)}</div>
     <div class="head-meta">
       <div style="font-size:11px;font-weight:800;color:#0B0F1A">${label}</div>
       <div>Ref ${d.meta.quote_ref} · ${d.customer.surname} · ${d.meta.quote_date}</div>
