@@ -64,13 +64,13 @@ export function pageBillComparison(d, sectionNum, sectionsTotal) {
   const avgMonthly = totalSavings / months.length;
 
   return `<section class="page">
-    ${pageHead(d, 'First year — monthly bill comparison')}
+    ${pageHead(d, 'Your monthly bills — Year 1 comparison')}
 
     <div class="page-content-grow">
-      <p style="font-size:11px;color:#5C6470;margin:0 0 12px">
-        Side-by-side view of what your power bill looks like month by month — what you'd
-        pay <b>without</b> solar versus what you'll pay <b>with</b> it. The green ribbon
-        above each pair is the saving that month.
+      <p style="font-size:11px;color:#5C6470;margin:0 0 12px;line-height:1.5">
+        The chart below compares what you would pay each month at current retail rates against
+        your expected bill once your solar system is operating. The figure above each pair is
+        your projected saving for that month.
       </p>
 
       <div style="background:#fff;border:1px solid #E5E7EB;border-radius:6px;padding:10px">
@@ -83,15 +83,15 @@ export function pageBillComparison(d, sectionNum, sectionsTotal) {
                 transform="rotate(-90 ${PAD.left - 30} ${PAD.top + PLOT_H / 2})">Monthly bill (NZ\$ inc GST)</text>
         </svg>
         <div style="margin-top:8px;display:flex;gap:20px;font-size:10px;color:#5C6470;justify-content:center">
-          <span><span style="display:inline-block;width:12px;height:7px;background:#FCA5A5;border:1px solid #DC2626;vertical-align:middle;margin-right:4px"></span>Old bill (without solar)</span>
-          <span><span style="display:inline-block;width:12px;height:7px;background:#86EFAC;border:1px solid #16A34A;vertical-align:middle;margin-right:4px"></span>New bill (with solar)</span>
+          <span><span style="display:inline-block;width:12px;height:7px;background:#FCA5A5;border:1px solid #DC2626;vertical-align:middle;margin-right:4px"></span>Current monthly bill (without solar)</span>
+          <span><span style="display:inline-block;width:12px;height:7px;background:#86EFAC;border:1px solid #16A34A;vertical-align:middle;margin-right:4px"></span>Projected monthly bill (with solar)</span>
         </div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-top:14px">
         <div style="background:#F0FDF4;border-left:3px solid #16A34A;padding:10px 12px;border-radius:4px">
           <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#166534;font-weight:700;margin-bottom:3px">
-            Total saved (Yr 1)
+            Total Year-1 savings
           </div>
           <div style="font-size:16px;font-weight:800;color:#14532D">${fmt$(totalSavings)}</div>
         </div>
@@ -103,14 +103,14 @@ export function pageBillComparison(d, sectionNum, sectionsTotal) {
         </div>
         <div style="background:#FEF3C7;border-left:3px solid #D97706;padding:10px 12px;border-radius:4px">
           <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#78350F;font-weight:700;margin-bottom:3px">
-            Biggest saving month
+            Highest-saving month
           </div>
           <div style="font-size:14px;font-weight:800;color:#78350F">${bestMonth.month}</div>
           <div style="font-size:11px;font-weight:700;color:#78350F">${fmt$(bestMonth.savings)}</div>
         </div>
         <div style="background:#F1F5F9;border-left:3px solid #475569;padding:10px 12px;border-radius:4px">
           <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#334155;font-weight:700;margin-bottom:3px">
-            Smallest saving month
+            Lowest-saving month
           </div>
           <div style="font-size:14px;font-weight:800;color:#1E293B">${worstMonth.month}</div>
           <div style="font-size:11px;font-weight:700;color:#1E293B">${fmt$(worstMonth.savings)}</div>
@@ -118,9 +118,10 @@ export function pageBillComparison(d, sectionNum, sectionsTotal) {
       </div>
 
       <p style="font-size:10px;color:#6B7280;margin-top:18px;font-style:italic;line-height:1.5">
-        Uses the Expected financial scenario. Conservative + Optimistic versions are on
-        the Financial outlook page. Detailed table of generation, consumption, import,
-        export, and bills per month appears on the next page.
+        These figures are drawn from the Expected scenario in our financial model. A full
+        breakdown of generation, consumption, import, and export by month follows on the next
+        page. Conservative and Optimistic projections are provided in the Financial Outlook
+        section.
       </p>
     </div>
 
