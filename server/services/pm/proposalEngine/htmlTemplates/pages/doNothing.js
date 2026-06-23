@@ -50,8 +50,9 @@ export function pageDoNothing(d, sectionNum, sectionsTotal) {
           ${fmt$(dn.net_25yr)}
         </div>
         <div style="font-size:11px;color:#7F1D1D;margin-top:2px">
-          This is what you would pay your retailer between today and Year 25 if no solar system
-          were installed.
+          This is the total you would pay your retailer over the next 25 years if no solar
+          system were installed, with each year's bill grown at 7% per annum to reflect
+          projected retail tariff inflation.
         </div>
       </div>
 
