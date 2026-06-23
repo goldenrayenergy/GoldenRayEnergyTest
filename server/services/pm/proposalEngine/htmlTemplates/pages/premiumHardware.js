@@ -1,47 +1,98 @@
 // Page — Premium hardware — why we picked this kit
 //
-// Customer-facing "WHY this brand" page. Sits right after the Components
-// (technical specs) page and BEFORE the Pricing page so the customer reads
-// the credibility story before the number.
+// Single-page magazine-style spread covering panels, inverter, battery in
+// vertically stacked sections (Path 1, condensed magazine layout). Every
+// section is driven by products.marketing_claims (JSONB) + image_url +
+// the brand-origin map below. Goldenray accent (#FF6A00) throughout —
+// brand colours intentionally NOT used per section, for consistency with
+// the rest of the proposal.
 //
-// Content is DATA-DRIVEN — every claim comes from products.marketing_claims
-// (JSONB) seeded by admin. Adding a new brand is a JSON edit, not a code
-// change. When marketing_claims is empty for either product, the page
-// silently returns '' and drops out of the PDF (lazy page).
+// Layout per section (~280 px tall):
+//   ┌──────────────────────────────────────────────────────────────────┐
+//   │  [hero photo]  PANELS                                            │
+//   │   100×100      Phono Solar Draco 595W   [🇨🇳 China]              │
+//   │                "N-TopCon Bifacial • Tier 1"                       │
+//   │                ⚡ Higher year-25 output                            │
+//   │                🛡 30-year performance warranty                     │
+//   │                ❄ Lower temp coefficient                            │
+//   │                💧 Bifacial — extra 8% energy                       │
+//   │                ─────────────────────────────────                   │
+//   │                Efficiency  22.6% ████████ vs 19.5% █████          │
+//   └──────────────────────────────────────────────────────────────────┘
+//
+// When marketing_claims is empty for all 3 components, the page returns ''
+// and silently drops out of the PDF (lazy page).
 
 import { pageHead, pageFoot } from '../_shared.js';
 
-// Industry-typical competitor reference values (the "vs typical" column).
-// These are inline rather than DB-seeded because they describe an industry
-// average, not a specific product. Update here when market shifts.
-const COMPETITOR_REFERENCE = {
-  panel: {
-    cell_technology: 'PERC (older)',
-    bifaciality: 'Mono-facial',
-    peak_efficiency_pct: '19 – 20',
-    bloomberg_tier: 'Often Tier 2/3',
-    warranty_product_yrs: '10 – 12',
-    warranty_performance_yrs: 25,
-    warranty_endpoint_pct: 80,
-    temp_coefficient: '−0.34 to −0.40%/°C',
-  },
-  inverter: {
-    origin: 'Generic offshore',
-    warranty_yrs: '5 – 10',
-    peak_efficiency_pct: '95 – 96',
-    backup_capability: 'PV Point only',
-    vpp_ready: 'No',
-  },
-  battery: {
-    chemistry: 'NMC (higher fire risk)',
-    year10_capacity_pct: '30 – 50',
-    cycle_life: '3,000 – 5,000',
-    scalability: 'Often fixed at install',
-    ip_rating: 'IP54 typical',
-    warranty_yrs: '5 – 7',
-  },
+// ── Goldenray brand accent ──────────────────────────────────────────────────
+const ACCENT       = '#FF6A00';
+const ACCENT_DARK  = '#9A3412';
+const ACCENT_LIGHT = '#FFF7ED';
+const ACCENT_BORDER = '#FED7AA';
+
+// ── Brand → origin map ──────────────────────────────────────────────────────
+// Used to display a small country chip + flag SVG next to each product name.
+const BRAND_ORIGIN = {
+  'Fronius':      { iso: 'AT', label: 'Austria' },
+  'BYD':          { iso: 'CN', label: 'China' },
+  'Phono Solar':  { iso: 'CN', label: 'China' },
+  'REC':          { iso: 'NO', label: 'Norway' },
+  'Victron':      { iso: 'NL', label: 'Netherlands' },
+  'Freedom Won':  { iso: 'ZA', label: 'South Africa' },
+  'ZYC':          { iso: 'CN', label: 'China' },
 };
 
+// ── SVG flag set (simplified geometric, 21×14 viewBox) ──────────────────────
+// Compact stylised flags. Each ~150-300 bytes inline. Real geometry where
+// possible (AT/NL stripes); simplified silhouette + dominant color for
+// complex flags (CN, NO, ZA). Renders consistently in Puppeteer.
+const FLAGS = {
+  AT: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#ED2939"/><rect y="4.67" width="21" height="4.67" fill="#fff"/></svg>`,
+  NL: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="4.67" fill="#AE1C28"/><rect y="4.67" width="21" height="4.67" fill="#fff"/><rect y="9.33" width="21" height="4.67" fill="#21468B"/></svg>`,
+  CN: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#DE2910"/><polygon points="3.5,2.5 4.2,4.5 6.3,4.5 4.6,5.7 5.3,7.7 3.5,6.5 1.7,7.7 2.4,5.7 0.7,4.5 2.8,4.5" fill="#FFDE00"/></svg>`,
+  NO: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#EF2B2D"/><rect x="6" width="3" height="14" fill="#fff"/><rect y="5.5" width="21" height="3" fill="#fff"/><rect x="7" width="1" height="14" fill="#002868"/><rect y="6" width="21" height="2" fill="#002868"/></svg>`,
+  ZA: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#007749"/><polygon points="0,0 8,7 0,14" fill="#fff"/><polygon points="0,0 6,7 0,14" fill="#000"/><rect width="21" height="3.5" fill="#DE3831"/><rect y="10.5" width="21" height="3.5" fill="#002395"/></svg>`,
+  NZ: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#012169"/><rect width="10.5" height="7" fill="#012169"/><line x1="0" y1="0" x2="10.5" y2="7" stroke="#fff" stroke-width="1"/><line x1="10.5" y1="0" x2="0" y2="7" stroke="#fff" stroke-width="1"/><polygon points="16,4 16.4,5 17.4,5 16.6,5.6 17,6.6 16,6 15,6.6 15.4,5.6 14.6,5 15.6,5" fill="#CC142B"/></svg>`,
+};
+
+// ── Feature icon set — monochrome SVG, uses currentColor (Goldenray orange) ─
+// Each ~150-300 bytes. Sized to 14×14 so they sit inline with text. Stroke
+// based for crisp rendering at any DPR.
+const ICONS = {
+  power: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
+  warranty: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+  thermal: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10"/><circle cx="12" cy="16" r="4"/><path d="M14 8h-4M14 5h-4M14 11h-4"/></svg>`,
+  weather: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M8 5l4 4 4-4M5 16c0-3 3-6 7-6s7 3 7 6"/><path d="M3 20h18"/></svg>`,
+  battery: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="18" height="10" rx="1"/><line x1="22" y1="11" x2="22" y2="13"/><rect x="5" y="10" width="11" height="4" fill="currentColor"/></svg>`,
+  hybrid: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4l-3 6h4v6"/><path d="M17 20l3-6h-4V8"/></svg>`,
+  monitoring: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12a10 10 0 0 1 10-10"/><path d="M5 12a7 7 0 0 1 7-7"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>`,
+  tier: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M9 13l-2 9 5-3 5 3-2-9"/></svg>`,
+  efficiency: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>`,
+  install: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 7l3-3 4 4-3 3-4-4z"/><path d="M14 7L4 17l3 3 10-10"/></svg>`,
+  sustainability: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 21c5-5 10-10 14-14-1 6-2 11-7 14"/><path d="M7 21c-2-3-2-7 0-10 4-4 9-5 14-4"/></svg>`,
+  safe: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L4 5v7c0 5 4 9 8 10 4-1 8-5 8-10V5l-8-3z"/><polyline points="9 12 11 14 15 10"/></svg>`,
+};
+
+// Heuristic — pick an icon for each bullet based on keywords. Falls back
+// to "power" if nothing matches.
+function iconForBullet(text) {
+  const t = (text || '').toLowerCase();
+  if (/warranty|guarantee|year.*coverage|extension/.test(t)) return ICONS.warranty;
+  if (/temperature|thermal|heat|hot|cooling|cold/.test(t))    return ICONS.thermal;
+  if (/bifacial|rain|hail|water|weather|wind|dust|ip\d/.test(t)) return ICONS.weather;
+  if (/capacity|kwh|cycles|degradation|year.*10|year.*25/.test(t)) return ICONS.battery;
+  if (/hybrid|battery.ready|backup|grid/.test(t))             return ICONS.hybrid;
+  if (/monitor|solarweb|wifi|ethernet|app|portal/.test(t))    return ICONS.monitoring;
+  if (/tier|bloomberg|certif|rank|award/.test(t))             return ICONS.tier;
+  if (/efficien|output|yield|n-?topcon|hjt|perc/.test(t))     return ICONS.efficiency;
+  if (/install|engineer|design|build|manufactur/.test(t))     return ICONS.install;
+  if (/sustain|recycl|carbon|emission|green/.test(t))         return ICONS.sustainability;
+  if (/safe|safety|lfp|lifepo|fire|chemistry/.test(t))        return ICONS.safe;
+  return ICONS.power;
+}
+
+// ── Public entry point ─────────────────────────────────────────────────────
 export function pagePremiumHardware(d, sectionNum, sectionsTotal) {
   const pan = d.hardware?.panel;
   const inv = d.hardware?.inverter;
@@ -54,179 +105,187 @@ export function pagePremiumHardware(d, sectionNum, sectionsTotal) {
   // Lazy page — drop out when nothing to say.
   if (!panClaims && !invClaims && !batClaims) return '';
 
+  const sections = [
+    panClaims ? componentSection({
+      kind: 'SOLAR PANELS',
+      countLabel: pan.count && pan.watts ? `${pan.count} × ${pan.watts} W` : '',
+      product: pan,
+      claims: panClaims,
+      comparisonRow: panelComparison(panClaims),
+    }) : '',
+    invClaims ? componentSection({
+      kind: 'INVERTER',
+      countLabel: inv.ac_kw ? `${inv.ac_kw} kW` : '',
+      product: inv,
+      claims: invClaims,
+      comparisonRow: inverterComparison(invClaims),
+    }) : '',
+    batClaims ? componentSection({
+      kind: 'BATTERY',
+      countLabel: bat.total_usable_kwh ? `${bat.total_usable_kwh} kWh` : '',
+      product: bat,
+      claims: batClaims,
+      comparisonRow: batteryComparison(batClaims),
+    }) : '',
+  ].filter(Boolean).join('');
+
   return `<section class="page">
     ${pageHead(d, 'Premium hardware — why we picked this kit')}
 
     <div class="page-content-grow">
-      <p style="font-size:10.5px;color:#5C6470;margin:0 0 12px;line-height:1.5">
-        Solar systems live on your roof for 20-30 years. The difference between premium kit and budget kit
-        isn't visible at install — it shows up in year 8, year 10, year 15. Here's why we chose your hardware.
+      <p style="font-size:10.5px;color:#5C6470;margin:0 0 10px;line-height:1.5">
+        Solar systems live on your roof for 20-30 years. The difference between premium and
+        budget hardware does not show at install — it shows in year 8, year 10, year 15.
+        Here is why we chose each component in your kit.
       </p>
 
-      ${panClaims ? brandSection({
-        kind: `SOLAR PANELS — ${pan.count || '?'} × ${pan.watts || '?'} W`,
-        productName: `${pan.brand} ${pan.name || ''}`,
-        accent: '#16A34A',
-        bgAccent: 'linear-gradient(135deg,#F0FDF4,#D1FAE5)',
-        borderAccent: '#BBF7D0',
-        claims: panClaims,
-      }) : ''}
+      ${sections}
 
-      ${invClaims ? brandSection({
-        kind: 'INVERTER',
-        productName: `${inv.brand} ${inv.name || ''}`,
-        accent: '#FF6A00',
-        bgAccent: 'linear-gradient(135deg,#FFF7ED,#FFE4CC)',
-        borderAccent: '#FED7AA',
-        claims: invClaims,
-      }) : ''}
-
-      ${batClaims ? brandSection({
-        kind: 'BATTERY',
-        productName: `${bat.brand} ${bat.series || ''} ${bat.total_usable_kwh ? bat.total_usable_kwh + ' kWh' : ''}`.trim(),
-        accent: '#0EA5E9',
-        bgAccent: 'linear-gradient(135deg,#F0F9FF,#DBEAFE)',
-        borderAccent: '#BAE6FD',
-        claims: batClaims,
-      }) : ''}
-
-      ${comparisonTable(panClaims, invClaims, batClaims)}
-
-      ${manufacturerBlurbs(pan, inv, bat, panClaims, invClaims, batClaims)}
+      ${brandAssuranceStrip()}
     </div>
 
     ${pageFoot(d, sectionNum, sectionsTotal)}
   </section>`;
 }
 
-// ── Per-brand section (inverter or battery) ───────────────────────────────
-function brandSection({ kind, productName, accent, bgAccent, borderAccent, claims }) {
-  const badges = (claims.badges || []).map(b => `
-    <span style="display:inline-block;font-size:8.5px;font-weight:800;color:${accent};
-                 background:${bgAccent};border:1px solid ${borderAccent};
-                 border-radius:3px;padding:2px 7px;margin:0 4px 4px 0;
-                 letter-spacing:.4px">★ ${escape(b)}</span>
-  `).join('');
+// ── Single component section (panel / inverter / battery) ───────────────────
+function componentSection({ kind, countLabel, product, claims, comparisonRow }) {
+  const photo = product.image_url
+    ? `<img src="${escapeAttr(product.image_url)}" alt="${escapeAttr(product.name || kind)}" style="max-width:100%;max-height:96px;object-fit:contain"/>`
+    : `<div style="width:100%;height:96px;background:linear-gradient(135deg,${ACCENT_LIGHT},#fff7ed);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;color:${ACCENT_DARK};font-weight:700;text-align:center;padding:4px">${kind}</div>`;
 
-  const bullets = (claims.bullets || []).slice(0, 7).map(b => `
-    <li style="margin-bottom:4px">
-      <b>${escape(b.claim)}</b>${b.detail ? ` <span style="color:#5C6470">— ${escape(b.detail)}</span>` : ''}
-    </li>
-  `).join('');
+  const origin = BRAND_ORIGIN[product.brand];
+  const flagChip = origin ? `
+    <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px 2px 4px;background:#F1F5F9;border:1px solid #E5E7EB;border-radius:10px;font-size:9.5px;color:#475569;font-weight:600;vertical-align:middle">
+      ${FLAGS[origin.iso] || ''}<span>${origin.label}</span>
+    </span>` : '';
+
+  const warrantyChip = product.warranty ? `
+    <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;background:${ACCENT_LIGHT};border:1px solid ${ACCENT_BORDER};border-radius:10px;font-size:9.5px;color:${ACCENT_DARK};font-weight:700;vertical-align:middle;margin-left:6px">
+      <span style="color:${ACCENT}">${ICONS.warranty}</span><span>${escape(product.warranty)}</span>
+    </span>` : '';
+
+  // Pick top 4 bullets (page real estate is tight in a 3-section stack)
+  const bullets = (claims.bullets || []).slice(0, 4).map(b => `
+    <div style="display:flex;align-items:flex-start;gap:7px;margin-bottom:3px;font-size:10px;line-height:1.4;color:#0B0F1A">
+      <span style="color:${ACCENT};flex-shrink:0;margin-top:1px">${iconForBullet(b.claim)}</span>
+      <span><b>${escape(b.claim)}</b>${b.detail ? ` <span style="color:#5C6470">— ${escape(b.detail)}</span>` : ''}</span>
+    </div>`).join('');
 
   return `
-    <div style="border:1.5px solid ${borderAccent};border-radius:8px;padding:12px 14px;margin-bottom:12px;background:#fff">
-      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;border-bottom:1px solid #F1F5F9;padding-bottom:6px">
-        <div>
-          <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#5C6470;font-weight:700">${kind}</div>
-          <div style="font-size:14px;font-weight:800;color:#0B0F1A;letter-spacing:-0.2px">${escape(productName)}</div>
-        </div>
-        ${claims.headline ? `<div style="font-size:10px;font-style:italic;color:${accent};text-align:right;max-width:60%">"${escape(claims.headline)}"</div>` : ''}
+    <div style="display:grid;grid-template-columns:110px 1fr;gap:14px;padding:10px 12px;
+                border:1px solid #E5E7EB;border-radius:8px;background:#fff;margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:center;background:#F8FAFC;border-radius:6px;padding:6px">
+        ${photo}
       </div>
-
-      ${badges ? `<div style="margin-bottom:8px">${badges}</div>` : ''}
-
-      <ul style="margin:0;padding-left:18px;font-size:10px;line-height:1.5;color:#0B0F1A">
-        ${bullets}
-      </ul>
-    </div>
-  `;
-}
-
-// ── Side-by-side comparison table ──────────────────────────────────────────
-function comparisonTable(panClaims, invClaims, batClaims) {
-  const rows = [];
-
-  if (panClaims?.comparison) {
-    const c = panClaims.comparison;
-    const ref = COMPETITOR_REFERENCE.panel;
-    if (c.cell_technology) rows.push({ label: 'Panel cell technology', yours: c.cell_technology, theirs: ref.cell_technology });
-    if (c.bifaciality) rows.push({ label: 'Panel bifaciality', yours: c.bifaciality, theirs: ref.bifaciality });
-    if (c.peak_efficiency_pct) rows.push({ label: 'Panel efficiency', yours: `${c.peak_efficiency_pct}%`, theirs: `${ref.peak_efficiency_pct}%` });
-    if (c.bloomberg_tier) rows.push({ label: 'Bloomberg NEF tier', yours: c.bloomberg_tier, theirs: ref.bloomberg_tier });
-    if (c.warranty_product_yrs) rows.push({ label: 'Panel product warranty', yours: `${c.warranty_product_yrs} yrs`, theirs: `${ref.warranty_product_yrs} yrs` });
-    if (c.warranty_performance_yrs && c.warranty_endpoint_pct) {
-      rows.push({ label: 'Panel performance warranty', yours: `${c.warranty_performance_yrs} yrs to ${c.warranty_endpoint_pct}%`, theirs: `${ref.warranty_performance_yrs} yrs to ${ref.warranty_endpoint_pct}%` });
-    }
-  }
-  if (invClaims?.comparison) {
-    const c = invClaims.comparison;
-    const ref = COMPETITOR_REFERENCE.inverter;
-    if (c.origin) rows.push({ label: 'Inverter origin', yours: c.origin, theirs: ref.origin });
-    if (c.warranty_yrs) rows.push({ label: 'Inverter warranty', yours: `${c.warranty_yrs} yrs`, theirs: `${ref.warranty_yrs} yrs` });
-    if (c.peak_efficiency_pct) rows.push({ label: 'Inverter peak efficiency', yours: `${c.peak_efficiency_pct}%`, theirs: `${ref.peak_efficiency_pct}%` });
-    if (c.backup_capability) rows.push({ label: 'Backup capability', yours: c.backup_capability, theirs: ref.backup_capability });
-    if (c.vpp_ready) rows.push({ label: 'VPP-ready (future income)', yours: c.vpp_ready, theirs: ref.vpp_ready });
-  }
-  if (batClaims?.comparison) {
-    const c = batClaims.comparison;
-    const ref = COMPETITOR_REFERENCE.battery;
-    if (c.chemistry) rows.push({ label: 'Battery chemistry', yours: c.chemistry, theirs: ref.chemistry });
-    if (c.year10_capacity_pct) rows.push({ label: 'Capacity at year 10', yours: `${c.year10_capacity_pct}%`, theirs: `${ref.year10_capacity_pct}%` });
-    if (c.cycle_life) rows.push({ label: 'Battery cycle life', yours: typeof c.cycle_life === 'number' ? `${c.cycle_life.toLocaleString('en-NZ')}+ cycles` : c.cycle_life, theirs: ref.cycle_life });
-    if (c.scalability) rows.push({ label: 'Battery scalability', yours: c.scalability, theirs: ref.scalability });
-    if (c.warranty_yrs) rows.push({ label: 'Battery warranty', yours: `${c.warranty_yrs} yrs`, theirs: `${ref.warranty_yrs} yrs` });
-  }
-
-  if (rows.length === 0) return '';
-
-  return `
-    <div style="margin-top:6px;background:#F8FAFC;border:1px solid #E5E7EB;border-radius:8px;padding:11px 14px">
-      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:#5C6470;font-weight:800;margin-bottom:6px">
-        Your install vs typical budget kit
-      </div>
-      <table style="width:100%;border-collapse:collapse;font-size:9.5px">
-        <thead>
-          <tr style="border-bottom:1.5px solid #CBD5E1">
-            <th style="text-align:left;padding:5px 8px 5px 0;color:#5C6470;font-weight:700;width:35%"></th>
-            <th style="text-align:left;padding:5px 8px;color:#16A34A;font-weight:800">YOUR INSTALL</th>
-            <th style="text-align:left;padding:5px 8px;color:#9CA3AF;font-weight:700">Typical budget alternative</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map((r, i) => `
-            <tr style="${i % 2 === 1 ? 'background:#fff' : ''}">
-              <td style="padding:4px 8px 4px 0;color:#0B0F1A;font-weight:600">${escape(r.label)}</td>
-              <td style="padding:4px 8px;color:#14532D;font-weight:700">${escape(r.yours)}</td>
-              <td style="padding:4px 8px;color:#5C6470">${escape(r.theirs)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-// ── "Built by global leaders" footer ───────────────────────────────────────
-function manufacturerBlurbs(pan, inv, bat, panClaims, invClaims, batClaims) {
-  // Dedupe — if panel + inverter + battery share a brand, only show once
-  const seen = new Set();
-  const items = [];
-  const push = (brand, blurb) => {
-    if (!brand || !blurb || seen.has(brand)) return;
-    seen.add(brand);
-    items.push({ brand, blurb });
-  };
-  if (panClaims?.manufacturer_blurb) push(pan.brand, panClaims.manufacturer_blurb);
-  if (invClaims?.manufacturer_blurb) push(inv.brand, invClaims.manufacturer_blurb);
-  if (batClaims?.manufacturer_blurb) push(bat.brand, batClaims.manufacturer_blurb);
-  if (!items.length) return '';
-
-  const cols = items.length >= 3 ? '1fr 1fr 1fr' : items.length === 2 ? '1fr 1fr' : '1fr';
-  return `
-    <div style="margin-top:8px;display:grid;grid-template-columns:${cols};gap:8px">
-      ${items.map(it => `
-        <div style="background:#fff7ed;border-left:3px solid #FF6A00;padding:7px 10px;border-radius:0 4px 4px 0">
-          <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#92400e;font-weight:800;margin-bottom:2px">
-            About ${escape(it.brand)}
+      <div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:3px">
+          <div>
+            <span style="font-size:8.5px;text-transform:uppercase;letter-spacing:.6px;color:#5C6470;font-weight:800">${kind}</span>
+            ${countLabel ? `<span style="font-size:9px;color:${ACCENT};font-weight:800;margin-left:6px">${countLabel}</span>` : ''}
           </div>
-          <div style="font-size:9px;color:#0B0F1A;line-height:1.4">${escape(it.blurb)}</div>
+          <div style="flex-shrink:0">${flagChip}${warrantyChip}</div>
         </div>
-      `).join('')}
-    </div>
-  `;
+        <div style="font-size:12.5px;font-weight:800;color:#0B0F1A;letter-spacing:-0.2px;margin-bottom:4px">
+          ${escape(product.brand || '')}${product.brand && product.name ? ' — ' : ''}${escape(product.name || '')}
+        </div>
+        ${claims.headline ? `<div style="font-size:9.5px;font-style:italic;color:${ACCENT_DARK};margin-bottom:6px">"${escape(claims.headline)}"</div>` : ''}
+        ${bullets}
+        ${comparisonRow}
+      </div>
+    </div>`;
 }
 
+// ── Per-kind one-row comparison bar (yours vs typical) ──────────────────────
+function panelComparison(claims) {
+  const c = claims.comparison || {};
+  // Prefer efficiency; fall back to bloomberg_tier as a categorical
+  if (c.peak_efficiency_pct) {
+    return comparisonBar({
+      label: 'Module efficiency',
+      yours: Number(c.peak_efficiency_pct),
+      yoursDisplay: `${c.peak_efficiency_pct}%`,
+      theirs: 19.5,
+      theirsDisplay: '19.5%',
+      maxValue: 25,
+    });
+  }
+  return '';
+}
+
+function inverterComparison(claims) {
+  const c = claims.comparison || {};
+  if (c.peak_efficiency_pct) {
+    return comparisonBar({
+      label: 'Peak efficiency',
+      yours: Number(c.peak_efficiency_pct),
+      yoursDisplay: `${c.peak_efficiency_pct}%`,
+      theirs: 95.5,
+      theirsDisplay: '95.5%',
+      maxValue: 100,
+    });
+  }
+  return '';
+}
+
+function batteryComparison(claims) {
+  const c = claims.comparison || {};
+  if (c.year10_capacity_pct) {
+    return comparisonBar({
+      label: 'Capacity remaining at year 10',
+      yours: Number(c.year10_capacity_pct),
+      yoursDisplay: `${c.year10_capacity_pct}%`,
+      theirs: 40,
+      theirsDisplay: '~40%',
+      maxValue: 100,
+    });
+  }
+  return '';
+}
+
+// ── Compact horizontal bar (yours vs typical, single row) ───────────────────
+function comparisonBar({ label, yours, yoursDisplay, theirs, theirsDisplay, maxValue }) {
+  const yoursPct = Math.max(0, Math.min(100, (yours / maxValue) * 100));
+  const theirsPct = Math.max(0, Math.min(100, (theirs / maxValue) * 100));
+  return `
+    <div style="margin-top:7px;padding-top:6px;border-top:1px solid #F1F5F9">
+      <div style="font-size:9px;color:#5C6470;font-weight:700;margin-bottom:3px">${escape(label)}</div>
+      <div style="display:grid;grid-template-columns:60px 1fr 38px;gap:6px;align-items:center;margin-bottom:2px">
+        <span style="font-size:9px;color:${ACCENT_DARK};font-weight:700">Yours</span>
+        <div style="position:relative;height:6px;background:#F1F5F9;border-radius:3px">
+          <div style="position:absolute;left:0;top:0;height:6px;width:${yoursPct}%;background:${ACCENT};border-radius:3px"></div>
+        </div>
+        <span style="font-size:9px;color:${ACCENT_DARK};font-weight:800;text-align:right">${escape(yoursDisplay)}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:60px 1fr 38px;gap:6px;align-items:center">
+        <span style="font-size:9px;color:#9CA3AF;font-weight:600">Typical</span>
+        <div style="position:relative;height:6px;background:#F1F5F9;border-radius:3px">
+          <div style="position:absolute;left:0;top:0;height:6px;width:${theirsPct}%;background:#9CA3AF;border-radius:3px"></div>
+        </div>
+        <span style="font-size:9px;color:#5C6470;font-weight:600;text-align:right">${escape(theirsDisplay)}</span>
+      </div>
+    </div>`;
+}
+
+// ── Brand-assurance footer strip — 4 trust pills ───────────────────────────
+function brandAssuranceStrip() {
+  const pill = (icon, label) => `
+    <div style="display:flex;align-items:center;gap:6px;padding:7px 11px;background:#F8FAFC;border:1px solid #E5E7EB;border-radius:6px;font-size:9.5px;color:#334155;font-weight:700">
+      <span style="color:${ACCENT}">${icon}</span><span>${label}</span>
+    </div>`;
+  return `
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px">
+      ${pill(`${FLAGS.NZ}`, 'NZ compliant — AS/NZS 4777 + 5033')}
+      ${pill(ICONS.tier, 'Bloomberg Tier 1 hardware')}
+      ${pill(ICONS.safe, 'LFP chemistry — safest residential')}
+      ${pill(ICONS.sustainability, 'Manufacturer-backed warranties')}
+    </div>`;
+}
+
+// ── HTML escape helpers ────────────────────────────────────────────────────
 function escape(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeAttr(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
