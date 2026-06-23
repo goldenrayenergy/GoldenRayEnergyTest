@@ -402,19 +402,39 @@ function buildInsights({ billAnalysis, scenarios, annualKwh, annualSpend, system
   }
 
   // ── 25-year cash flow (Expected scenario) ───────────────────────────────
+  // Builds two parallel trajectories so the customer PDF can show a
+  // "with solar" vs "staying on the grid" side-by-side comparison:
+  //   • cumulative      — net position with solar (engine's own running
+  //                       cumulative; negative until payback)
+  //   • dn_cumulative   — cumulative retail spend if no solar installed
+  //                       (always negative, growing each year)
+  // The Page 4 chart uses both; the gap at Year 25 = total 25-yr benefit.
+  //
+  // Note: the engine doesn't expose a separate upfront_cost field — it lives
+  // in yearly[0].system_cost (only the install year carries it). We read it
+  // from there.
   if (scenarios?.expected?.yearly && Array.isArray(scenarios.expected.yearly)) {
-    let cumulative = -Math.abs(scenarios.expected.upfront_cost || 0);
-    const points = scenarios.expected.yearly.map((row, idx) => {
-      const net = (row.savings || 0) - (row.maintenance_cost || 0);
-      cumulative += net;
-      return { year: idx + 1, net_annual: Math.round(net), cumulative: Math.round(cumulative) };
+    const yr = scenarios.expected.yearly;
+    const upfrontCost = yr[0]?.system_cost || 0;
+    let dnCumulative = 0;
+    const points = yr.map((row, idx) => {
+      dnCumulative -= (row.old_bill || 0);
+      return {
+        year: idx + 1,
+        net_annual: Math.round((row.savings || 0) - (row.maintenance_cost || 0)),
+        cumulative: Math.round(row.cumulative ?? 0),
+        dn_cumulative: Math.round(dnCumulative),
+      };
     });
     const payback = points.find(p => p.cumulative >= 0);
+    const final = points[points.length - 1];
     out.cash_flow = {
-      upfront_cost: scenarios.expected.upfront_cost || 0,
+      upfront_cost: upfrontCost,
       points,
       payback_year: payback?.year || null,
-      final_cumulative: points[points.length - 1]?.cumulative || 0,
+      final_cumulative: final?.cumulative || 0,
+      final_dn_cumulative: final?.dn_cumulative || 0,
+      total_benefit_25yr: (final?.cumulative || 0) - (final?.dn_cumulative || 0),
     };
   }
 
