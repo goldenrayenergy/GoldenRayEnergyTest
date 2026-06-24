@@ -16,9 +16,8 @@ export default {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
   email: {
-    sendgridKey: process.env.SENDGRID_API_KEY,
-    from: process.env.EMAIL_FROM || 'hello@goldenrayenergy.co.nz',
-    fromName: process.env.EMAIL_FROM_NAME || 'GoldenRay Energy',
+    from: process.env.EMAIL_FROM || 'info@goldenrayenergy.nz',
+    fromName: process.env.EMAIL_FROM_NAME || 'Goldenray Energy NZ',
   },
   smtp: {
     host: process.env.SMTP_HOST,

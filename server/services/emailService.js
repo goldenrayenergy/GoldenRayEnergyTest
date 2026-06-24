@@ -2,14 +2,26 @@ import { Resend } from 'resend';
 import env from '../config/env.js';
 
 // ── Configuration ──────────────────────────────────────────────────────────
-// During testing the test mailbox is used both as the recipient and the
-// reply-to. Resend won't let us send FROM a third-party address (e.g. a
-// gmail.com), so we use Resend's built-in test sender until the customer
-// domain (goldenrayenergy.co.nz) is verified in their Resend account.
-const FROM_NAME      = env.email.fromName || 'GoldenRay Energy';
+// Production sender lives on the verified goldenrayenergy.nz domain (Resend
+// verified 2026-06-24). Falls back to Resend's test sender for local dev
+// when EMAIL_FROM_ADDRESS is unset. A startup guard below prevents the
+// fallback ever shipping to production by accident.
+const FROM_NAME      = env.email.fromName || 'Goldenray Energy NZ';
 const FROM_ADDR      = process.env.EMAIL_FROM_ADDRESS  || 'onboarding@resend.dev';
-const REPLY_TO       = process.env.EMAIL_REPLY_TO      || 'goldenrayenergy.nz@gmail.com';
-const TEST_RECIPIENT = process.env.EMAIL_TEST_RECIPIENT || 'goldenrayenergy.nz@gmail.com';
+const REPLY_TO       = process.env.EMAIL_REPLY_TO      || 'info@goldenrayenergy.nz';
+const TEST_RECIPIENT = process.env.EMAIL_TEST_RECIPIENT || 'grreddy.nz@gmail.com';
+
+// ── Startup guard ─────────────────────────────────────────────────────────
+// In production the FROM address MUST be on goldenrayenergy.nz, never the
+// Resend test sender. Refusing to boot is louder than a silently misrouted
+// customer email. Local dev (NODE_ENV !== 'production') is unaffected so
+// the test sender stays usable.
+if (process.env.NODE_ENV === 'production' && !FROM_ADDR.endsWith('@goldenrayenergy.nz')) {
+  throw new Error(
+    `[emailService] EMAIL_FROM_ADDRESS must end in @goldenrayenergy.nz in production. ` +
+    `Got: "${FROM_ADDR}". Set EMAIL_FROM_ADDRESS=proposals@goldenrayenergy.nz on Render before deploying.`
+  );
+}
 
 let _resend = null;
 function getClient() {
@@ -61,10 +73,10 @@ async function send({ to, subject, html, text, attachments, scheduled_at }) {
 // ── Shared template chrome ─────────────────────────────────────────────────
 const fmt$ = (n) => '$' + Number(n || 0).toLocaleString('en-NZ', { maximumFractionDigits: 0 });
 const COMPANY = {
-  name:    'GoldenRay Energy NZ',
+  name:    'Goldenray Energy NZ',
   tagline: 'Powering a Sustainable Future',
   phone:   '+64 21 839 356',
-  email:   'hello@goldenrayenergy.co.nz',
+  email:   'info@goldenrayenergy.nz',
   city:    'Auckland, New Zealand',
 };
 
