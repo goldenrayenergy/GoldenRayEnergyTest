@@ -31,31 +31,6 @@ const ACCENT_DARK  = '#9A3412';
 const ACCENT_LIGHT = '#FFF7ED';
 const ACCENT_BORDER = '#FED7AA';
 
-// ── Brand → origin map ──────────────────────────────────────────────────────
-// Used to display a small country chip + flag SVG next to each product name.
-const BRAND_ORIGIN = {
-  'Fronius':      { iso: 'AT', label: 'Austria' },
-  'BYD':          { iso: 'CN', label: 'China' },
-  'Phono Solar':  { iso: 'CN', label: 'China' },
-  'REC':          { iso: 'NO', label: 'Norway' },
-  'Victron':      { iso: 'NL', label: 'Netherlands' },
-  'Freedom Won':  { iso: 'ZA', label: 'South Africa' },
-  'ZYC':          { iso: 'CN', label: 'China' },
-};
-
-// ── SVG flag set (simplified geometric, 21×14 viewBox) ──────────────────────
-// Compact stylised flags. Each ~150-300 bytes inline. Real geometry where
-// possible (AT/NL stripes); simplified silhouette + dominant color for
-// complex flags (CN, NO, ZA). Renders consistently in Puppeteer.
-const FLAGS = {
-  AT: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#ED2939"/><rect y="4.67" width="21" height="4.67" fill="#fff"/></svg>`,
-  NL: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="4.67" fill="#AE1C28"/><rect y="4.67" width="21" height="4.67" fill="#fff"/><rect y="9.33" width="21" height="4.67" fill="#21468B"/></svg>`,
-  CN: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#DE2910"/><polygon points="3.5,2.5 4.2,4.5 6.3,4.5 4.6,5.7 5.3,7.7 3.5,6.5 1.7,7.7 2.4,5.7 0.7,4.5 2.8,4.5" fill="#FFDE00"/></svg>`,
-  NO: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#EF2B2D"/><rect x="6" width="3" height="14" fill="#fff"/><rect y="5.5" width="21" height="3" fill="#fff"/><rect x="7" width="1" height="14" fill="#002868"/><rect y="6" width="21" height="2" fill="#002868"/></svg>`,
-  ZA: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#007749"/><polygon points="0,0 8,7 0,14" fill="#fff"/><polygon points="0,0 6,7 0,14" fill="#000"/><rect width="21" height="3.5" fill="#DE3831"/><rect y="10.5" width="21" height="3.5" fill="#002395"/></svg>`,
-  NZ: `<svg viewBox="0 0 21 14" width="18" height="12"><rect width="21" height="14" fill="#012169"/><rect width="10.5" height="7" fill="#012169"/><line x1="0" y1="0" x2="10.5" y2="7" stroke="#fff" stroke-width="1"/><line x1="10.5" y1="0" x2="0" y2="7" stroke="#fff" stroke-width="1"/><polygon points="16,4 16.4,5 17.4,5 16.6,5.6 17,6.6 16,6 15,6.6 15.4,5.6 14.6,5 15.6,5" fill="#CC142B"/></svg>`,
-};
-
 // ── Feature icon set — monochrome SVG, uses currentColor (Goldenray orange) ─
 // Each ~150-300 bytes. Sized to 14×14 so they sit inline with text. Stroke
 // based for crisp rendering at any DPR.
@@ -154,14 +129,10 @@ function componentSection({ kind, countLabel, product, claims, comparisonRow }) 
     ? `<img src="${escapeAttr(product.image_url)}" alt="${escapeAttr(product.name || kind)}" style="max-width:100%;max-height:96px;object-fit:contain"/>`
     : `<div style="width:100%;height:96px;background:linear-gradient(135deg,${ACCENT_LIGHT},#fff7ed);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;color:${ACCENT_DARK};font-weight:700;text-align:center;padding:4px">${kind}</div>`;
 
-  const origin = BRAND_ORIGIN[product.brand];
-  const flagChip = origin ? `
-    <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px 2px 4px;background:#F1F5F9;border:1px solid #E5E7EB;border-radius:10px;font-size:9.5px;color:#475569;font-weight:600;vertical-align:middle">
-      ${FLAGS[origin.iso] || ''}<span>${origin.label}</span>
-    </span>` : '';
-
+  // Country/origin flag chip removed per user request — warranty chip alone
+  // sits on the right side of the section header.
   const warrantyChip = product.warranty ? `
-    <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;background:${ACCENT_LIGHT};border:1px solid ${ACCENT_BORDER};border-radius:10px;font-size:9.5px;color:${ACCENT_DARK};font-weight:700;vertical-align:middle;margin-left:6px">
+    <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;background:${ACCENT_LIGHT};border:1px solid ${ACCENT_BORDER};border-radius:10px;font-size:9.5px;color:${ACCENT_DARK};font-weight:700;vertical-align:middle">
       <span style="color:${ACCENT}">${ICONS.warranty}</span><span>${escape(product.warranty)}</span>
     </span>` : '';
 
@@ -184,7 +155,7 @@ function componentSection({ kind, countLabel, product, claims, comparisonRow }) 
             <span style="font-size:8.5px;text-transform:uppercase;letter-spacing:.6px;color:#5C6470;font-weight:800">${kind}</span>
             ${countLabel ? `<span style="font-size:9px;color:${ACCENT};font-weight:800;margin-left:6px">${countLabel}</span>` : ''}
           </div>
-          <div style="flex-shrink:0">${flagChip}${warrantyChip}</div>
+          <div style="flex-shrink:0">${warrantyChip}</div>
         </div>
         <div style="font-size:12.5px;font-weight:800;color:#0B0F1A;letter-spacing:-0.2px;margin-bottom:4px">
           ${escape(product.brand || '')}${product.brand && product.name ? ' — ' : ''}${escape(product.name || '')}
@@ -275,7 +246,7 @@ function brandAssuranceStrip() {
     </div>`;
   return `
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px">
-      ${pill(`${FLAGS.NZ}`, 'NZ compliant — AS/NZS 4777 + 5033')}
+      ${pill(ICONS.safe, 'NZ compliant — AS/NZS 4777 + 5033')}
       ${pill(ICONS.tier, 'Bloomberg Tier 1 hardware')}
       ${pill(ICONS.safe, 'LFP chemistry — safest residential')}
       ${pill(ICONS.sustainability, 'Manufacturer-backed warranties')}
