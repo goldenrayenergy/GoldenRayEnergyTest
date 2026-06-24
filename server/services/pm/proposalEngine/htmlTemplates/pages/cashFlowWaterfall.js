@@ -159,7 +159,10 @@ export function pageCashFlowWaterfall(d, sectionNum, sectionsTotal) {
       <p style="font-size:10px;color:#6B7280;margin-top:14px;font-style:italic;line-height:1.5">
         All figures reflect the Expected scenario, which accounts for system yield, panel
         degradation, retail tariff inflation, and the gradual decline in feed-in (buyback) rates.
-        Conservative and Optimistic projections are shown on the Financial Outlook page.
+        Year-1 figures assume your battery captures most evening consumption; typical operation
+        may show 5–15% additional grid imports in winter, which the Conservative scenario on the
+        Financial Outlook page allows for. Conservative and Optimistic projections are shown on
+        that page.
       </p>
     </div>
 

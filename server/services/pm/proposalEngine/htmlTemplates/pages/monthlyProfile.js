@@ -31,21 +31,22 @@ export function pageMonthlyProfile(d, sectionNum, sectionsTotal) {
     ${pageHead(d, 'Year-1 monthly breakdown')}
 
     <div class="page-content-grow">
-      <h2>What this looks like month by month</h2>
-      <p>These numbers use the <b>Expected</b> scenario. Generation peaks in summer
-      (Dec–Feb in NZ), and bills are highest in winter (Jun–Aug). Battery use shifts daytime
-      solar to evenings so very little gets imported on a typical day.</p>
+      <h2>Month-by-month performance</h2>
+      <p>These figures use the <b>Expected</b> scenario. Solar generation typically peaks over the
+      New Zealand summer (December–February), while electricity bills are highest in winter
+      (June–August). Your battery stores excess daytime generation for evening use, which is why
+      grid imports remain low through most months.</p>
 
       <table class="tight">
         <thead><tr>
           <th>Month</th>
-          <th class="num">Solar gen (kWh)</th>
-          <th class="num">You used (kWh)</th>
-          <th class="num">Imported (kWh)</th>
-          <th class="num">Exported (kWh)</th>
-          <th class="num">Old bill</th>
-          <th class="num">New bill</th>
-          <th class="num">Savings</th>
+          <th class="num">Solar generated (kWh)</th>
+          <th class="num">Household used (kWh)</th>
+          <th class="num">Imported from grid (kWh)</th>
+          <th class="num">Exported to grid (kWh)</th>
+          <th class="num">Bill without solar</th>
+          <th class="num">Bill with solar</th>
+          <th class="num">Saving</th>
         </tr></thead>
         <tbody>
           ${rows}
@@ -62,12 +63,12 @@ export function pageMonthlyProfile(d, sectionNum, sectionsTotal) {
         </tbody>
       </table>
 
-      <h3 style="margin-top:14px">Year-1 summary</h3>
+      <h3 style="margin-top:14px">Year-1 totals</h3>
       <div class="grid4">
-        <div class="card kpi"><div class="lbl">Annual generation</div><div class="val">${fmtNum(yr1.generation_kwh)}</div><div class="sub">kWh / year</div></div>
-        <div class="card kpi"><div class="lbl">Self-consumed</div><div class="val">${fmtNum(yr1.self_consumed_kwh)}</div><div class="sub">${yr1.self_consume_pct}% of generation</div></div>
-        <div class="card kpi"><div class="lbl">Exported</div><div class="val">${fmtNum(yr1.exported_kwh)}</div><div class="sub">${yr1.export_pct}% sold back</div></div>
-        <div class="card kpi"><div class="lbl">Coverage</div><div class="val">${yr1.coverage_pct}%</div><div class="sub">of your old bill eliminated</div></div>
+        <div class="card kpi"><div class="lbl">Annual solar generation</div><div class="val">${fmtNum(yr1.generation_kwh)}</div><div class="sub">kWh / year</div></div>
+        <div class="card kpi"><div class="lbl">Used in your home</div><div class="val">${fmtNum(yr1.self_consumed_kwh)}</div><div class="sub">${yr1.self_consume_pct}% of generation</div></div>
+        <div class="card kpi"><div class="lbl">Exported to grid</div><div class="val">${fmtNum(yr1.exported_kwh)}</div><div class="sub">${yr1.export_pct}% sold back to retailer</div></div>
+        <div class="card kpi"><div class="lbl">Bill reduction</div><div class="val">${yr1.coverage_pct}%</div><div class="sub">of your current bill removed</div></div>
       </div>
     </div>
 
