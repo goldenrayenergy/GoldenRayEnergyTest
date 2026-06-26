@@ -1,6 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-dotenv.config({ path: '../.env' });
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Resolve the repo-root .env relative to THIS file, not the process cwd, so env
+// loads identically whether started from server/ (prod: node app.js) or from the
+// repo root (tests/scripts). dotenv never overrides already-set vars, so on
+// Render (env injected directly) this is a harmless no-op.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 // ── Supabase JS Client ──
 // Used for: Realtime subscriptions, Storage (proposal PDFs), and optional Supabase Auth
