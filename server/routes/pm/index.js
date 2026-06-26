@@ -19,6 +19,7 @@ import quoteActionsRoutes from './quote-actions.js';
 import contactsLookupRoutes from './contacts.js';
 import catalogueRoutes from './catalogue.js';
 import proposalEngineRoutes from './proposal-engine.js';
+import errorReportsRoutes from './error-reports.js';
 
 const router = Router();
 
@@ -66,6 +67,9 @@ router.use('/catalogue', catalogueRoutes);
 // Option 2 — engine-side recommendations (string layout etc.) reading the live
 // catalogue with current mppt_v_min / Voc / Vmp values.
 router.use('/proposal-engine', proposalEngineRoutes);
+
+// "Report it" backend — store/dedup error reports + dashboard list + resolve.
+router.use('/error-reports', errorReportsRoutes);
 
 router.get('/health', (req, res) => res.json({ status: 'ok', tool: 'pm', phase: 'A.4' }));
 

@@ -3,6 +3,14 @@ import { Link, useParams } from 'react-router-dom';
 import { pmQuotesAPI } from '../services/pmQuotesApi';
 import { fmt$, fmtDate, fmtDateTime } from '../../utils/format';
 import { useAuth } from '../../context/AuthContext';
+import ErrorCard from '../components/ErrorCard';
+import { cardFromHttpError, cardFromServerMessage } from '../utils/httpErrorCard';
+import { reportEntry } from '../utils/reportError';
+
+// Report it — persists the report (deduped server-side) + shows the confirmation.
+function reportAction(entry, detail, screen) {
+  reportEntry(entry, { screen, detail });
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Day 7 — Quote detail page.
@@ -109,6 +117,7 @@ export default function QuoteDetailPage() {
   const [busyAction, setBusyAction] = useState(null);   // 'generate' | 'email' | …
   const [actionMsg, setActionMsg]   = useState('');
   const [actionErr, setActionErr]   = useState('');
+  const [actionErrObj, setActionErrObj] = useState(null);   // raw error for the card
 
   // Modal state — one open at a time.
   const [openModal, setOpenModal] = useState(null);     // 'discount' | 'email' | 'sign' | 'countersign' | 'deposit' | 'convertToFirm'
@@ -153,18 +162,24 @@ export default function QuoteDetailPage() {
   }, [data?.current_version?.id]);
 
   function flashMsg(m) { setActionMsg(m); setTimeout(() => setActionMsg(''), 3000); }
-  function flashErr(m) { setActionErr(m); setTimeout(() => setActionErr(''), 6000); }
+  // Accepts the raw error so the banner can render a catalogue card (plain
+  // guidance + who-fixes-it), not a raw server string. Falls back to a string.
+  function flashErr(e) {
+    setActionErr(e?.response?.data?.error || e?.message || String(e));
+    setActionErrObj(e || null);
+    setTimeout(() => { setActionErr(''); setActionErrObj(null); }, 12000);
+  }
 
   // Generic action runner — wraps every lifecycle endpoint with busy + reload.
   async function runAction(key, fn, successMsg) {
-    setBusyAction(key); setActionErr('');
+    setBusyAction(key); setActionErr(''); setActionErrObj(null);
     try {
       const r = await fn();
       await load();
       if (successMsg) flashMsg(successMsg);
       return r;
     } catch (e) {
-      flashErr(e.response?.data?.error || e.message);
+      flashErr(e);
       throw e;
     } finally {
       setBusyAction(null);
@@ -323,7 +338,16 @@ export default function QuoteDetailPage() {
             {actionMsg}
           </div>
         )}
-        {actionErr && (
+        {actionErrObj ? (
+          <div className="mt-3">
+            <ul className="space-y-2">
+              {(() => {
+                const { entry, detail } = cardFromHttpError(actionErrObj);
+                return <ErrorCard entry={entry} detail={detail} onReport={() => reportAction(entry, detail, 'quote-detail-action')} />;
+              })()}
+            </ul>
+          </div>
+        ) : actionErr && (
           <div className="mt-3 bg-rose-50 border border-rose-200 rounded px-3 py-2 text-sm text-rose-700">
             {actionErr}
           </div>
@@ -1328,16 +1352,16 @@ function ConvertToFirmModal({ quoteId, tiers, onClose, onConverted }) {
   const recIdx = Math.max(0, tiers.findIndex(t => t.is_recommended));
   const [chosenIdx, setChosenIdx] = useState(recIdx);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [errObj, setErrObj] = useState(null);
   const chosen = tiers[chosenIdx];
 
   async function submit() {
-    setBusy(true); setError('');
+    setBusy(true); setErrObj(null);
     try {
       const r = await pmQuotesAPI.convertToFirm(quoteId, { tier_id: chosen?.tier_id || chosen?.id || undefined });
       onConverted(r.data.chosen_tier_label || chosen?.label || 'Stage 2 firm offer');
     } catch (e) {
-      setError(e.response?.data?.error || e.message);
+      setErrObj(e);
     } finally {
       setBusy(false);
     }
@@ -1387,10 +1411,13 @@ function ConvertToFirmModal({ quoteId, tiers, onClose, onConverted }) {
           ))}
         </div>
 
-        {error && (
-          <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
-            {error}
-          </div>
+        {errObj && (
+          <ul className="space-y-2 mb-3">
+            {(() => {
+              const { entry, detail } = cardFromHttpError(errObj);
+              return <ErrorCard entry={entry} detail={detail} onReport={() => reportAction(entry, detail, 'convert-to-firm')} />;
+            })()}
+          </ul>
         )}
 
         <div className="flex gap-2">

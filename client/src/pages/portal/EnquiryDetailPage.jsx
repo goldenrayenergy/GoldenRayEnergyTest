@@ -9,6 +9,18 @@ import {
   Mail, Phone, MapPin, Home, Calendar, User as UserIcon,
   FileText, AlertTriangle, CheckCircle, ExternalLink, Loader2, Eye, ChevronDown,
 } from 'lucide-react';
+import ErrorCard from '../../pm/components/ErrorCard';
+import { lookupError } from '../../pm/utils/errorCatalogue';
+import { reportEntry } from '../../pm/utils/reportError';
+
+// Report it — persists the report (deduped server-side) + shows the confirmation.
+function reportBillWarning(w, uploadId) {
+  reportEntry(lookupError(w.code), {
+    screen: 'bill-review',
+    detail: w.reason || w.message || null,
+    context: { upload_id: uploadId || null },
+  });
+}
 
 const STATUS_OPTIONS = [
   { value: 'new',       label: 'New',       color: '#F5A623' },
@@ -611,19 +623,19 @@ function BillDrilldownRow({ u, onViewPdf }) {
             </div>
           </div>
 
-          {/* Per-bill validator warnings */}
+          {/* Per-bill validator warnings — each flag becomes a self-service card
+              (plain meaning + what to do + who fixes it), from the shared catalogue. */}
           {s.warnings.length > 0 && (
             <div>
               <div className="text-[9px] font-bold text-red-500 uppercase mb-1.5">Red flags</div>
-              <ul className="space-y-1">
+              <ul className="space-y-2">
                 {s.warnings.map((w, i) => (
-                  <li key={i} className="flex items-start gap-2 px-2 py-1.5 rounded bg-red-50 border border-red-100">
-                    <AlertTriangle size={11} className="text-red-500 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-mono text-[9px] px-1 rounded bg-red-100 text-red-700 font-bold mr-1">{w.code}</span>
-                      <span className="text-gray-700">{w.reason || w.message || ''}</span>
-                    </div>
-                  </li>
+                  <ErrorCard
+                    key={i}
+                    entry={lookupError(w.code)}
+                    detail={w.reason || w.message || null}
+                    onReport={() => reportBillWarning(w, u.id)}
+                  />
                 ))}
               </ul>
             </div>

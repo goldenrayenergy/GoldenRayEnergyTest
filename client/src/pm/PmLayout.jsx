@@ -1,5 +1,6 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // ── Shell layout for the PM tool ──
 // Visually distinct from the portal so it's obvious which surface you're on.
@@ -31,6 +32,11 @@ export default function PmLayout() {
               Quotes
             </Link>
             <Link
+              to="/pm/troubleshooting"
+              className={`px-2 py-1 rounded ${pathname.startsWith('/pm/troubleshooting') ? 'bg-slate-700 text-white' : 'text-slate-300 hover:text-white'}`}>
+              Troubleshooting
+            </Link>
+            <Link
               to="/pm/admin"
               className={`px-2 py-1 rounded ${pathname.startsWith('/pm/admin') ? 'bg-slate-700 text-white' : 'text-slate-300 hover:text-white'}`}>
               Admin
@@ -49,7 +55,11 @@ export default function PmLayout() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6">
-        <Outlet />
+        {/* Global safety net: a page crash shows a card here, not a white screen;
+            the nav above stays usable. */}
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   );

@@ -5,10 +5,15 @@
 // string (bom_error / cost_error). For the rep we add:
 //   - which form tab to open
 //   - a human "how to fix" sentence
+//   - a catalogue `entry` { title, meaning, whatToDo, owner, severity } so the
+//     shared ErrorCard can render plain-language guidance with who-fixes-it +
+//     severity badges (the Team Error Playbook surfaced inline).
 //
 // Path prefixes map to tabs. Specific paths get specific fix hints.
 // Bom / cost errors are matched by substring against the message.
 // ────────────────────────────────────────────────────────────────────────────
+
+import { lookupError } from './errorCatalogue';
 
 // Prefix → tab key on QuoteFormPage
 const PATH_TO_TAB = [
@@ -129,8 +134,42 @@ function hintForCostError(message) {
   return 'Cost computation failed. Check the Pricing and Costs tabs for invalid overrides.';
 }
 
+// Humanise a config path into a short card title, e.g.
+// 'customer.address.region' → 'Region', 'bills.manual_entry.annual_kwh' → 'Annual kwh'.
+function humanizePath(path) {
+  if (!path) return 'Missing information';
+  const seg = path.split('.').pop().replace(/\[\d+\]/g, '');
+  const words = seg.replace(/_/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// Map a flattened engine error to a catalogue-style entry the ErrorCard renders.
+// Cost/bom map onto real catalogue codes where we recognise them; config errors
+// are rep-fixable form blockers, so they get a synthetic entry built from the
+// existing per-path fix hint.
+function entryForFlat(e) {
+  const m = e.message || '';
+  if (e.kind === 'cost') {
+    if (/margin|below floor|negative/i.test(m)) return lookupError('margin_below_floor');
+    if (/labour|labor|compliance|rate/i.test(m)) return lookupError('rate_card_missing');
+    return { owner: 'rep', severity: 'block', area: 'pricing',
+             title: 'Pricing couldn’t be calculated', meaning: m,
+             whatToDo: e.hint || 'Check the Pricing and Costs tabs for invalid values.' };
+  }
+  if (e.kind === 'bom') {
+    if (/not found|unknown/i.test(m)) return lookupError('product_not_found');
+    return { owner: 'rep', severity: 'block', area: 'quote',
+             title: 'Component build failed', meaning: m,
+             whatToDo: e.hint || 'Re-pick the panel / inverter / battery / smart-meter in the System tab.' };
+  }
+  // config — always a rep-fixable, blocking form gap
+  return { owner: 'rep', severity: 'block', area: 'quote',
+           title: humanizePath(e.path), meaning: m,
+           whatToDo: e.hint || `Fill in ${e.path || 'the highlighted field'}.` };
+}
+
 // Public: normalise any engine refusal (save or preview, single or multi-tier)
-// into a flat list of { kind, path, message, tab, tabLabel, hint, tierLabel? }.
+// into a flat list of { kind, path, message, tab, tabLabel, hint, entry, tierLabel? }.
 export function flattenEngineErrors(refusal) {
   const out = [];
   if (!refusal) return out;
@@ -178,7 +217,8 @@ export function flattenEngineErrors(refusal) {
     fromCostError(t.cost_error, t.label);
   }
 
-  return out;
+  // Attach the catalogue entry (badges + plain-language guidance) to each.
+  return out.map(e => ({ ...e, entry: entryForFlat(e) }));
 }
 
 // Public: pull refusal info from a preview-validate response (returns null if

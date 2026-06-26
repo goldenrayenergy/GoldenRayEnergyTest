@@ -11,8 +11,50 @@ import PricingSection from '../components/quote-sections/PricingSection';
 import PreferencesSection from '../components/quote-sections/PreferencesSection';
 import SiteSurveySection from '../components/quote-sections/SiteSurveySection';
 import TierStrip from '../components/TierStrip';
+import ErrorCard from '../components/ErrorCard';
 import { autoSizeThreeTiers, autoSizeThreeTiersFromSpec } from '../utils/autoSizeThreeTiers';
 import { flattenEngineErrors, refusalFromPreview } from '../utils/engineErrorHints';
+import { lookupError } from '../utils/errorCatalogue';
+import { reportEntry } from '../utils/reportError';
+
+// Report it — persists the report (deduped server-side) + shows the confirmation.
+function reportError(e, screen) {
+  reportEntry(e.entry || lookupError(e.entry?.code), {
+    screen,
+    detail: e.message || e.path || null,
+    context: { path: e.path || null, tier: e.tierLabel || null },
+  });
+}
+
+// Render engineering hard_fails + soft_warnings (each carries a stable `code`)
+// as catalogue-driven cards. Returns null when there are none.
+function FindingCards({ hardFails = [], softWarnings = [], screen = 'quote-editor' }) {
+  const all = [...(hardFails || []), ...(softWarnings || [])];
+  if (!all.length) return null;
+  return (
+    <ul className="space-y-2">
+      {all.map((f, i) => {
+        const entry = lookupError(f.code);
+        return (
+          <ErrorCard
+            key={i}
+            entry={entry}
+            detail={`${f.rule || ''}${f.message ? '\n' + f.message : ''}`.trim() || null}
+            onReport={() => reportError({ entry, kind: 'engineering', message: f.message }, screen)}
+          />
+        );
+      })}
+    </ul>
+  );
+}
+
+// Block reasons that aren't already shown as engineering finding cards
+// (i.e. the cost/discount/margin reasons) — kept as a concise list so nothing
+// is lost. Hard-fail-derived strings are filtered out to avoid duplication.
+function residualBlockReasons(blockReasons = [], hardFails = []) {
+  const shown = new Set((hardFails || []).map(f => `${f.rule}: ${f.message}`));
+  return (blockReasons || []).filter(r => !shown.has(r));
+}
 
 // Sections that scope to the active tier (System, Costs, Pricing). All others shared.
 const TIER_SCOPED_TABS = new Set(['system', 'costs', 'pricing']);
@@ -603,38 +645,15 @@ export default function QuoteFormPage() {
                     )}
                     <ul className="space-y-2">
                       {grouped[group].map((e, i) => (
-                        <li key={i} className="bg-white border border-rose-200 rounded p-2 text-xs">
-                          <div className="flex items-start gap-2">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${
-                              e.kind === 'config' ? 'bg-amber-100 text-amber-800'
-                              : e.kind === 'bom'  ? 'bg-orange-100 text-orange-800'
-                                                  : 'bg-rose-100 text-rose-800'
-                            }`}>
-                              {e.kind === 'config' ? 'CONFIG' : e.kind === 'bom' ? 'BOM' : 'COST'}
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              {e.path && (
-                                <div className="font-mono text-[11px] text-slate-700">{e.path}</div>
-                              )}
-                              <div className="text-rose-800">{e.message}</div>
-                              {e.hint && (
-                                <div className="mt-1 text-slate-700">
-                                  <span className="font-semibold text-emerald-700">How to fix: </span>
-                                  {e.hint}
-                                </div>
-                              )}
-                              {e.tab && e.tab !== activeTab && (
-                                <button
-                                  type="button"
-                                  onClick={() => setActiveTab(e.tab)}
-                                  className="mt-1 text-[11px] text-blue-700 hover:underline"
-                                >
-                                  → Open {e.tabLabel} tab
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </li>
+                        <ErrorCard
+                          key={i}
+                          entry={e.entry}
+                          tab={e.tab && e.tab !== activeTab ? e.tab : null}
+                          tabLabel={e.tabLabel}
+                          onJump={setActiveTab}
+                          detail={e.path ? `${e.path}\n${e.message}` : e.message}
+                          onReport={() => reportError(e, 'quote-editor')}
+                        />
                       ))}
                     </ul>
                   </div>
@@ -796,14 +815,30 @@ function SingleTierValidationPanel({ saveResult, previewing }) {
         </div>
       )}
 
-      {saveResult.engine?.block_reasons?.length > 0 && (
+      {/* Engineering findings as self-service cards (coded → plain guidance) */}
+      {(saveResult.engine?.hard_fails?.length > 0 || saveResult.engine?.soft_warnings?.length > 0) && (
         <div>
-          <h4 className="text-xs font-semibold text-rose-700 mb-1">Block reasons</h4>
-          <ul className="space-y-1 text-xs text-rose-700">
-            {saveResult.engine.block_reasons.map((r, i) => <li key={i}>• {r}</li>)}
-          </ul>
+          <h4 className="text-xs font-semibold text-slate-700 mb-1.5">What to resolve</h4>
+          <FindingCards
+            hardFails={saveResult.engine.hard_fails}
+            softWarnings={saveResult.engine.soft_warnings}
+          />
         </div>
       )}
+
+      {/* Cost/discount block reasons not already shown as engineering cards */}
+      {(() => {
+        const residual = residualBlockReasons(saveResult.engine?.block_reasons, saveResult.engine?.hard_fails);
+        if (!residual.length) return null;
+        return (
+          <div>
+            <h4 className="text-xs font-semibold text-rose-700 mb-1">Other block reasons</h4>
+            <ul className="space-y-1 text-xs text-rose-700">
+              {residual.map((r, i) => <li key={i}>• {r}</li>)}
+            </ul>
+          </div>
+        );
+      })()}
 
       {saveResult.scenarios && (
         <div>
@@ -917,20 +952,35 @@ function MultiTierValidationPanel({ saveResult, previewing }) {
                   <span className="text-right text-slate-700">{expected.payback_yrs} yrs</span>
                 </>}
               </div>
+              {/* Per-tier engineering findings as self-service cards */}
+              {(t.hard_fails?.length > 0 || t.soft_warnings?.length > 0) && (
+                <div className="mt-2">
+                  <FindingCards hardFails={t.hard_fails} softWarnings={t.soft_warnings} />
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
-      {/* Aggregated block reasons (engine prefixes each with [Tier Label]) */}
-      {blockReasons.length > 0 && (
-        <div>
-          <h4 className="text-xs font-semibold text-rose-700 mb-1">Block reasons</h4>
-          <ul className="space-y-1 text-xs text-rose-700">
-            {blockReasons.map((r, i) => <li key={i}>• {r}</li>)}
-          </ul>
-        </div>
-      )}
+      {/* Residual block reasons (cost/discount) — engineering ones already shown
+          as per-tier cards above; filter them out to avoid duplication. */}
+      {(() => {
+        const shown = new Set();
+        for (const t of tiers) for (const f of (t.hard_fails || [])) {
+          shown.add(`[${t.label}] ${f.rule}: ${f.message}`);
+        }
+        const residual = blockReasons.filter(r => !shown.has(r));
+        if (!residual.length) return null;
+        return (
+          <div>
+            <h4 className="text-xs font-semibold text-rose-700 mb-1">Other block reasons</h4>
+            <ul className="space-y-1 text-xs text-rose-700">
+              {residual.map((r, i) => <li key={i}>• {r}</li>)}
+            </ul>
+          </div>
+        );
+      })()}
     </div>
   );
 }
