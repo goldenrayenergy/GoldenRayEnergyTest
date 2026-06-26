@@ -89,11 +89,13 @@ router.post('/:id/generate',
     }
 
     // Re-run engine on the current spec (the source of truth), against
-    // the live Supabase products catalogue.
+    // the live Supabase products catalogue. requireSiteSurvey: generate is the
+    // gate where a Stage-2 firm quote MUST have its site survey (convert/save/
+    // preview only hold a draft and defer that check to here).
     let engineOptions = {};
     try { engineOptions = { catalogue: await getCachedCatalogue(sb()) }; }
     catch (e) { console.warn('quote-actions /generate: catalogue load failed:', e.message); }
-    const engine = await runEngine(current.spec, engineOptions);
+    const engine = await runEngine(current.spec, { ...engineOptions, requireSiteSurvey: true });
     if (!engine.ok) {
       return res.status(422).json({ error: 'Engine refused current spec.',
         config_errors: engine.config_errors });

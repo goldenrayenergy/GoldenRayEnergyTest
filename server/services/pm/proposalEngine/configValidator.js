@@ -259,11 +259,15 @@ function validatePreferences(p, errors) {
   }
 }
 
-function validateSiteSurvey(s, stage, errors) {
-  // Only required for Stage 2
+function validateSiteSurvey(s, stage, errors, require = false) {
+  // Site-survey data only applies to Stage 2.
   if (stage !== 'stage_2_firm') return;
+  // The survey is REQUIRED only at generate-time (require=true) — not merely for
+  // holding a Stage-2 draft. This lets "convert to firm" produce a draft firm
+  // offer the rep then refines (adds the survey) before generating. If a survey
+  // is present, its fields are validated regardless of the require flag.
   if (!s) {
-    err(errors, 'site_survey', 'site_survey required for Stage 2 firm quotes');
+    if (require) err(errors, 'site_survey', 'site_survey required to generate a Stage 2 firm quote');
     return;
   }
   if (s.cable_run_metres_measured != null) {
@@ -286,6 +290,7 @@ export function validateSpec(spec, options = {}) {
   validateSystem(spec.system, errors, catalogue);
   validatePricing(spec.pricing, errors);
   validatePreferences(spec.preferences, errors);
-  validateSiteSurvey(spec.site_survey, spec.pricing?.stage || 'stage_1_estimate', errors);
+  validateSiteSurvey(spec.site_survey, spec.pricing?.stage || 'stage_1_estimate', errors,
+    options.requireSiteSurvey === true);
   return { valid: errors.length === 0, errors };
 }

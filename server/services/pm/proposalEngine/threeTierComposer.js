@@ -43,8 +43,10 @@
 
 import { composeSystem } from './systemComposer.js';
 import { selectPanel }   from './panelSelector.js';
+import { selectBattery } from './batterySelector.js';
 import { buildBom }      from './bomBuilder.js';
 import { computeCost }   from './costEngine.js';
+import { validateEngineering } from './engineeringValidator.js';
 
 // Pricing rule (memory: feedback_pricing_always_from_cost_engine):
 // Every tier price MUST come from costEngine.computeCost() against the live
@@ -263,7 +265,9 @@ export function composeThreeTiers({
         reason: 'no bill analysis on file',
       }),
     ];
-    // Price each tier from live catalogue via the cost engine.
+    // Phase 1+3: inspect + repair the no-bill fallback tiers too (this path is
+    // cruder, so it most needs the engineering check), before pricing.
+    inspectAndRepairTiers(tiers, catalogue, { region, phase, COMPATIBILITY, BMS_RULES });
     applyPricesFromCatalogue(tiers, catalogue);
     return {
       tiers,
@@ -330,8 +334,11 @@ export function composeThreeTiers({
     });
   });
 
-  // Price every tier from the live catalogue. Pricing rule (memory:
+  // Phase 1+3: inspect every tier against the full engineering rulebook and
+  // repair failures (step up inverter, re-pick battery) BEFORE pricing, so the
+  // price reflects the final corrected parts. Pricing rule (memory:
   // feedback_pricing_always_from_cost_engine) — never hardcoded $/kW.
+  inspectAndRepairTiers(tiers, catalogue, { region, phase, COMPATIBILITY, BMS_RULES });
   applyPricesFromCatalogue(tiers, catalogue);
 
   return {
@@ -364,6 +371,150 @@ function applyPricesFromCatalogue(tiers, catalogue) {
                  'once the catalogue is complete.',
       });
     }
+  }
+}
+
+// ── Phase 1: inspect every proposed tier against the FULL engineering rulebook
+// (Voc cold, MPPT current, DC/AC oversizing, string min, phase, inverter↔battery
+// matrix + charge rate, BMS, chemistry, racking, smart-meter pairing). Uses the
+// SAME validateEngineering() the rep's editor runs, so the composer can never
+// hand over a tier whose engineering status it doesn't already know.
+//
+// Observability only — does NOT change picks. Attaches tier.engine_validation =
+// { valid, hard_fails[], soft_warnings[], passes }. Phases 2–3 act on it.
+function specForInspection(tier, { region, phase }) {
+  const sov = tier?.system_overrides || {};
+  if (!sov.panel?.sku || !sov.inverter?.sku || !sov.panel?.count) return null;
+  return {
+    customer: { address: { region: region || null } },
+    bills: { manual_entry: {} },
+    system: {
+      panel:    sov.panel,
+      inverter: sov.inverter,
+      battery:  sov.battery || null,
+      string_topology: sov.string_topology || 'series',
+      string_design:   sov.string_design || {
+        topology: sov.string_topology || 'series',
+        groups: [{ panels_per_string: sov.panel.count, string_count: 1 }],
+      },
+      smart_meter: sov.smart_meter || null,
+      phase: phase || 1,
+      cable_run_metres_estimate: 24,
+    },
+    pricing: { stage: 'stage_1_estimate', customer_price_inc_gst: 0,
+               discount: { applied_nzd: 0, owner_approved: false } },
+  };
+}
+
+function inspectOneTier(tier, catalogue, ctx) {
+  const spec = specForInspection(tier, ctx);
+  if (!spec) return { valid: false, reason: 'incomplete_system', hard_fails: [], soft_warnings: [] };
+  try {
+    const v = validateEngineering(spec, { catalogue });
+    return { valid: (v.hard_fails || []).length === 0,
+      hard_fails: v.hard_fails || [], soft_warnings: v.soft_warnings || [], passes: (v.passes || []).length };
+  } catch (e) {
+    return { valid: false, reason: 'inspect_error', error: e.message, hard_fails: [], soft_warnings: [] };
+  }
+}
+
+// Smallest LARGER inverter (same phase, battery-capable if the tier has a
+// battery) whose DC capacity accommodates the panel array — repairs the
+// dominant failure class (DC/AC oversizing + the Voc/Vmp envelope) by keeping
+// the customer's array and stepping the inverter up (honours "cover full need").
+function nextLargerInverter(catalogue, tier, phase) {
+  const sov = tier.system_overrides;
+  const panel = catalogue.PANELS?.[sov.panel?.sku];
+  if (!panel) return null;
+  const arrayDcKw = (sov.panel.count * (panel.watts || 0)) / 1000;
+  const needBattery = !!sov.battery?.sku;
+  const curAc = catalogue.INVERTERS?.[sov.inverter?.sku]?.ac_kw || 0;
+  return Object.entries(catalogue.INVERTERS || {})
+    .map(([sku, inv]) => ({ sku, ...inv }))
+    .filter(inv => inv.phase === phase && inv.ac_kw != null && inv.ac_kw > curAc)
+    .filter(inv => !needBattery || inv.battery_capable === true || inv.is_plus_variant === true)
+    // Size by DC/AC ratio: pick the smallest larger inverter that keeps the array
+    // in STANDARD oversizing mode (≤1.20), which avoids the reduced-mode Voc trap.
+    // (max_pv_kwp_standard is per-MPPT for Verto, so ratio is the reliable signal.)
+    .filter(inv => arrayDcKw / inv.ac_kw <= 1.20)
+    .sort((a, b) => a.ac_kw - b.ac_kw)[0] || null;
+}
+
+function arrayDcKwOf(catalogue, sov) {
+  const p = catalogue.PANELS?.[sov.panel?.sku];
+  return sov.panel ? (sov.panel.count * (p?.watts || 0)) / 1000 : 0;
+}
+
+// Re-layout into shorter series strings (lower string Voc). Decrements the
+// largest panels-per-string by 1, rebalancing string_count; honours Fronius
+// 4-panel string minimum. Returns false when it can't shorten further.
+function relayoutShorter(tier) {
+  const sov = tier.system_overrides;
+  const count = sov.panel?.count || 0;
+  const cur = sov.string_design?.groups?.[0]?.panels_per_string || count;
+  const newPps = cur - 1;
+  if (newPps < 4 || count < 4) return false;
+  sov.string_design = { topology: 'series',
+    groups: [{ panels_per_string: newPps, string_count: Math.ceil(count / newPps) }] };
+  return true;
+}
+
+// Phase 3 — repair a failing tier (bounded), then classify ship_status.
+// Two strategies, chosen by the failure:
+//   • TRUE DC oversizing (DC/AC > 1.20) → step up inverter + re-pick battery
+//   • String Voc / Vmp envelope         → shorten series strings (re-layout)
+// Stops when no strategy applies or a step makes no progress. Unrepaired hard
+// fails → ship_status 'block'. Records tier.repairs[].
+function repairTier(tier, catalogue, ctx) {
+  tier.repairs = [];
+  let val = inspectOneTier(tier, catalogue, ctx);
+  let attempts = 0;
+  while (!val.valid && attempts < 16) {
+    const rules = (val.hard_fails || []).map(f => `${f.rule} ${f.message || ''}`).join(' | ');
+    const inv = catalogue.INVERTERS?.[tier.system_overrides.inverter?.sku];
+    const dcac = inv?.ac_kw ? arrayDcKwOf(catalogue, tier.system_overrides) / inv.ac_kw : 0;
+    let acted = false;
+
+    if (/oversizing|DC\/AC|max DC/i.test(rules) && dcac > 1.20) {
+      // Array genuinely too big for the inverter → step up (keep coverage).
+      const bigger = nextLargerInverter(catalogue, tier, ctx.phase);
+      if (bigger) {
+        tier.system_overrides.inverter = { sku: bigger.sku };
+        tier.repairs.push(`inverter → ${bigger.sku} (DC/AC ${dcac.toFixed(2)})`);
+        if (tier.system_overrides.battery?.sku) {
+          const bat = selectBattery({ targetUsableKwh: tier.system_overrides.battery.kwh || 0,
+            inverter: { ...bigger, sku: bigger.sku }, catalogue,
+            COMPATIBILITY: ctx.COMPATIBILITY, BMS_RULES: ctx.BMS_RULES });
+          if (bat.sku) {
+            tier.system_overrides.battery = { sku: bat.sku, module_count: bat.module_count,
+              kwh: +(+bat.total_usable_kwh).toFixed(2) };
+            tier.repairs.push(`battery → ${bat.sku}`);
+          }
+        }
+        acted = true;
+      }
+    } else if (/Voc|shorten series|Vmp/i.test(rules)) {
+      // String voltage out of window → re-layout into shorter strings.
+      acted = relayoutShorter(tier);
+      if (acted) tier.repairs.push(`shorten strings → ${tier.system_overrides.string_design.groups[0].panels_per_string}/string`);
+    }
+
+    if (!acted) break;  // no applicable strategy (or exhausted) → stop, will block
+    val = inspectOneTier(tier, catalogue, ctx);
+    attempts++;
+  }
+  tier.engine_validation = val;
+  tier.ship_status = val.valid ? 'ok' : 'block';
+}
+
+function inspectAndRepairTiers(tiers, catalogue, ctx) {
+  for (const tier of tiers) {
+    if (!tier.system_overrides?.panel?.sku) {
+      tier.engine_validation = { valid: false, reason: 'incomplete_system', hard_fails: [], soft_warnings: [] };
+      tier.ship_status = 'block';
+      continue;
+    }
+    repairTier(tier, catalogue, ctx);
   }
 }
 

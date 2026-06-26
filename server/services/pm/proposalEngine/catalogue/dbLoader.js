@@ -297,6 +297,45 @@ export async function loadCatalogueFromDb(supabase) {
     out[bucket][row.sku] = mapper(row);
   }
 
+  // ── 1b. Inverter↔battery compatibility matrix ───────────────────────────
+  // Attach compatible_batteries[] to each inverter from inverter_battery_compat
+  // (enriched with the battery's family + capacity via battery_systems), so
+  // engineeringValidator can check exact per-size pairing validity + charge/
+  // discharge rate from the live manufacturer matrix instead of the coarse
+  // hardcoded COMPATIBILITY map. Non-fatal: if the tables are missing the
+  // inverters keep compatible_batteries=null and the validator falls back.
+  try {
+    const [{ data: compatRows }, { data: bsRows }] = await Promise.all([
+      supabase.from('inverter_battery_compat')
+        .select('inverter_sku, battery_system_sku, is_compatible, charge_kw, discharge_kw, full_backup, min_battery_kwh, max_battery_kwh'),
+      supabase.from('battery_systems').select('system_sku, family, capacity_kwh'),
+    ]);
+    const bsBySku = new Map((bsRows || []).map((b) => [b.system_sku, b]));
+    const byInverter = new Map();
+    for (const r of compatRows || []) {
+      const bs = bsBySku.get(r.battery_system_sku);
+      const entry = {
+        battery_system_sku: r.battery_system_sku,
+        family: bs?.family || null,
+        capacity_kwh: bs ? num(bs.capacity_kwh) : null,
+        is_compatible: r.is_compatible !== false,
+        charge_kw: num(r.charge_kw),
+        discharge_kw: num(r.discharge_kw),
+        full_backup: r.full_backup === true,
+        min_battery_kwh: num(r.min_battery_kwh),
+        max_battery_kwh: num(r.max_battery_kwh),
+      };
+      if (!byInverter.has(r.inverter_sku)) byInverter.set(r.inverter_sku, []);
+      byInverter.get(r.inverter_sku).push(entry);
+    }
+    for (const sku of Object.keys(out.INVERTERS)) {
+      out.INVERTERS[sku].compatible_batteries = byInverter.get(sku) || null;
+    }
+    out.__compat_rows = (compatRows || []).length;
+  } catch (e) {
+    out.__compat_error = e.message;
+  }
+
   // ── 2. Labour rate card ─────────────────────────────────────────────────
   const { data: labourRows, error: labErr } = await supabase
     .from('labour_rate_card')

@@ -792,7 +792,7 @@ function computeFieldConfidence(parsed) {
 // shared so parseBillPdf + parseBillImage also run them). Returns an array
 // of `{field, code, reason, suspect}`. Suspect:true entries trip the review
 // gate in billAnalysisService.computeReviewGate.
-function runCrossFieldValidators(parsed) {
+export function runCrossFieldValidators(parsed) {
   const parse_warnings = [];
 
   // (1) kWh-vs-total: kWh × 25¢/kWh blended should be ≥ 30% of bill total
@@ -809,16 +809,41 @@ function runCrossFieldValidators(parsed) {
     }
   }
 
-  // (2) Extrapolation-vs-rolling: bill's own annual total vs our extrapolation
+  // (2) Extrapolation-vs-rolling: bill's own annual total vs our extrapolation.
+  // A single high-use month (e.g. winter) legitimately extrapolates well above
+  // the rolling annual average — that's seasonality, NOT a double-count. We only
+  // call it suspect when the implied UNIT RATE also corroborates it: a genuine
+  // double-count inflates kWh while the $ charges stay correct, so the implied
+  // rate collapses to ~half normal. A winter peak keeps a normal rate. If we
+  // can't compute the rate, stay conservative and flag it.
   if (parsed.kwh_total && parsed.annual_kwh_rolling && parsed.days_in_period) {
     const extrapolated = parsed.kwh_total * (365 / parsed.days_in_period);
     if (extrapolated > parsed.annual_kwh_rolling * 1.8) {
-      parse_warnings.push({
-        field: 'kwh_total',
-        code:  'kwh_double_count_suspect',
-        reason: `kWh extrapolated to ~${Math.round(extrapolated)}/yr but bill says rolling 365 days = ${parsed.annual_kwh_rolling}. Possible double-count.`,
-        suspect: true,
-      });
+      const impliedRate = parsed.variable_charge_nzd > 0 && parsed.kwh_total > 0
+        ? parsed.variable_charge_nzd / parsed.kwh_total
+        : null;
+      // NZ residential variable rates sit ~$0.20–0.30/kWh; below ~$0.12 implies
+      // kWh is inflated relative to the dollars charged (corroborates doubling).
+      const rateCorroboratesDoubling = impliedRate == null || impliedRate < 0.12;
+      if (rateCorroboratesDoubling) {
+        parse_warnings.push({
+          field: 'kwh_total',
+          code:  'kwh_double_count_suspect',
+          reason: `kWh extrapolated to ~${Math.round(extrapolated)}/yr but bill says rolling 365 days = ${parsed.annual_kwh_rolling}` +
+                  `${impliedRate != null ? `, and the implied rate (~$${impliedRate.toFixed(2)}/kWh) is abnormally low` : ''}. Possible double-count.`,
+          suspect: true,
+        });
+      } else {
+        // High extrapolation but a NORMAL unit rate → seasonal high-use period,
+        // not a double-count. Non-suspect heads-up so the rep can still eyeball it.
+        parse_warnings.push({
+          field: 'kwh_total',
+          code:  'kwh_high_vs_rolling_seasonal',
+          reason: `kWh extrapolates to ~${Math.round(extrapolated)}/yr vs rolling 365 days = ${parsed.annual_kwh_rolling}, ` +
+                  `but the unit rate (~$${impliedRate.toFixed(2)}/kWh) looks normal — likely a high-use (e.g. winter) period, not a double-count.`,
+          suspect: false,
+        });
+      }
     }
   }
 

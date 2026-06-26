@@ -45,6 +45,18 @@ function dodFactor(series) {
   return 1.00;  // unknown LFP — assume conservative 100% DoD
 }
 
+// Phase 2 — is (series, nominal kWh) an APPROVED pairing for this inverter in
+// the live manufacturer matrix (inverter.compatible_batteries, attached by
+// dbLoader from inverter_battery_compat)?
+//   true/false → matrix present, definitive
+//   null       → inverter not in the matrix → caller falls back to BMS-rule-only
+function matrixApproves(inverter, series, nominalKwh) {
+  const list = inverter?.compatible_batteries;
+  if (!Array.isArray(list)) return null;
+  return list.some(c => c.is_compatible && c.family === series &&
+    c.capacity_kwh != null && Math.abs(Number(c.capacity_kwh) - nominalKwh) <= 0.6);
+}
+
 function summarizeAlt(c) {
   return {
     sku: c.sku,
@@ -96,10 +108,17 @@ export function selectBattery({
     };
   }
 
-  // Compatibility: explicit list per inverter if available, else default LFP set
+  // Compatibility series — single source of truth is the live matrix
+  // (inverter.compatible_batteries, attached by dbLoader from
+  // inverter_battery_compat). Phase 4: the matrix governs for every inverter in
+  // it; the hard-coded COMPATIBILITY map is now only a FALLBACK for inverters
+  // not yet in the matrix (e.g. Victron / a brand-new SKU), then all-LFP.
+  const matrixSeries = Array.isArray(inverter.compatible_batteries)
+    ? [...new Set(inverter.compatible_batteries.filter(c => c.is_compatible).map(c => c.family))]
+    : null;
   const explicit = COMPATIBILITY?.[inverter.sku]?.compatible_battery_series;
-  const compatSeries = explicit && explicit.length > 0
-    ? explicit
+  const compatSeries = (matrixSeries && matrixSeries.length) ? matrixSeries
+    : (explicit && explicit.length > 0) ? explicit
     : ['HVM', 'HVS', 'Reserva'];
 
   const batteries = Object.entries(catalogue.BATTERIES)
@@ -126,8 +145,17 @@ export function selectBattery({
     // Minimum modules to satisfy target_usable_kwh
     const requiredNominalKwh = targetUsableKwh / dod;
     const minModules = Math.ceil(requiredNominalKwh / b.module_kwh);
-    const chosenCount = rule.valid_module_counts.find(c => c >= minModules);
-    if (!chosenCount) continue;  // can't satisfy target
+    // Phase 2: pick the smallest module count that BOTH meets the target AND is
+    // an approved pairing in the manufacturer matrix. If the inverter isn't in
+    // the matrix (null), fall back to the BMS-rule-only choice (legacy — never
+    // worse). This stops the composer proposing sub-minimum stacks like HVM 8.3
+    // on a single-phase Primo (Fronius excludes it) — it sizes up to HVM 11.0.
+    const chosenCount = rule.valid_module_counts.find(c => {
+      if (c < minModules) return false;
+      const approved = matrixApproves(inverter, b.series, c * b.module_kwh);
+      return approved === null ? true : approved;
+    });
+    if (!chosenCount) continue;  // can't satisfy target within approved pairings
 
     const totalNominalKwh = chosenCount * b.module_kwh;
     const totalUsableKwh  = totalNominalKwh * dod;

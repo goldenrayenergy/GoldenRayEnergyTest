@@ -63,6 +63,40 @@ function vmpAtHotTemp(panelData, tHotCelsius) {
   return r2(panelData.vmp_stc * correction);
 }
 
+// ── Stable codes for the team Error Playbook ────────────────────────────────
+// Each hard_fail / soft_warning carries a `rule` (a human sentence, free to
+// reword) AND a stable `code` (never changes) so the client can attach the
+// right plain-English guidance from the catalogue. The mapping lives here,
+// co-located with the rules, so a reworded rule and its code change together
+// in one place. Ordered: more specific patterns first.
+// Keep in lockstep with client/src/pm/utils/errorCatalogue.js.
+const RULE_CODE = [
+  [/Voc reduced mode/i,              'voc_reduced_mode_warn'],
+  [/Voc max/i,                       'voc_cold_exceeded'],
+  [/Vmp borderline/i,                'vmp_borderline'],
+  [/Vmp lower envelope/i,            'vmp_below_min'],
+  [/MPPT current clipping/i,         'mppt_current_clipping'],
+  [/ISC max/i,                       'isc_exceeded'],
+  [/reduced-mode oversizing — Voc/i, 'dc_ac_reduced_voc'],
+  [/reduced-mode oversizing/i,       'dc_ac_reduced_mode'],
+  [/DC\/AC oversizing/i,             'dc_ac_oversize_max'],
+  [/Plus inverter required/i,        'battery_needs_plus_inverter'],
+  [/pairing.*matrix/i,               'inverter_battery_not_approved'],
+  [/battery module count/i,          'battery_module_count_invalid'],
+  [/LFP only/i,                      'battery_not_lfp'],
+  [/string minimum/i,                'string_below_minimum'],
+  [/phase mismatch/i,                'phase_mismatch'],
+  [/Parallel-string/i,              'parallel_topology_disclosure'],
+  [/Mixed-vendor/i,                  'mixed_vendor_disclosure'],
+];
+
+export function codeForRule(rule) {
+  for (const [rx, code] of RULE_CODE) if (rx.test(rule || '')) return code;
+  return 'engineering_other';  // safety net — coverage test asserts this never fires for real rules
+}
+
+const withCode = (item) => ({ ...item, code: codeForRule(item.rule) });
+
 // ── Main validator ────────────────────────────────────────────────────────
 export function validateEngineering(spec, options = {}) {
   const catalogue = getCatalogue(options);
@@ -281,6 +315,42 @@ export function validateEngineering(spec, options = {}) {
     }
   }
 
+  // ── Inverter↔battery pairing + charge rate (live manufacturer matrix) ───
+  // Uses inverter.compatible_batteries (attached by dbLoader from
+  // inverter_battery_compat). Resolves the chosen battery to a matrix entry by
+  // series (family) + capacity (module_kwh × module_count). When the list is
+  // absent — JS-fallback catalogue, or an inverter not yet in the matrix — this
+  // block is skipped and the legacy series-level COMPATIBILITY check stands.
+  if (hasBattery && inverter && Array.isArray(inverter.compatible_batteries)) {
+    const batt = BATTERIES[spec.system.battery.sku];
+    const moduleCount = spec.system.battery.module_count;
+    const capacity = (batt?.module_kwh || 0) * (moduleCount || 0);
+    const series = batt?.series;
+    const match = inverter.compatible_batteries.find(c =>
+      c.family === series && c.capacity_kwh != null &&
+      Math.abs(c.capacity_kwh - capacity) <= 0.6);
+    if (!match) {
+      const allowed = inverter.compatible_batteries
+        .filter(c => c.is_compatible).map(c => c.battery_system_sku).join(', ');
+      hard_fails.push({
+        rule: 'Inverter–battery pairing (manufacturer matrix)',
+        message: `${series || 'Battery'} ${capacity.toFixed(1)} kWh is not an approved pairing for ` +
+                 `${inverter.name}. Approved: ${allowed || 'none'}.`,
+      });
+    } else if (!match.is_compatible) {
+      hard_fails.push({
+        rule: 'Inverter–battery pairing (manufacturer matrix)',
+        message: `${match.battery_system_sku} is explicitly incompatible with ${inverter.name}.`,
+      });
+    } else {
+      passes.push({
+        rule: 'Inverter–battery pairing (manufacturer matrix)',
+        message: `${match.battery_system_sku} approved for ${inverter.name} ✓ ` +
+                 `(charge/discharge ${match.charge_kw} kW${match.full_backup ? ', full backup' : ''}).`,
+      });
+    }
+  }
+
   // ── BMS count per battery vendor ────────────────────────────────────
   if (hasBattery) {
     const batt = BATTERIES[spec.system.battery.sku];
@@ -393,8 +463,8 @@ export function validateEngineering(spec, options = {}) {
 
   return {
     passes,
-    hard_fails,
-    soft_warnings,
+    hard_fails: hard_fails.map(withCode),
+    soft_warnings: soft_warnings.map(withCode),
     unverified,
     standards_referenced: STANDARDS_REFERENCED,
     validator_version: VALIDATOR_VERSION,
