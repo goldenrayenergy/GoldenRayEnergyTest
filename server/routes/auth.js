@@ -3,17 +3,8 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import env from '../config/env.js';
 import { authenticate } from '../middleware/auth.js';
-import bcrypt from 'bcryptjs';
 
 const router = Router();
-
-// Demo users for seeding
-const DEMO_USERS = [
-  { id: 'a1a1a1a1-0000-0000-0000-000000000001', name: 'Aroha Mitchell', email: 'aroha@goldenray.co.nz', password: 'admin123', role: 'admin' },
-  { id: 'a1a1a1a1-0000-0000-0000-000000000002', name: 'Liam Patel', email: 'liam@goldenray.co.nz', password: 'manager123', role: 'sales_mgr' },
-  { id: 'a1a1a1a1-0000-0000-0000-000000000003', name: 'Sophie Nguyen', email: 'sophie@goldenray.co.nz', password: 'sales123', role: 'sales_exec' },
-  { id: 'a1a1a1a1-0000-0000-0000-000000000004', name: 'Jack Te Awa', email: 'jack@goldenray.co.nz', password: 'proposal123', role: 'proposal_mgr' },
-];
 
 router.post('/login', async (req, res) => {
   try {
@@ -22,6 +13,11 @@ router.post('/login', async (req, res) => {
 
     const user = await User.findByEmail(email);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
+    // Reject disabled users at login time. Previously the login flow only
+    // checked the password hash, so setting is_active=false in the DB did
+    // NOT block sign-in. Now it does.
+    if (user.is_active === false) return res.status(401).json({ error: 'Invalid credentials' });
 
     const valid = await User.verifyPassword(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
@@ -36,30 +32,14 @@ router.post('/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Debug endpoint to seed demo users
-router.post('/seed-demo-users', async (req, res) => {
-  try {
-    const results = [];
-    for (const demoUser of DEMO_USERS) {
-      try {
-        const passwordHash = await bcrypt.hash(demoUser.password, 10);
-        const newUser = await User.create({
-          name: demoUser.name,
-          email: demoUser.email,
-          password: demoUser.password,
-          role: demoUser.role,
-          avatar: demoUser.name.split(' ').map(w => w[0]).join('')
-        });
-        results.push({ email: demoUser.email, status: 'created', id: newUser.id });
-      } catch (e) {
-        results.push({ email: demoUser.email, status: 'error', message: e.message });
-      }
-    }
-    res.json({ message: 'Seed attempt complete', results });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// The old POST /seed-demo-users endpoint has been removed. It was a debug
+// helper that hard-coded plaintext passwords (admin123, manager123, etc.)
+// and inserted them into the users table without any auth check — meaning
+// anyone on the internet could POST to /api/auth/seed-demo-users and mint
+// four working demo accounts, including admin. Demo/seed data is now
+// exclusively handled by server/db/seed-only.js (run manually via
+// `npm run seed` in development). See project-demographic-provenance
+// memory for the plan to sanitise those seed emails to real addresses.
 
 router.get('/me', authenticate, async (req, res) => {
   try {

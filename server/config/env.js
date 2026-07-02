@@ -12,7 +12,20 @@ export default {
     databaseUrl: process.env.DATABASE_URL,
   },
   jwt: {
-    secret: process.env.JWT_SECRET || 'dev-secret-change-in-production-min32chars!',
+    // Refuse to boot in production without a real JWT_SECRET. The dev
+    // fallback below was previously the effective secret on any Render
+    // deploy that forgot to set the env var — meaning anyone reading this
+    // file could forge admin tokens. Never again.
+    secret: (() => {
+      if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+      if ((process.env.NODE_ENV || 'development') === 'production') {
+        throw new Error(
+          '[env] JWT_SECRET must be set in production. Refusing to boot. ' +
+          'Set JWT_SECRET on Render (32+ random characters) before deploying.'
+        );
+      }
+      return 'dev-secret-change-in-production-min32chars!';
+    })(),
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
   email: {

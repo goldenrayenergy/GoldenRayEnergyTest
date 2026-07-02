@@ -2,8 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import {
+  otpLimiter, loginLimiter, submitLimiter, interactiveLimiter, defaultLimiter,
+} from './middleware/rateLimiters.js';
 
 import authRoutes from './routes/auth.js';
 import leadRoutes from './routes/leads.js';
@@ -37,6 +39,12 @@ dotenv.config({ path: '../.env' });
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Render runs us behind a load balancer that sets X-Forwarded-For. Trust
+// the first hop so req.ip is the real client IP — without this, all rate
+// limiters would key on the same proxy IP and a single bot could exhaust
+// the limit for everyone behind it.
+app.set('trust proxy', 1);
+
 // ── Middleware ──
 app.use(helmet());
 // CORS — allow the configured client URL, localhost in dev, and any vercel.app
@@ -53,7 +61,17 @@ app.use(cors({
 }));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
+
+// ── Tiered rate limiting ──
+// Per-route limiters mounted BEFORE the route handlers so a 429 short-circuits
+// the request without touching application code. Order matters — most-specific
+// paths first, default last.
+app.use('/api/auth/login',      loginLimiter);          // 5 / 5min  — brute-force gate
+app.use('/api/otp',             otpLimiter);            // 5 / 5min  — SMS cost gate
+app.use('/api/quote/submit',    submitLimiter);         // covers /submit AND /submit-partial
+app.use('/api/quote/calculate', interactiveLimiter);    // 60 / min  — fired per UI step
+app.use('/api/address',         interactiveLimiter);    // 60 / min  — autocomplete keystrokes
+app.use(defaultLimiter);                                // 200 / 15min catch-all
 
 // ── Root Endpoint ──
 app.get('/', (req, res) => {
