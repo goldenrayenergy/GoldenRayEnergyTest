@@ -22,7 +22,6 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.9.13",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "pdf-to-png-converter": "^4.0.0",
@@ -36,5 +35,15 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
+  },
+  "overrides": {
+    "ws": "^8.18.0",
+    "form-data": "^4.0.4",
+    "basic-ftp": "^5.0.5",
+    "brace-expansion": "^2.0.2",
+    "uuid": "^11.0.5",
+    "qs": "^6.13.1",
+    "body-parser": "^1.20.3",
+    "ip-address": "^10.0.1"
   }
 }

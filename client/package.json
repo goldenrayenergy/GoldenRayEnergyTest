@@ -25,5 +25,11 @@
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
     "vite": "^5.3.4"
+  },
+  "overrides": {
+    "ws": "^8.18.0",
+    "form-data": "^4.0.4",
+    "esbuild": "^0.25.0",
+    "@babel/core": "^7.26.0"
   }
 }

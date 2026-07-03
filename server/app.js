@@ -47,14 +47,48 @@ app.set('trust proxy', 1);
 
 // ── Middleware ──
 app.use(helmet());
-// CORS — allow the configured client URL, localhost in dev, and any vercel.app
-// preview deployment so we don't have to redeploy every time we get a new URL.
+
+// CORS whitelist — explicit allowlist of origins that can call the API with
+// credentials. Previously matched any *.vercel.app subdomain via regex, which
+// meant ANY Vercel deployment on ANY account could hit our API — a real risk
+// once someone starts hosting malicious preview builds under vercel.app.
+//
+// The allowlist covers:
+//   - Configured CLIENT_URL (Render env var → production domain)
+//   - Localhost for dev (:5173 = Vite, :3000 = fallback)
+//   - Specific Vercel preview subdomains we control (goldenrayenergy account)
+//   - The production domain(s) we own
+//
+// Add new preview URLs to CORS_ALLOWED_ORIGINS env var (comma-separated) if
+// you spin up a new preview branch. Avoids ever touching this file for
+// routine preview work.
+const STATIC_ALLOWED = [
+  'https://golden-ray-energy-test.vercel.app',
+  'https://www.goldenrayenergy.nz',
+  'https://goldenrayenergy.nz',
+];
+
+const envAllowed = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+const ALLOWED_ORIGINS = new Set([
+  ...STATIC_ALLOWED,
+  ...envAllowed,
+  ...(process.env.CLIENT_URL ? [process.env.CLIENT_URL] : []),
+]);
+
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // server-to-server, curl, etc.
-    if (origin === process.env.CLIENT_URL) return cb(null, true);
-    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
-    if (/^https:\/\/[\w-]+\.vercel\.app$/.test(origin)) return cb(null, true);
+    if (!origin) return cb(null, true); // server-to-server, curl, health checks
+    // Localhost dev (any port) — only in non-production
+    if (process.env.NODE_ENV !== 'production' &&
+        /^http:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
+    if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+    // Log the rejection so we notice legitimate origins we forgot to whitelist,
+    // rather than the customer just seeing a broken app.
+    console.warn(`[CORS] blocked origin: ${origin}`);
     cb(new Error(`CORS blocked: ${origin}`));
   },
   credentials: true,
