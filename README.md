@@ -182,14 +182,7 @@ All follow the same RESTful pattern: `GET /`, `GET /:id`, `POST /`, `PATCH /:id`
 - `proposals` — Solar quotes with PDF generation
 - `system_config` — Application settings (JSONB)
 
-## Demo Credentials
 
-| User | Email | Password | Role |
-|------|-------|----------|------|
-| Aroha Mitchell | aroha@goldenray.co.nz | admin123 | Admin |
-| Liam Patel | liam@goldenray.co.nz | manager123 | Sales Manager |
-| Sophie Nguyen | sophie@goldenray.co.nz | sales123 | Sales Executive |
-| Jack Te Awa | jack@goldenray.co.nz | proposal123 | Proposal Manager |
 
 ## Deployment
 
