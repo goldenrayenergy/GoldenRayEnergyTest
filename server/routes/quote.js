@@ -4,6 +4,7 @@ import { generateQuotePDF } from '../services/quotePdfService.js';
 import { sendQuoteEmail, sendTeamNewLeadEmail, sendCustomerAckEmail } from '../services/emailService.js';
 import { supabaseAdmin } from '../config/supabase.js';
 import { validateQuoteForm } from '../utils/validators.js';
+import { analyseRoof } from '../services/googleSolar/analyseRoof.js';
 
 // Multi-touch follow-up cadence created at enquiry time. Sales rep ticks
 // each off as they happen; remaining ones cancel naturally if the lead
@@ -279,6 +280,28 @@ router.post('/submit', async (req, res) => {
         console.warn('qr_scans back-link failed (non-fatal):', e.message);
       }
     }
+
+    // ── 2c. Google Solar API roof analysis (fire-and-forget) ──────────────
+    // Phase 1 of the Google Solar integration. Reads FEATURE_GOOGLE_SOLAR;
+    // when the flag is off, analyseRoof records a 'skipped_flag' row and
+    // returns immediately. When the flag is on but lat/lng aren't supplied
+    // by the wizard, analyseRoof records 'failed' with 'geocoding-required'
+    // — a signal that the frontend needs to send Nominatim-derived lat/lng.
+    // Idempotency: one analysis per enquiry lifecycle (QR partial + full
+    // wizard completion won't double-fire).
+    //
+    // Deliberately fire-and-forget — the wizard response returns fast, and
+    // the analysis lands in roof_analyses whenever it can. Errors are
+    // captured on the row (error_message column), not thrown.
+    Promise.resolve().then(() =>
+      analyseRoof({
+        enquiryId: enquiry.id,
+        address:   form.address || [form.addressStreet, form.addressSuburb, form.addressCity].filter(Boolean).join(', ') || 'unknown',
+        latitude:  typeof form.latitude  === 'number' ? form.latitude  : undefined,
+        longitude: typeof form.longitude === 'number' ? form.longitude : undefined,
+        contactId: contact.id,
+      })
+    ).catch(err => console.error('[quote.js] analyseRoof fire-and-forget failed:', err?.message || err));
 
     // NOTE: We deliberately do NOT create a project here. Projects are
     // operational records for confirmed customers. Sales reps qualify the
