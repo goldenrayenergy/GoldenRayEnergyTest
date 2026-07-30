@@ -43,4 +43,26 @@ export default {
     defaultElecRate: 0.32, laborPct: 18, panelWatts: 550, sunHours: 4.5, inverterPct: 14,
     co2Factor: 0.098,
   },
+  googleSolar: {
+    // Fail-hard in production if the feature is enabled but no key is set.
+    // Better than silently no-op'ing in prod and leaving admin to notice
+    // hours later that no roof analyses are landing. Matches the JWT_SECRET
+    // pattern above. In dev the key is optional — client.js has a log-only
+    // fallback (see services/googleSolar/client.js).
+    apiKey: (() => {
+      if (process.env.GOOGLE_SOLAR_API_KEY) return process.env.GOOGLE_SOLAR_API_KEY;
+      if (process.env.FEATURE_GOOGLE_SOLAR === 'true'
+          && (process.env.NODE_ENV || 'development') === 'production') {
+        throw new Error(
+          '[env] FEATURE_GOOGLE_SOLAR=true in production but GOOGLE_SOLAR_API_KEY is not set. ' +
+          'Set GOOGLE_SOLAR_API_KEY on Render before enabling this feature, or set FEATURE_GOOGLE_SOLAR=false.'
+        );
+      }
+      return null;
+    })(),
+    enabled: process.env.FEATURE_GOOGLE_SOLAR === 'true',
+    monthlyQuota: parseInt(process.env.GOOGLE_SOLAR_MONTHLY_QUOTA) || 1000,
+    alertAtPct: parseInt(process.env.GOOGLE_SOLAR_ALERT_AT_PCT) || 80,
+    adminEmail: process.env.GOOGLE_SOLAR_ADMIN_EMAIL || 'reddy@goldenrayenergy.nz',
+  },
 };
