@@ -43,6 +43,20 @@ export function pageSiteAnalysis(d, sectionNum, sectionsTotal) {
     ? `The most productive facing on your roof is <b>${compassFromAzimuth(bestSegment.azimuthDegrees)}</b> at approximately <b>${Math.round(bestSegment.pitchDegrees)}° pitch</b> — well-suited to solar generation in New Zealand.`
     : '';
 
+  // Phase 2 — embed aerial image if it was successfully fetched. Data URI
+  // (data:image/png;base64,…) is set by /generate route in quote-actions.js;
+  // absent when no image on file or the fetch failed (falls back to text-only).
+  const imgHtml = a.image_data_uri
+    ? `<div style="margin:14px 0;text-align:center">
+         <img src="${a.image_data_uri}"
+              alt="Aerial view of your roof"
+              style="max-width:100%;max-height:340px;border:1px solid #D9DCE1;border-radius:6px;object-fit:contain" />
+         <div style="font-size:10px;color:#9CA3AF;margin-top:4px">
+           Aerial imagery${a.imagery_date ? ` · ${formatMonthYear(a.imagery_date)}` : ''} · Google Solar
+         </div>
+       </div>`
+    : '';
+
   return `<section class="page">
     ${pageHead(d, 'Your roof assessment')}
 
@@ -57,6 +71,8 @@ export function pageSiteAnalysis(d, sectionNum, sectionsTotal) {
           <div style="font-size:11px;color:#5C6470">${d.meta.quote_date}</div>
         </div>
       </div>
+
+      ${imgHtml}
 
       <h2>What we found on your roof</h2>
       <p>

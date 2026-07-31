@@ -148,6 +148,41 @@ function mkD(roofAnalysis) {
   assert('picks largest segment → 20° pitch', html.includes('20° pitch'));
 }
 
+// ── Phase 2 imagery — page renders <img> when image_data_uri present ─────
+{
+  const analysisWithImg = {
+    status: 'ok', imagery_quality: 'MEDIUM', imagery_date: '2024-05-15',
+    max_array_area_m2: 80, max_array_panels_count: 40,
+    max_sunshine_hours_per_year: 1500,
+    roof_segments: [{ pitchDegrees: 25, azimuthDegrees: 0, stats: { areaMeters2: 40 } }],
+    image_data_uri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  };
+  const html = pageSiteAnalysis(mkD(analysisWithImg), 2, 18);
+  assert('image page: renders non-empty', html.length > 0);
+  assert('image page: contains <img>', html.includes('<img'));
+  assert('image page: img src is data:image/png;base64,...', html.includes('src="data:image/png;base64,'));
+  assert('image page: has alt text', html.includes('alt="Aerial view of your roof"'));
+  assert('image page: caption mentions imagery date', html.includes('May 2024'));
+  assert('image page: caption mentions Google Solar', html.includes('Google Solar'));
+}
+
+// ── Phase 2 imagery — no image_data_uri → no <img>, text-only fallback ────
+{
+  const analysisNoImg = {
+    status: 'ok', imagery_quality: 'MEDIUM', imagery_date: '2024-05-15',
+    max_array_area_m2: 80, max_array_panels_count: 40,
+    max_sunshine_hours_per_year: 1500,
+    roof_segments: [{ pitchDegrees: 25, azimuthDegrees: 0, stats: { areaMeters2: 40 } }],
+    // image_data_uri deliberately absent
+  };
+  const html = pageSiteAnalysis(mkD(analysisNoImg), 2, 18);
+  assert('no image: still renders (non-empty)', html.length > 0);
+  assert('no image: no <img> tag', !html.includes('<img'));
+  assert('no image: no Google Solar caption', !html.includes('Google Solar'));
+  // KPI grid should still be there
+  assert('no image: KPI grid still renders', html.includes('MAX PANELS THAT FIT') || html.includes('Max panels'));
+}
+
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
 if (fail > 0) {
   console.log('\nFailures:');
