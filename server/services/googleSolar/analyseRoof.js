@@ -54,6 +54,7 @@ export function createAnalyser({
   featureEnabled = env.googleSolar.enabled,
   client,                                        // { buildingInsights({lat,lng}) } — required
   quotaTracker,                                  // { reserveQuota(endpoint) } — required
+  roofImagery    = null,                         // { fetchAndStoreRoofImage(...) } — optional (Phase 2)
   now            = () => new Date(),
   logger         = console,
 } = {}) {
@@ -247,6 +248,20 @@ export function createAnalyser({
         responded_at:  now().toISOString(),
         raw_response:  result.data,
       });
+
+      // ── Phase 2 — kick off aerial imagery fetch (dataLayers → PNG → Storage)
+      // Runs synchronously here because we're already inside the wizard's
+      // fire-and-forget wrapper. Imagery failure NEVER fails the analysis —
+      // status stays 'ok', roof_image_error_message captures the reason.
+      // Skipped entirely when roofImagery dep isn't injected (Phase 1 mode).
+      if (roofImagery) {
+        await fetchAndStoreRoofImageForRow({
+          supabase, pendingId: pending.id, enquiryId,
+          latitude, longitude,
+          quotaTracker, roofImagery, logger, now,
+        });
+      }
+
       return { status: 'ok', id: pending.id };
     },
   };
@@ -280,6 +295,58 @@ function formatImageryDate(imgDate) {
 function numOrNull(v) { return typeof v === 'number' && !Number.isNaN(v) ? v : null; }
 function intOrNull(v) { return typeof v === 'number' && !Number.isNaN(v) ? Math.round(v) : null; }
 
+// ── Phase 2 — imagery follow-up helper ──────────────────────────────────────
+// Never throws. Any failure inside is captured on the row via
+// roof_image_error_message so admin/UI can diagnose without losing the
+// primary buildingInsights analysis.
+async function fetchAndStoreRoofImageForRow({
+  supabase, pendingId, enquiryId, latitude, longitude,
+  quotaTracker, roofImagery, logger, now,
+}) {
+  // Step 1: reserve a dataLayers quota slot (separate from buildingInsights)
+  let reservation;
+  try {
+    reservation = await quotaTracker.reserveQuota('dataLayers');
+  } catch (err) {
+    logger.warn?.(`[analyseRoof] imagery quota tracker error: ${err?.message || err}`);
+    await updateRow(supabase, pendingId, {
+      roof_image_error_message: `imagery-quota-tracker-error: ${err?.message || err}`,
+    });
+    return;
+  }
+  if (!reservation.allowed) {
+    logger.warn?.(`[analyseRoof] imagery quota exhausted (${reservation.callCount}/${reservation.quota})`);
+    await updateRow(supabase, pendingId, {
+      roof_image_error_message: `imagery-quota-exhausted: ${reservation.callCount}/${reservation.quota} dataLayers this month`,
+    });
+    return;
+  }
+
+  // Step 2: run the imagery pipeline
+  let result;
+  try {
+    result = await roofImagery.fetchAndStoreRoofImage({ enquiryId, latitude, longitude });
+  } catch (err) {
+    logger.warn?.(`[analyseRoof] imagery fetcher threw: ${err?.message || err}`);
+    await updateRow(supabase, pendingId, {
+      roof_image_error_message: `imagery-fetcher-throw: ${err?.message || err}`,
+    });
+    return;
+  }
+
+  if (result.ok) {
+    await updateRow(supabase, pendingId, {
+      roof_image_storage_bucket: result.storageBucket,
+      roof_image_storage_path:   result.storagePath,
+      roof_image_fetched_at:     now().toISOString(),
+    });
+  } else {
+    await updateRow(supabase, pendingId, {
+      roof_image_error_message: `imagery-${result.reason}: ${result.error}`,
+    });
+  }
+}
+
 // ── DB helpers (small, exported for direct test if desired) ────────────────
 async function insertRow(supabase, row) {
   const { data, error } = await supabase.from('roof_analyses').insert(row).select().single();
@@ -307,10 +374,20 @@ export async function analyseRoof(args) {
     const { supabaseAdmin } = await import('../../config/supabase.js');
     const { createClient } = await import('./client.js');
     const { createQuotaTracker } = await import('./quotaTracker.js');
+    const { createRoofImageryFetcher } = await import('./roofImagery.js');
+    const { default: sharp } = await import('sharp');
+    const clientSingleton = createClient();
     _analyser = createAnalyser({
       supabase:     supabaseAdmin,
-      client:       createClient(),
+      client:       clientSingleton,
       quotaTracker: createQuotaTracker({ supabase: supabaseAdmin }),
+      // Phase 2 — imagery fetcher. Reuses the SAME client singleton so both
+      // buildingInsights and dataLayers share connection pooling + config.
+      roofImagery:  createRoofImageryFetcher({
+        client:   clientSingleton,
+        sharp,
+        supabase: supabaseAdmin,
+      }),
     });
   }
   return _analyser.analyseRoof(args);

@@ -335,6 +335,143 @@ const stubAllowedQuota = { reserveQuota: async () => ({ allowed: true, callCount
   assert('factory throws without quotaTracker', threw === true);
 }
 
+// ── Phase 2 imagery cases (Commit P) ───────────────────────────────────────
+// These verify the imagery follow-up: after buildingInsights success,
+// analyseRoof invokes roofImagery.fetchAndStoreRoofImage and stores its
+// result on the row without ever failing the parent analysis.
+
+const stubAllowedQuotaDual = {
+  reserveQuota: async (endpoint) => ({ allowed: true, callCount: 1, quota: 1000, endpoint }),
+};
+
+// ── Case IMG-1: Imagery success → row gets roof_image_* columns set ────────
+{
+  const supabase = makeFakeSupabase();
+  const NOW_IMG = () => new Date('2026-08-01T10:00:00Z');
+  const roofImagery = {
+    fetchAndStoreRoofImage: async () => ({
+      ok: true, storagePath: 'e-img/rgb.png', storageBucket: 'roof-images',
+      sizeBytes: 12345, imageryQuality: 'MEDIUM', imageryDate: { year: 2024, month: 5, day: 15 },
+    }),
+  };
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true,
+    client:       { buildingInsights: async () => ({ ok: true, source: 'live', data: okResponse }) },
+    quotaTracker: stubAllowedQuotaDual,
+    roofImagery,
+    now: NOW_IMG, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e-img', address: '1 Img St', ...AKL });
+  assert('imagery success: outer returns ok', r.status === 'ok');
+  const [row] = supabase._peek();
+  assert('imagery success: primary status still ok', row.status === 'ok');
+  assert('imagery success: roof_image_storage_path set', row.roof_image_storage_path === 'e-img/rgb.png');
+  assert('imagery success: roof_image_storage_bucket set', row.roof_image_storage_bucket === 'roof-images');
+  assert('imagery success: roof_image_fetched_at set', row.roof_image_fetched_at !== undefined);
+  assert('imagery success: no error message', row.roof_image_error_message === undefined);
+}
+
+// ── Case IMG-2: Imagery quota denied → error message set, not fatal ────────
+{
+  const supabase = makeFakeSupabase();
+  const quotaTracker = {
+    reserveQuota: async (endpoint) => {
+      if (endpoint === 'buildingInsights') return { allowed: true, callCount: 1, quota: 1000 };
+      if (endpoint === 'dataLayers') return { allowed: false, reason: 'quota_exhausted', callCount: 500, quota: 500 };
+      return { allowed: true, callCount: 1, quota: 1000 };
+    },
+  };
+  let imageryCalled = false;
+  const roofImagery = {
+    fetchAndStoreRoofImage: async () => { imageryCalled = true; return { ok: true }; },
+  };
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true,
+    client:       { buildingInsights: async () => ({ ok: true, source: 'live', data: okResponse }) },
+    quotaTracker, roofImagery, now: NOW, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e-img-q', address: 'q', ...AKL });
+  assert('imagery quota-denied: outer still ok', r.status === 'ok');
+  const [row] = supabase._peek();
+  assert('imagery quota-denied: primary status ok', row.status === 'ok');
+  assert('imagery quota-denied: roof_image_error_message set', row.roof_image_error_message?.startsWith('imagery-quota-exhausted'));
+  assert('imagery quota-denied: fetcher NOT called', imageryCalled === false);
+  assert('imagery quota-denied: no storage path set', row.roof_image_storage_path === undefined);
+}
+
+// ── Case IMG-3: Imagery fetcher returns non-ok → error message set ────────
+{
+  const supabase = makeFakeSupabase();
+  const roofImagery = {
+    fetchAndStoreRoofImage: async () => ({
+      ok: false, reason: 'tile-fetch-500', error: 'server error',
+    }),
+  };
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true,
+    client:       { buildingInsights: async () => ({ ok: true, source: 'live', data: okResponse }) },
+    quotaTracker: stubAllowedQuotaDual, roofImagery,
+    now: NOW, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e-img-f', address: 'f', ...AKL });
+  assert('imagery fail: outer still ok', r.status === 'ok');
+  const [row] = supabase._peek();
+  assert('imagery fail: primary status ok', row.status === 'ok');
+  assert('imagery fail: error message includes reason prefix', row.roof_image_error_message?.startsWith('imagery-tile-fetch-500'));
+  assert('imagery fail: error message includes original error', row.roof_image_error_message?.includes('server error'));
+}
+
+// ── Case IMG-4: Imagery fetcher throws → error message set ─────────────────
+{
+  const supabase = makeFakeSupabase();
+  const roofImagery = {
+    fetchAndStoreRoofImage: async () => { throw new Error('unexpected crash'); },
+  };
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true,
+    client:       { buildingInsights: async () => ({ ok: true, source: 'live', data: okResponse }) },
+    quotaTracker: stubAllowedQuotaDual, roofImagery,
+    now: NOW, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e-img-t', address: 't', ...AKL });
+  assert('imagery throw: outer still ok', r.status === 'ok');
+  const [row] = supabase._peek();
+  assert('imagery throw: error message includes throw prefix', row.roof_image_error_message?.startsWith('imagery-fetcher-throw'));
+  assert('imagery throw: error includes original message', row.roof_image_error_message?.includes('unexpected crash'));
+}
+
+// ── Case IMG-5: roofImagery NOT injected → imagery step skipped entirely ──
+{
+  const supabase = makeFakeSupabase();
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true,
+    client:       { buildingInsights: async () => ({ ok: true, source: 'live', data: okResponse }) },
+    quotaTracker: stubAllowedQuota,
+    // roofImagery deliberately omitted — should not throw, imagery just skipped
+    now: NOW, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e-img-none', address: 'none', ...AKL });
+  assert('no imagery dep: outer still ok (backward compat)', r.status === 'ok');
+  const [row] = supabase._peek();
+  assert('no imagery dep: no roof_image_* columns touched', row.roof_image_storage_path === undefined && row.roof_image_error_message === undefined);
+}
+
+// ── Case IMG-6: Imagery does NOT run when buildingInsights failed ─────────
+{
+  const supabase = makeFakeSupabase();
+  let imageryCalled = false;
+  const roofImagery = { fetchAndStoreRoofImage: async () => { imageryCalled = true; return { ok: true }; } };
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true,
+    client:       { buildingInsights: async () => ({ ok: false, source: 'live', status: 404, error: 'no data' }) },
+    quotaTracker: stubAllowedQuotaDual, roofImagery,
+    now: NOW, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e-img-bf', address: 'bf', ...AKL });
+  assert('BI failed → outer status failed', r.status === 'failed');
+  assert('BI failed → imagery NOT attempted', imageryCalled === false);
+}
+
 // ── Case 11: parseBuildingInsightsResponse — direct unit test ──────────────
 {
   const parsed = parseBuildingInsightsResponse(okResponse);
