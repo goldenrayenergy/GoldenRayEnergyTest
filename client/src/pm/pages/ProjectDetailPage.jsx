@@ -427,12 +427,28 @@ function RoofPotentialCard({ roofAnalysis }) {
           Auto-analysed from aerial imagery · imagery quality {quality}
         </span>
       </div>
-      <div className="grid grid-cols-4 gap-4">
-        <StatTile label="Max panels" value={panels} sub="that fit on roof" />
-        <StatTile label="Usable area" value={`${areaM2}`} sub="square metres" />
-        <StatTile label="Sunshine" value={sunshine} sub="hours per year" />
-        <StatTile label="Roof segments" value={segCount} sub="facings identified" />
-      </div>
+      {a.roof_image_signed_url ? (
+        <div className="grid grid-cols-[220px_1fr] gap-4 items-start">
+          <img
+            src={a.roof_image_signed_url}
+            alt="Aerial view of the roof"
+            className="w-full h-auto max-h-40 object-contain rounded border border-slate-200 bg-white"
+          />
+          <div className="grid grid-cols-2 gap-4">
+            <StatTile label="Max panels" value={panels} sub="that fit on roof" />
+            <StatTile label="Usable area" value={`${areaM2}`} sub="square metres" />
+            <StatTile label="Sunshine" value={sunshine} sub="hours per year" />
+            <StatTile label="Roof segments" value={segCount} sub="facings identified" />
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-4 gap-4">
+          <StatTile label="Max panels" value={panels} sub="that fit on roof" />
+          <StatTile label="Usable area" value={`${areaM2}`} sub="square metres" />
+          <StatTile label="Sunshine" value={sunshine} sub="hours per year" />
+          <StatTile label="Roof segments" value={segCount} sub="facings identified" />
+        </div>
+      )}
     </div>
   );
 }

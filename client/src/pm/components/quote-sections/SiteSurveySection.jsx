@@ -114,7 +114,23 @@ function RoofAnalysisPanel({ roofAnalysis }) {
         <StatusBadge status={roofAnalysis.status} />
       </div>
 
-      {roofAnalysis.status === 'ok' && <OkBody a={roofAnalysis} />}
+      {roofAnalysis.status === 'ok' && (
+        <>
+          {roofAnalysis.roof_image_signed_url && (
+            <div className="mb-3">
+              <img
+                src={roofAnalysis.roof_image_signed_url}
+                alt="Aerial view of the roof"
+                className="w-full max-h-64 object-contain rounded border border-slate-200 bg-white"
+              />
+              <p className="text-[10px] text-slate-500 mt-1">
+                Aerial imagery{roofAnalysis.imagery_date ? ` · ${roofAnalysis.imagery_date}` : ''} · Google Solar
+              </p>
+            </div>
+          )}
+          <OkBody a={roofAnalysis} />
+        </>
+      )}
       {roofAnalysis.status === 'pending' && (
         <p className="text-sm text-slate-600 italic">Analysis in progress — check back in a moment.</p>
       )}
