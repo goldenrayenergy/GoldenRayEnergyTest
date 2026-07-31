@@ -26,6 +26,15 @@ const API_BASE = 'https://solar.googleapis.com/v1';
 const USER_AGENT = 'GoldenrayEnergy/1.0 (goldenrayenergy.nz)';
 const DEFAULT_TIMEOUT_MS = 15_000;
 
+// Tiniest valid 1×1 transparent PNG (67 bytes). Used as the dev-fallback
+// return for fetchTileBuffer() so downstream conversion + upload can be
+// exercised locally without hitting Google. Content: fully transparent
+// pixel — decoded once at module init, reused across every fallback call.
+const MOCK_TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  'base64'
+);
+
 // ── Factory (used by tests to inject dependencies) ──────────────────────────
 export function createClient({
   apiKey = env.googleSolar.apiKey,
@@ -111,6 +120,140 @@ export function createClient({
       const text = await res.text().catch(() => '');
       return { ok: false, source: 'live', status: res.status, error: text || res.statusText };
     },
+
+    /**
+     * Call dataLayers:get. Returns URLs for raster layers (RGB, DSM, mask,
+     * annual/monthly flux, hourly shade) plus imageryQuality/imageryDate.
+     * Each URL points to a GeoTIFF that must be fetched separately via
+     * fetchTileBuffer() with the API key appended.
+     *
+     * @param {object} args
+     * @param {number} args.latitude
+     * @param {number} args.longitude
+     * @param {number} [args.radiusMeters=50]      — 50 covers a single building; larger covers surroundings
+     * @param {'IMAGERY_LAYERS'|'FULL_LAYERS'|'DSM_LAYER'|'IMAGERY_AND_ANNUAL_FLUX_LAYERS'|'IMAGERY_AND_ALL_FLUXES_LAYERS'} [args.view='IMAGERY_LAYERS']
+     * @param {'HIGH'|'MEDIUM'|'LOW'} [args.requiredQuality='LOW']  — LOW=any coverage; matches buildingInsights cascade philosophy
+     * @returns {Promise<
+     *   { ok: true,  source: 'live'|'mock', data: object }
+     * | { ok: false, source: 'live',        status: number, error: string }
+     * >}
+     */
+    async dataLayers({
+      latitude,
+      longitude,
+      radiusMeters = 50,
+      view = 'IMAGERY_LAYERS',
+      requiredQuality = 'LOW',
+    } = {}) {
+      if (typeof latitude !== 'number' || Number.isNaN(latitude)
+          || latitude < -90 || latitude > 90) {
+        throw new Error(`[googleSolar/client] dataLayers: latitude must be a number in [-90, 90]. Got: ${latitude}`);
+      }
+      if (typeof longitude !== 'number' || Number.isNaN(longitude)
+          || longitude < -180 || longitude > 180) {
+        throw new Error(`[googleSolar/client] dataLayers: longitude must be a number in [-180, 180]. Got: ${longitude}`);
+      }
+
+      if (!apiKey) {
+        console.warn(
+          '[googleSolar/client] No GOOGLE_SOLAR_API_KEY set — returning mock dataLayers response (dev-only fallback).'
+        );
+        return { ok: true, source: 'mock', data: mockDataLayersResponse({ latitude, longitude }) };
+      }
+
+      const url = new URL(`${API_BASE}/dataLayers:get`);
+      url.searchParams.set('location.latitude', String(latitude));
+      url.searchParams.set('location.longitude', String(longitude));
+      url.searchParams.set('radiusMeters', String(radiusMeters));
+      url.searchParams.set('view', view);
+      url.searchParams.set('requiredQuality', requiredQuality);
+      url.searchParams.set('key', apiKey);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      let res;
+      try {
+        res = await fetchFn(url, {
+          method: 'GET',
+          headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
+          signal: controller.signal,
+        });
+      } catch (err) {
+        return { ok: false, source: 'live', status: 0, error: `network: ${err?.message || String(err)}` };
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (res.ok) {
+        let data;
+        try { data = await res.json(); }
+        catch (err) { return { ok: false, source: 'live', status: res.status, error: `bad-json: ${err?.message || String(err)}` }; }
+        return { ok: true, source: 'live', data };
+      }
+
+      const text = await res.text().catch(() => '');
+      return { ok: false, source: 'live', status: res.status, error: text || res.statusText };
+    },
+
+    /**
+     * Fetch a raw binary tile (GeoTIFF) from a URL Google returned in
+     * dataLayers's response. Appends the API key if not already present.
+     *
+     * @param {string} url — a URL from dataLayers response (rgbUrl, dsmUrl, etc.)
+     * @returns {Promise<
+     *   { ok: true,  source: 'live'|'mock', buffer: Buffer }
+     * | { ok: false, source: 'live',        status: number, error: string }
+     * >}
+     */
+    async fetchTileBuffer(url) {
+      if (typeof url !== 'string' || !url.startsWith('http')) {
+        throw new Error(`[googleSolar/client] fetchTileBuffer: url must be an http(s) string. Got: ${url}`);
+      }
+
+      if (!apiKey) {
+        console.warn(
+          '[googleSolar/client] No GOOGLE_SOLAR_API_KEY set — returning tiny mock PNG buffer (dev-only fallback).'
+        );
+        return { ok: true, source: 'mock', buffer: MOCK_TINY_PNG };
+      }
+
+      // Google's tile URLs typically don't include the key — append it.
+      // If the URL already carries a key (future-proofing), leave alone.
+      const withKey = /[?&]key=/.test(url)
+        ? url
+        : `${url}${url.includes('?') ? '&' : '?'}key=${apiKey}`;
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      let res;
+      try {
+        res = await fetchFn(withKey, {
+          method: 'GET',
+          headers: { 'User-Agent': USER_AGENT },
+          signal: controller.signal,
+        });
+      } catch (err) {
+        return { ok: false, source: 'live', status: 0, error: `network: ${err?.message || String(err)}` };
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { ok: false, source: 'live', status: res.status, error: text || res.statusText };
+      }
+
+      let buffer;
+      try {
+        const arrayBuf = await res.arrayBuffer();
+        buffer = Buffer.from(arrayBuf);
+      } catch (err) {
+        return { ok: false, source: 'live', status: res.status, error: `read-error: ${err?.message || String(err)}` };
+      }
+      return { ok: true, source: 'live', buffer };
+    },
   };
 }
 
@@ -123,6 +266,14 @@ function getClient() {
 
 export async function buildingInsights(args) {
   return getClient().buildingInsights(args);
+}
+
+export async function dataLayers(args) {
+  return getClient().dataLayers(args);
+}
+
+export async function fetchTileBuffer(url) {
+  return getClient().fetchTileBuffer(url);
 }
 
 // Test-only reset — lets the test suite blow away the cached singleton
@@ -151,5 +302,21 @@ function mockBuildingInsights({ latitude, longitude }) {
         { pitchDegrees: 22.3, azimuthDegrees: 225.1, stats: { areaMeters2: 41.2 }, center: { latitude, longitude } },
       ],
     },
+  };
+}
+
+// Dev-fallback response for dataLayers. Matches Google's real response
+// shape. URLs are placeholders — fetchTileBuffer's dev-fallback returns
+// MOCK_TINY_PNG regardless of URL, so downstream code paths still work.
+function mockDataLayersResponse({ latitude, longitude }) {
+  const stub = 'https://solar.googleapis.com/v1/geoTiff:get?id=mock-fixture';
+  return {
+    imageryDate: { year: 2024, month: 5, day: 15 },
+    imageryProcessedDate: { year: 2024, month: 6, day: 1 },
+    dsmUrl:         `${stub}-dsm`,
+    rgbUrl:         `${stub}-rgb`,
+    maskUrl:        `${stub}-mask`,
+    annualFluxUrl:  `${stub}-flux-annual`,
+    imageryQuality: 'HIGH',
   };
 }
