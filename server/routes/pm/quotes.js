@@ -148,7 +148,18 @@ async function evaluateSpec(spec) {
     // Fall back to JS catalogue if DB query fails — engine still runs
     console.warn('evaluateSpec: catalogue load failed, falling back to JS defaults:', e.message);
   }
-  const options = catalogue ? { catalogue } : {};
+  // Bug fix — preview-validate must apply the SAME gates as /generate,
+  // otherwise the "Can ship — ready to generate" indicator lies to the
+  // rep for Stage 2 quotes with missing site-survey data. Auto-derive
+  // requireSiteSurvey from spec.stage so callers don't need to know
+  // about the gate. /generate passes requireSiteSurvey:true explicitly
+  // through its own runEngine call (quote-actions.js), which is
+  // redundant-but-safe here — belt-and-braces.
+  const requireSiteSurvey = spec.stage === 'stage_2_firm';
+  const options = {
+    ...(catalogue ? { catalogue } : {}),
+    requireSiteSurvey,
+  };
   const engine = await runEngine(spec, options);
   if (!engine.ok) return { ok: false, engine };
   if (engine.is_multi_tier) {
