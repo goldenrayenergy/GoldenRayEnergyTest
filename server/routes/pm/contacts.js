@@ -180,6 +180,8 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
 // intentionally EXCLUDED from the projection — it's the full Google JSON
 // blob (potentially 100KB+) and the UI only needs the parsed summary.
 // ────────────────────────────────────────────────────────────────────────────
+const ROOF_IMAGE_SIGNED_URL_TTL_SEC = 60 * 60;   // 1 hour — enough for typical UI session
+
 router.get('/:id/latest-roof-analysis', async (req, res) => {
   try {
     if (!sb()) return res.status(503).json({ error: 'Database not configured.' });
@@ -192,7 +194,9 @@ router.get('/:id/latest-roof-analysis', async (req, res) => {
         imagery_quality, imagery_date,
         max_array_area_m2, max_array_panels_count,
         max_sunshine_hours_per_year, carbon_offset_factor_kg_per_kwh,
-        roof_segments, error_message, created_at
+        roof_segments, error_message, created_at,
+        roof_image_storage_bucket, roof_image_storage_path,
+        roof_image_fetched_at, roof_image_error_message
       `)
       .eq('contact_id', req.params.id)
       .order('created_at', { ascending: false })
@@ -201,7 +205,25 @@ router.get('/:id/latest-roof-analysis', async (req, res) => {
 
     if (error) throw error;
     if (!data) return res.status(204).end();
-    res.json(data);
+
+    // Phase 2 — if a roof image is stored, mint a short-lived signed URL
+    // so the UI can render a thumbnail. Failure to sign is non-fatal:
+    // response goes out without the URL (UI degrades to text-only), and
+    // an error is logged for diagnosis.
+    let roofImageSignedUrl = null;
+    if (data.roof_image_storage_bucket && data.roof_image_storage_path) {
+      try {
+        const { data: signed, error: signErr } = await sb().storage
+          .from(data.roof_image_storage_bucket)
+          .createSignedUrl(data.roof_image_storage_path, ROOF_IMAGE_SIGNED_URL_TTL_SEC);
+        if (signErr) throw signErr;
+        roofImageSignedUrl = signed?.signedUrl || null;
+      } catch (signErr) {
+        console.warn('[pm/contacts/latest-roof-analysis] signed URL failed (non-fatal):', signErr?.message || signErr);
+      }
+    }
+
+    res.json({ ...data, roof_image_signed_url: roofImageSignedUrl });
   } catch (e) {
     console.error('[pm/contacts/latest-roof-analysis] failed:', e);
     res.status(500).json({ error: e.message });
