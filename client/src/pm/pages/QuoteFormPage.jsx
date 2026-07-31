@@ -124,6 +124,7 @@ export default function QuoteFormPage() {
   // engine-pick line ("Engine: ~17 panels (8.0 kWp ÷ 475W)"). Null when no
   // analysis on file — hints fall back to range + typical band only.
   const [billRec, setBillRec] = useState(null);
+  const [roofAnalysis, setRoofAnalysis] = useState(null);
 
   // Option 4c (b) — fetch tier strip settings once on mount
   useEffect(() => {
@@ -161,6 +162,21 @@ export default function QuoteFormPage() {
       .then(r => {
         if (cancelled || !r?.data) return;
         setBillRec(r.data.system_recommendation || null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [quote?.contact_id]);
+
+  // Google Solar roof analysis — populated by the wizard-submit pipeline.
+  // Silent on 204 (no analysis on file) and on error (SiteSurveySection just
+  // omits the panel when roofAnalysis is null).
+  useEffect(() => {
+    if (!quote?.contact_id) return;
+    let cancelled = false;
+    pmContactsAPI.latestRoofAnalysis(quote.contact_id)
+      .then(r => {
+        if (cancelled || !r?.data) return;
+        setRoofAnalysis(r.data);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -563,6 +579,7 @@ export default function QuoteFormPage() {
               errors={errorMap}
               engineSnapshot={previewResult || saveResult}
               billRecommendation={billRec}
+              roofAnalysis={roofAnalysis}
               costSnapshot={(() => {
                 const eng = (previewResult || saveResult)?.engine;
                 if (!eng) return null;

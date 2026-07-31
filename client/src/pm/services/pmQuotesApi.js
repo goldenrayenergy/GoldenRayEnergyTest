@@ -12,6 +12,13 @@ export const pmContactsAPI = {
   // or 204 with no body when the contact has no analyses on file.
   latestBillAnalysis: (contactId) =>
     api.get(`/pm/contacts/${contactId}/latest-bill-analysis`, { validateStatus: s => s === 200 || s === 204 }),
+
+  // Google Solar roof analysis. Populated by the pipeline fired on wizard
+  // submit (services/googleSolar/analyseRoof.js). Returns 200 + the row
+  // regardless of status (ok/pending/failed/skipped_quota/skipped_flag —
+  // UI decides how to display each), or 204 when no analysis on file.
+  latestRoofAnalysis: (contactId) =>
+    api.get(`/pm/contacts/${contactId}/latest-roof-analysis`, { validateStatus: s => s === 200 || s === 204 }),
 };
 
 // MVP1_003 — live catalogue dropdown options sourced from Supabase products
