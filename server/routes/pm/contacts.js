@@ -162,6 +162,52 @@ router.get('/:id/latest-bill-analysis', async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// GET /:id/latest-roof-analysis
+//
+// Returns the most recent roof_analyses row for a contact — populated by the
+// Google Solar API pipeline that fires on wizard submit (see
+// server/services/googleSolar/analyseRoof.js). Used by the quote-editor
+// Site Survey tab (SiteSurveySection.jsx) to display auto-analysis alongside
+// the manual site-survey inputs.
+//
+// Returns:
+//   200 + { id, status, imagery_quality, roof_segments, ... }  on any status
+//   204                                                        no analysis on file
+//
+// The row is returned regardless of `status` so the UI can show every
+// state (ok, pending, failed, skipped_quota, skipped_flag). raw_response is
+// intentionally EXCLUDED from the projection — it's the full Google JSON
+// blob (potentially 100KB+) and the UI only needs the parsed summary.
+// ────────────────────────────────────────────────────────────────────────────
+router.get('/:id/latest-roof-analysis', async (req, res) => {
+  try {
+    if (!sb()) return res.status(503).json({ error: 'Database not configured.' });
+
+    const { data, error } = await sb()
+      .from('roof_analyses')
+      .select(`
+        id, enquiry_id, contact_id, project_id, status, api_version,
+        requested_at, responded_at, address_used, latitude, longitude,
+        imagery_quality, imagery_date,
+        max_array_area_m2, max_array_panels_count,
+        max_sunshine_hours_per_year, carbon_offset_factor_kg_per_kwh,
+        roof_segments, error_message, created_at
+      `)
+      .eq('contact_id', req.params.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) return res.status(204).end();
+    res.json(data);
+  } catch (e) {
+    console.error('[pm/contacts/latest-roof-analysis] failed:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Derive per-customer buyback rate from per-bill solar-export totals.
 // Returns null when the customer has no solar export on file (the normal case),
 // so the spec falls through to the engine default.
