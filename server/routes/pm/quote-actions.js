@@ -149,6 +149,31 @@ router.post('/:id/generate',
       }
     }
 
+    // Google Solar roof analysis — populated by the wizard-submit pipeline
+    // (services/googleSolar/analyseRoof.js). Optional; siteAnalysis PDF page
+    // renders only when status='ok'. raw_response excluded from projection
+    // — proposal only needs the parsed summary + segments.
+    let roofAnalysis = null;
+    if (quote.contact_id) {
+      try {
+        const { data } = await sb().from('roof_analyses')
+          .select(`
+            id, status, address_used, latitude, longitude,
+            imagery_quality, imagery_date,
+            max_array_area_m2, max_array_panels_count,
+            max_sunshine_hours_per_year, carbon_offset_factor_kg_per_kwh,
+            roof_segments, created_at
+          `)
+          .eq('contact_id', quote.contact_id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        roofAnalysis = data || null;
+      } catch (e) {
+        console.warn('quote-actions /generate: roof_analysis load failed:', e.message);
+      }
+    }
+
     // ── Render PDFs. renderProposalPdfs auto-routes on engine.is_multi_tier.
     //    Catalogue is threaded through so any DB-only product field
     //    (image_url, datasheet_url, etc.) surfaces in the PDF — without
@@ -164,6 +189,7 @@ router.post('/:id/generate',
         quote_date: new Date().toISOString(),
         catalogue: engineOptions.catalogue,
         billAnalysis,
+        roofAnalysis,
       },
     });
 

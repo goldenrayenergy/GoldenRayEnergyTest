@@ -22,6 +22,7 @@ import { PROPOSAL_CSS } from './_shared.js';
 import { buildProposalData, buildMultiTierProposalData } from './proposalData.js';
 
 import { pageCover } from './pages/cover.js';
+import { pageSiteAnalysis } from './pages/siteAnalysis.js';
 import { pageSystemSummary } from './pages/systemSummary.js';
 import { pageComponents, COMPONENTS_PAGE_CSS } from './pages/components.js';
 import { pageMonthlyProfile } from './pages/monthlyProfile.js';
@@ -60,6 +61,7 @@ export const TEMPLATE_VERSION = '1.5.0';
 // `typical_days` page that visualises hourly behaviour.
 const SINGLE_TIER_PAGES = [
   { id: 'cover',         label: 'Cover & welcome',                   build: pageCover },
+  { id: 'site_analysis', label: 'Your roof assessment',              build: pageSiteAnalysis },
   { id: 'system',        label: 'System summary',                    build: pageSystemSummary },
   { id: 'components',    label: 'Your solution — components',        build: pageComponents },
   { id: 'premium_hw',    label: 'Premium hardware — why we picked it', build: pagePremiumHardware },
@@ -82,6 +84,7 @@ const SINGLE_TIER_PAGES = [
 // Multi-tier inserts the comparison page between cover and system summary.
 const MULTI_TIER_PAGES = [
   { id: 'cover',         label: 'Cover & welcome',                   build: pageCover },
+  { id: 'site_analysis', label: 'Your roof assessment',              build: pageSiteAnalysis },
   { id: 'tiers',         label: 'Three packages at a glance',        build: pageThreeTierComparison },
   { id: 'system',        label: 'System summary',                    build: pageSystemSummary },
   { id: 'components',    label: 'Your solution — components',        build: pageComponents },
