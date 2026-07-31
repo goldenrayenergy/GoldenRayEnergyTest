@@ -170,3 +170,24 @@ export function _resetFetcherForTests() {
 
 // Export constants so tests + downstream can reference (e.g. for signed URLs)
 export const ROOF_IMAGES_BUCKET = DEFAULT_BUCKET;
+
+// ── One-off bucket setup helper ────────────────────────────────────────────
+// Mirrors ensureQuotesBucket() in services/pm/quoteStorageService.js. Not
+// called at server boot (matches existing pattern) — invoke via the
+// scripts/ensure-roof-images-bucket.js one-off script OR create the bucket
+// manually in Supabase Studio (as private bucket named 'roof-images').
+// Backend uses service_role which has BYPASSRLS, so no storage policies
+// need to be added — signed URLs (Commit Q) handle browser-side access.
+export async function ensureRoofImagesBucket({ supabase, bucket = DEFAULT_BUCKET } = {}) {
+  if (!supabase) throw new Error('[roofImagery] ensureRoofImagesBucket: supabase required');
+  const { data: buckets, error: listErr } = await supabase.storage.listBuckets();
+  if (listErr) throw new Error(`listBuckets failed: ${listErr.message}`);
+  if (buckets?.some(b => b.name === bucket)) {
+    return { created: false, bucket };
+  }
+  const { error: createErr } = await supabase.storage.createBucket(bucket, { public: false });
+  if (createErr && !/already exists/i.test(createErr.message)) {
+    throw new Error(`createBucket failed: ${createErr.message}`);
+  }
+  return { created: true, bucket };
+}
