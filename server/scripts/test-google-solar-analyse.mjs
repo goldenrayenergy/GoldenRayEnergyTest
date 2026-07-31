@@ -154,17 +154,20 @@ const stubAllowedQuota = { reserveQuota: async () => ({ allowed: true, callCount
   assert('client NOT called', clientCalls === 0);
 }
 
-// ── Case 5: Happy path — full analysis stored ok with parsed fields ────────
+// ── Case 5: Happy path — HIGH succeeds on first attempt (single call) ──────
 {
   const supabase = makeFakeSupabase();
+  let clientCalls = [];
   const analyser = createAnalyser({
     supabase, featureEnabled: true,
-    client:       { buildingInsights: async () => ({ ok: true, source: 'live', data: okResponse }) },
+    client:       { buildingInsights: async (args) => { clientCalls.push(args); return { ok: true, source: 'live', data: okResponse }; } },
     quotaTracker: stubAllowedQuota,
     now: NOW, logger: silentLogger,
   });
   const r = await analyser.analyseRoof({ enquiryId: 'e5', address: '5 Happy Path Cres', contactId: 'c5', ...AKL });
   assert('happy path returns ok', r.status === 'ok');
+  assert('happy path — HIGH tried first, no retry needed', clientCalls.length === 1);
+  assert('happy path — HIGH quality requested', clientCalls[0].requiredQuality === 'HIGH');
   const [row] = supabase._peek();
   assert('row status=ok', row.status === 'ok');
   assert('row imagery_quality=HIGH', row.imagery_quality === 'HIGH');
@@ -180,33 +183,109 @@ const stubAllowedQuota = { reserveQuota: async () => ({ allowed: true, callCount
   assert('responded_at set', row.responded_at !== undefined);
 }
 
-// ── Case 6: Client 404 → failed with no-building-at-location ────────────────
+// ── Case 5b: Cascade succeeds at MEDIUM (HIGH 404 → MEDIUM ok) ────────────
 {
   const supabase = makeFakeSupabase();
+  const clientCalls = [];
+  const client = {
+    buildingInsights: async (args) => {
+      clientCalls.push(args);
+      if (args.requiredQuality === 'HIGH')   return { ok: false, source: 'live', status: 404, error: 'not found' };
+      if (args.requiredQuality === 'MEDIUM') return { ok: true,  source: 'live', data: { ...okResponse, imageryQuality: 'MEDIUM' } };
+      return { ok: false, source: 'live', status: 404, error: 'should not reach LOW' };
+    },
+  };
   const analyser = createAnalyser({
-    supabase, featureEnabled: true,
-    client:       { buildingInsights: async () => ({ ok: false, source: 'live', status: 404, error: 'No building found.' }) },
-    quotaTracker: stubAllowedQuota,
+    supabase, featureEnabled: true, client, quotaTracker: stubAllowedQuota,
+    now: NOW, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e5b', address: '5b Suburb Rd', ...AKL });
+  assert('cascade MEDIUM: status=ok', r.status === 'ok');
+  assert('cascade MEDIUM: 2 client calls', clientCalls.length === 2);
+  assert('cascade MEDIUM: 1st call was HIGH', clientCalls[0].requiredQuality === 'HIGH');
+  assert('cascade MEDIUM: 2nd call was MEDIUM', clientCalls[1].requiredQuality === 'MEDIUM');
+  const [row] = supabase._peek();
+  assert('cascade MEDIUM: row imagery_quality=MEDIUM (from Google response)', row.imagery_quality === 'MEDIUM');
+}
+
+// ── Case 5c: Cascade succeeds at LOW (HIGH 404 → MEDIUM 404 → LOW ok) ─────
+{
+  const supabase = makeFakeSupabase();
+  const clientCalls = [];
+  const client = {
+    buildingInsights: async (args) => {
+      clientCalls.push(args);
+      if (args.requiredQuality === 'LOW') return { ok: true, source: 'live', data: { ...okResponse, imageryQuality: 'LOW' } };
+      return { ok: false, source: 'live', status: 404, error: 'not found' };
+    },
+  };
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true, client, quotaTracker: stubAllowedQuota,
+    now: NOW, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e5c', address: '5c Rural Rd', ...AKL });
+  assert('cascade LOW: status=ok', r.status === 'ok');
+  assert('cascade LOW: 3 client calls', clientCalls.length === 3);
+  assert('cascade LOW: tiers tried HIGH→MEDIUM→LOW',
+    clientCalls[0].requiredQuality === 'HIGH' &&
+    clientCalls[1].requiredQuality === 'MEDIUM' &&
+    clientCalls[2].requiredQuality === 'LOW');
+}
+
+// ── Case 6: All 3 tiers 404 → failed with no-coverage-at-any-quality ──────
+{
+  const supabase = makeFakeSupabase();
+  const clientCalls = [];
+  const client = { buildingInsights: async (args) => { clientCalls.push(args); return { ok: false, source: 'live', status: 404, error: 'No building found.' }; } };
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true, client, quotaTracker: stubAllowedQuota,
     now: NOW, logger: silentLogger,
   });
   const r = await analyser.analyseRoof({ enquiryId: 'e6', address: '6 Middle Of Nowhere', ...AKL });
-  assert('404 returns failed', r.status === 'failed');
+  assert('all-404 cascade returns failed', r.status === 'failed');
+  assert('all-404 cascade tried all 3 tiers', clientCalls.length === 3);
   const [row] = supabase._peek();
-  assert('error prefixed no-building-at-location', row.error_message?.startsWith('no-building-at-location'));
+  assert('error prefixed no-coverage-at-any-quality', row.error_message?.startsWith('no-coverage-at-any-quality'));
+  assert('error mentions attempted tiers', row.error_message?.includes('HIGH→MEDIUM→LOW'));
   assert('lat/lng preserved on failure', row.latitude === -36.85);
 }
 
-// ── Case 7: Client 500 → failed with api-500 prefix ────────────────────────
+// ── Case 6b: Quota exhausts mid-cascade → stops early ─────────────────────
 {
   const supabase = makeFakeSupabase();
+  const clientCalls = [];
+  const client = { buildingInsights: async (args) => { clientCalls.push(args); return { ok: false, source: 'live', status: 404, error: 'not found' }; } };
+  let quotaCall = 0;
+  const quotaTracker = {
+    reserveQuota: async () => {
+      quotaCall++;
+      // 1st + 2nd allowed, 3rd denied — cascade should stop before LOW attempt
+      if (quotaCall <= 2) return { allowed: true, callCount: quotaCall, quota: 1000 };
+      return { allowed: false, reason: 'quota_exhausted', callCount: 1000, quota: 1000 };
+    },
+  };
+  const analyser = createAnalyser({
+    supabase, featureEnabled: true, client, quotaTracker,
+    now: NOW, logger: silentLogger,
+  });
+  const r = await analyser.analyseRoof({ enquiryId: 'e6b', address: '6b Rural Rd', ...AKL });
+  assert('cascade+quota-exhaust: returns failed (not skipped_quota since first call succeeded)', r.status === 'failed');
+  assert('cascade+quota-exhaust: only 2 client calls (LOW blocked by quota)', clientCalls.length === 2);
+}
+
+// ── Case 7: Client 500 on HIGH → failed, no retry (non-404 is terminal) ───
+{
+  const supabase = makeFakeSupabase();
+  const clientCalls = [];
   const analyser = createAnalyser({
     supabase, featureEnabled: true,
-    client:       { buildingInsights: async () => ({ ok: false, source: 'live', status: 500, error: 'Server error' }) },
+    client:       { buildingInsights: async (args) => { clientCalls.push(args); return { ok: false, source: 'live', status: 500, error: 'Server error' }; } },
     quotaTracker: stubAllowedQuota,
     now: NOW, logger: silentLogger,
   });
   const r = await analyser.analyseRoof({ enquiryId: 'e7', address: '7 Server Down St', ...AKL });
   assert('5xx returns failed', r.status === 'failed');
+  assert('5xx no retry (single call)', clientCalls.length === 1);
   const [row] = supabase._peek();
   assert('error prefixed api-500', row.error_message?.startsWith('api-500'));
 }

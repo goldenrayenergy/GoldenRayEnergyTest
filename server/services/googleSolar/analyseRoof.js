@@ -36,6 +36,18 @@ import env from '../../config/env.js';
 
 const ENDPOINT = 'buildingInsights';
 
+// Google Solar API returns 404 not just for "no building here" but also for
+// "no imagery AT THE REQUESTED QUALITY". Google's NZ coverage is mostly
+// MEDIUM/LOW tier; HIGH-only requests get 404 even for valid Auckland CBD
+// addresses. Cascade from strictest to loosest so we get the best available
+// imagery in a single logical operation.
+//
+// Each attempt reserves its own quota slot — cascade is capped at 3× cost
+// per address, but stops early on success (typical urban address = 1 call,
+// suburban ≈ 1-2, rural = 3). Cascade also stops on non-404 errors (5xx,
+// network) and on quota exhaustion mid-cascade.
+const QUALITY_CASCADE = ['HIGH', 'MEDIUM', 'LOW'];
+
 // ── Factory (used by tests) ─────────────────────────────────────────────────
 export function createAnalyser({
   supabase,                                      // required
@@ -158,15 +170,54 @@ export function createAnalyser({
         requested_at:  now().toISOString(),
       });
 
-      let result;
-      try {
-        result = await client.buildingInsights({ latitude, longitude });
-      } catch (err) {
-        // Client itself throws only on validation errors — network errors
-        // return ok:false. This branch handles the unexpected exceptions.
+      // ── Quality cascade: HIGH → MEDIUM → LOW ───────────────────────────
+      // First iteration uses the quota slot already reserved above.
+      // Subsequent iterations reserve fresh slots (respects Q6a cap).
+      // Cascade stops on success, non-404 error, or quota exhaustion.
+      let result = null;
+      const attempted = [];
+
+      for (let i = 0; i < QUALITY_CASCADE.length; i++) {
+        const quality = QUALITY_CASCADE[i];
+
+        if (i > 0) {
+          let retry;
+          try {
+            retry = await quotaTracker.reserveQuota(ENDPOINT);
+          } catch (err) {
+            logger.warn?.(`[analyseRoof] quota reservation failed during ${quality} cascade retry: ${err.message}`);
+            break;
+          }
+          if (!retry.allowed) {
+            logger.warn?.(`[analyseRoof] quota exhausted during ${quality} cascade retry (${retry.callCount}/${retry.quota})`);
+            break;
+          }
+        }
+
+        attempted.push(quality);
+        try {
+          result = await client.buildingInsights({ latitude, longitude, requiredQuality: quality });
+        } catch (err) {
+          // Client itself throws only on validation errors — network errors
+          // return ok:false. This branch handles the unexpected exceptions.
+          await updateRow(supabase, pending.id, {
+            status:        'failed',
+            error_message: `client-exception (attempted ${attempted.join('→')}): ${err.message}`,
+            responded_at:  now().toISOString(),
+          });
+          return { status: 'failed', id: pending.id };
+        }
+
+        // Success or non-404 error → stop cascade. 404 → try next tier.
+        if (result.ok || result.status !== 404) break;
+      }
+
+      // Guard for edge case: cascade broke on i=0 without setting result.
+      // Should not happen — the first iteration always sets result.
+      if (!result) {
         await updateRow(supabase, pending.id, {
           status:        'failed',
-          error_message: `client-exception: ${err.message}`,
+          error_message: `cascade-no-attempt (attempted ${attempted.join('→') || 'none'})`,
           responded_at:  now().toISOString(),
         });
         return { status: 'failed', id: pending.id };
@@ -174,17 +225,20 @@ export function createAnalyser({
 
       if (!result.ok) {
         const isNoBuilding = result.status === 404;
+        const attemptedNote = attempted.length > 0 ? ` (attempted ${attempted.join('→')})` : '';
         await updateRow(supabase, pending.id, {
           status:        'failed',
           error_message: isNoBuilding
-            ? `no-building-at-location: ${result.error}`
-            : `api-${result.status}: ${result.error}`,
+            ? `no-coverage-at-any-quality${attemptedNote}: ${result.error}`
+            : `api-${result.status}${attemptedNote}: ${result.error}`,
           responded_at:  now().toISOString(),
         });
         return { status: 'failed', id: pending.id };
       }
 
-      // Success — parse + write.
+      // Success — parse + write. imagery_quality from Google's response tells
+      // us what tier we actually got (may differ from what we requested if
+      // Google returned better than the minimum floor).
       const parsed = parseBuildingInsightsResponse(result.data);
       await updateRow(supabase, pending.id, {
         ...parsed,
