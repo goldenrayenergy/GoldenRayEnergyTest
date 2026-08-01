@@ -45,7 +45,10 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
 {
   console.log('\n▸ pmDesignsApi.js exports');
   assert('exports pmDesignsAPI',       /export const pmDesignsAPI/.test(svc));
-  assert('exports emptyDesignState',   /export function emptyDesignState/.test(svc));
+  // Phase 3b moved emptyDesignState into utils/designState.js — pmDesignsApi
+  // now re-exports it for backwards compatibility with existing callers.
+  assert('re-exports emptyDesignState from utils/designState',
+    /export\s*\{[^}]*emptyDesignState[^}]*\}\s+from\s+['"]\.\.\/utils\/designState['"]/.test(svc));
   assert('imports the shared api',     /import api from ['"]\.\.\/\.\.\/services\/api['"]/.test(svc));
 
   assert('pmDesignsAPI has get()',     /get:\s*\(\s*quoteId\s*\)/.test(svc));
@@ -60,13 +63,35 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /validateStatus:\s*s\s*=>\s*s\s*===\s*200[\s\S]*204[\s\S]*404/.test(svc));
 }
 
-// ── emptyDesignState shape (source-level check) ───────────────────────────
+// ── emptyDesignState + migration shape (Phase 3b — designState.js) ──────
 {
-  console.log('\n▸ emptyDesignState() shape');
-  assert('returns view.zoom = 1.0',   /view:\s*\{\s*zoom:\s*1\.0/.test(svc));
-  assert('returns view.panX = 0',     /panX:\s*0/.test(svc));
-  assert('returns view.panY = 0',     /panY:\s*0/.test(svc));
-  assert('returns canvas.serialized = null', /canvas:\s*\{\s*serialized:\s*null\s*\}/.test(svc));
+  console.log('\n▸ designState.js — Phase 3b schema');
+  const dsPath = path.join(REPO_ROOT, 'client/src/pm/utils/designState.js');
+  const ds = fs.readFileSync(dsPath, 'utf8');
+
+  assert('SCHEMA_VERSION = 2',                       /SCHEMA_VERSION = 2/.test(ds));
+  assert('exports emptyDesignState',                 /export function emptyDesignState/.test(ds));
+  assert('exports migrateDesignState',               /export function migrateDesignState/.test(ds));
+  assert('emptyState includes view identity',        /view:\s*\{\s*zoom:\s*1\.0/.test(ds));
+  assert('emptyState includes roof.faces=[]',        /roof:\s*\{\s*faces:\s*\[\]/.test(ds));
+  assert('emptyState includes panels=[]',            /panels:\s*\[\]/.test(ds));
+  assert('emptyState includes arrays=[]',            /arrays:\s*\[\]/.test(ds));
+
+  assert('has makeRoofFace helper',                  /export function makeRoofFace/.test(ds));
+  assert('has makePanel helper',                     /export function makePanel/.test(ds));
+  assert('has makeObstruction helper',               /export function makeObstruction/.test(ds));
+  assert('has makeArray helper',                     /export function makeArray/.test(ds));
+
+  assert('removeFace cascades to panels',
+    /export function removeFace[\s\S]{0,600}state\.panels\.filter/.test(ds),
+    'removing a face must remove its panels (referential integrity)');
+  assert('removePanel prunes empty arrays',
+    /export function removePanel[\s\S]{0,600}filter\s*\(\s*a\s*=>\s*a\.panelIds\.length\s*>\s*0\s*\)/.test(ds));
+
+  // DesignPage should call migrateDesignState when loading existing designs
+  assert('DesignPage runs migrateDesignState on load',
+    /migrateDesignState\(dResp\.data\.state\)/.test(page),
+    'saved states from Phase 3a (schemaVersion < 2) must be migrated on load');
 }
 
 // ── Backend route registration matches client URL ─────────────────────────

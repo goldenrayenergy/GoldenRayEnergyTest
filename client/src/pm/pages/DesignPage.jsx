@@ -26,7 +26,7 @@ import { Link, useParams } from 'react-router-dom';
 import * as fabric from 'fabric';
 import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle } from 'lucide-react';
 import { pmQuotesAPI, pmContactsAPI } from '../services/pmQuotesApi';
-import { pmDesignsAPI, emptyDesignState } from '../services/pmDesignsApi';
+import { pmDesignsAPI, emptyDesignState, migrateDesignState } from '../services/pmDesignsApi';
 import { makeLatLngToPixel } from '../utils/roofOverlay';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
 // Phase 3b will re-import them when we render segment polygons for panel placement.
@@ -144,14 +144,17 @@ export default function DesignPage() {
         }
 
         // 3. Load existing design (may be 204 if never designed).
+        // migrateDesignState fills in Phase 3b's roof/panels/arrays sections
+        // if the saved state predates Migration 041 (schemaVersion < 2), so
+        // downstream code can always assume the current shape.
         const dResp = await pmDesignsAPI.get(quoteId);
         if (cancelled) return;
         if (dResp.status === 200) {
-          stateRef.current = dResp.data.state;
+          stateRef.current = migrateDesignState(dResp.data.state);
           versionRef.current = dResp.data.version;
           setLastSavedAt(dResp.data.updated_at);
         } else {
-          // No design yet — synthesise a blank v0 for the client
+          // No design yet — synthesise a blank Phase 3b state for the client
           stateRef.current = emptyDesignState();
           versionRef.current = 0;
         }

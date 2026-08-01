@@ -53,12 +53,8 @@ export const pmDesignsAPI = {
 };
 
 // ── Local helpers (no HTTP) ────────────────────────────────────────────────
-
-// A blank Phase 3a state — used when GET returns 204 (no design yet).
-// Kept in the service file so backend + client agree on the "empty" shape.
-export function emptyDesignState() {
-  return {
-    view: { zoom: 1.0, panX: 0, panY: 0 },
-    canvas: { serialized: null },
-  };
-}
+// The design state schema + manipulation helpers live in ../utils/designState.
+// We re-export emptyDesignState here so existing imports keep working. Any
+// caller that needs the full schema (roof faces, panels, arrays, migrations)
+// should import directly from ../utils/designState.
+export { emptyDesignState, migrateDesignState, SCHEMA_VERSION } from '../utils/designState';
