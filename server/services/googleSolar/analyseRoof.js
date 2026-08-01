@@ -254,10 +254,17 @@ export function createAnalyser({
       // fire-and-forget wrapper. Imagery failure NEVER fails the analysis —
       // status stays 'ok', roof_image_error_message captures the reason.
       // Skipped entirely when roofImagery dep isn't injected (Phase 1 mode).
+      //
+      // Migration 040: compute an OPTIMAL tile radius from the just-parsed
+      // segment bboxes. For a typical NZ house this drops the tile from
+      // 100 × 100 m to ~30 × 30 m — the roof fills the image instead of
+      // being a small speck in a sea of neighbours' rooftops.
       if (roofImagery) {
+        const optimalRadius = computeOptimalTileRadius(parsed.roof_segments);
         await fetchAndStoreRoofImageForRow({
           supabase, pendingId: pending.id, enquiryId,
           latitude, longitude,
+          radiusMeters: optimalRadius,
           quotaTracker, roofImagery, logger, now,
         });
       }
@@ -295,12 +302,64 @@ function formatImageryDate(imgDate) {
 function numOrNull(v) { return typeof v === 'number' && !Number.isNaN(v) ? v : null; }
 function intOrNull(v) { return typeof v === 'number' && !Number.isNaN(v) ? Math.round(v) : null; }
 
+// ── Optimal-radius helper (Migration 040) ──────────────────────────────────
+// Compute a Google-Solar-tile radius (in metres) that tightly frames the
+// customer's roof plus a little context. Uses the union of the parsed
+// segment bounding boxes to determine the building's on-ground extent.
+//
+// Returns a whole-metre value in [MIN_TILE_RADIUS_M, FALLBACK_TILE_RADIUS_M].
+// Fallback is used when segments are missing/malformed OR the building is
+// weirdly big — we don't want to accidentally request tiles bigger than the
+// old default.
+//
+// Exported so tests can hit it in isolation.
+const MIN_TILE_RADIUS_M     = 12;   // Google Solar minimum-supported radius
+const FALLBACK_TILE_RADIUS_M = 50;  // matches historical hardcoded value
+const RADIUS_PADDING_M      = 6;    // extra metres beyond the roof bbox
+
+export function computeOptimalTileRadius(segments) {
+  if (!Array.isArray(segments) || segments.length === 0) return FALLBACK_TILE_RADIUS_M;
+
+  // Union bbox of all segments in lat/lng
+  let minLat = Infinity, maxLat = -Infinity;
+  let minLng = Infinity, maxLng = -Infinity;
+  let sumLat = 0, count = 0;
+  for (const seg of segments) {
+    const bbox = seg?.boundingBox;
+    if (!bbox?.ne || !bbox?.sw) continue;
+    if (typeof bbox.ne.latitude !== 'number' || typeof bbox.sw.latitude !== 'number') continue;
+    if (typeof bbox.ne.longitude !== 'number' || typeof bbox.sw.longitude !== 'number') continue;
+    minLat = Math.min(minLat, bbox.sw.latitude);
+    maxLat = Math.max(maxLat, bbox.ne.latitude);
+    minLng = Math.min(minLng, bbox.sw.longitude);
+    maxLng = Math.max(maxLng, bbox.ne.longitude);
+    sumLat += (bbox.ne.latitude + bbox.sw.latitude) / 2;
+    count++;
+  }
+  if (!Number.isFinite(minLat) || count === 0) return FALLBACK_TILE_RADIUS_M;
+
+  // Convert lat/lng deltas to metres. Flat-earth approximation is fine at
+  // building scale (<50m).
+  const midLat = sumLat / count;
+  const metersPerDegLat = 111320;
+  const metersPerDegLng = 111320 * Math.cos(midLat * Math.PI / 180);
+  const bboxMetersN = (maxLat - minLat) * metersPerDegLat;
+  const bboxMetersE = (maxLng - minLng) * metersPerDegLng;
+  const halfMaxDim = Math.max(bboxMetersN, bboxMetersE) / 2;
+
+  const raw = Math.ceil(halfMaxDim + RADIUS_PADDING_M);
+  // Clamp: never smaller than Google's minimum, never larger than fallback
+  // (biggest building we'd ever see fits in 100m tile).
+  return Math.max(MIN_TILE_RADIUS_M, Math.min(FALLBACK_TILE_RADIUS_M, raw));
+}
+
 // ── Phase 2 — imagery follow-up helper ──────────────────────────────────────
 // Never throws. Any failure inside is captured on the row via
 // roof_image_error_message so admin/UI can diagnose without losing the
 // primary buildingInsights analysis.
 async function fetchAndStoreRoofImageForRow({
   supabase, pendingId, enquiryId, latitude, longitude,
+  radiusMeters,
   quotaTracker, roofImagery, logger, now,
 }) {
   // Step 1: reserve a dataLayers quota slot (separate from buildingInsights)
@@ -325,7 +384,9 @@ async function fetchAndStoreRoofImageForRow({
   // Step 2: run the imagery pipeline
   let result;
   try {
-    result = await roofImagery.fetchAndStoreRoofImage({ enquiryId, latitude, longitude });
+    result = await roofImagery.fetchAndStoreRoofImage({
+      enquiryId, latitude, longitude, radiusMeters,
+    });
   } catch (err) {
     logger.warn?.(`[analyseRoof] imagery fetcher threw: ${err?.message || err}`);
     await updateRow(supabase, pendingId, {
@@ -339,6 +400,8 @@ async function fetchAndStoreRoofImageForRow({
       roof_image_storage_bucket: result.storageBucket,
       roof_image_storage_path:   result.storagePath,
       roof_image_fetched_at:     now().toISOString(),
+      tile_radius_m:             result.radiusMeters,   // Migration 040 — record actual radius used
+      imagery_source:            result.source || 'google_solar',  // Migration 041 — which provider supplied the tile
     });
   } else {
     await updateRow(supabase, pendingId, {
@@ -371,23 +434,46 @@ async function updateRow(supabase, id, patch) {
 let _analyser = null;
 export async function analyseRoof(args) {
   if (!_analyser) {
+    const { default: env } = await import('../../config/env.js');
     const { supabaseAdmin } = await import('../../config/supabase.js');
     const { createClient } = await import('./client.js');
     const { createQuotaTracker } = await import('./quotaTracker.js');
     const { createRoofImageryFetcher } = await import('./roofImagery.js');
+    const { createAerialImageryOrchestrator } = await import('../aerialImagery.js');
     const { default: sharp } = await import('sharp');
     const clientSingleton = createClient();
+
+    // Google Solar dataLayers path — always available as the fallback.
+    const googleFetcher = createRoofImageryFetcher({
+      client:   clientSingleton,
+      sharp,
+      supabase: supabaseAdmin,
+    });
+
+    // LINZ Basemap path — built only if the feature is on + key is set.
+    let linzFetcher = null;
+    if (env.linz.enabled && env.linz.apiKey) {
+      const { createBasemapClient } = await import('../linz/basemapClient.js');
+      const { createAerialFetcher } = await import('../linz/aerialFetcher.js');
+      linzFetcher = createAerialFetcher({
+        client: createBasemapClient({
+          apiKey:     env.linz.apiKey,
+          baseUrl:    env.linz.baseUrl,
+          tileFormat: env.linz.tileFormat,
+        }),
+        sharp,
+        supabase: supabaseAdmin,
+      });
+    }
+
     _analyser = createAnalyser({
       supabase:     supabaseAdmin,
       client:       clientSingleton,
       quotaTracker: createQuotaTracker({ supabase: supabaseAdmin }),
-      // Phase 2 — imagery fetcher. Reuses the SAME client singleton so both
-      // buildingInsights and dataLayers share connection pooling + config.
-      roofImagery:  createRoofImageryFetcher({
-        client:   clientSingleton,
-        sharp,
-        supabase: supabaseAdmin,
-      }),
+      // Orchestrator picks LINZ if configured, falls back to Google Solar.
+      // Both providers write to the same Supabase Storage bucket + return
+      // the same {ok, storagePath, storageBucket, radiusMeters, source} shape.
+      roofImagery:  createAerialImageryOrchestrator({ linzFetcher, googleFetcher }),
     });
   }
   return _analyser.analyseRoof(args);

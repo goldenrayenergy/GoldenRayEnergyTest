@@ -20,6 +20,11 @@
 
 const DEFAULT_BUCKET = 'roof-images';
 const MAX_PNG_WIDTH = 1000;
+// Default radiusMeters if caller doesn't pass one. Matches the historical
+// hardcoded value in services/googleSolar/client.js so existing behaviour is
+// preserved when radiusMeters is omitted (backward compatibility with any
+// caller pre-Migration 040).
+const DEFAULT_RADIUS_METERS = 50;
 
 // ── Factory (for tests to inject client/sharp/supabase) ────────────────────
 export function createRoofImageryFetcher({
@@ -46,7 +51,7 @@ export function createRoofImageryFetcher({
      * | { ok: false, reason: string, error: string, dataLayersStatus?: number, tileStatus?: number }
      * >}
      */
-    async fetchAndStoreRoofImage({ enquiryId, latitude, longitude } = {}) {
+    async fetchAndStoreRoofImage({ enquiryId, latitude, longitude, radiusMeters } = {}) {
       // Boundary validation (Rule 4): fail loud if caller mis-uses.
       if (!enquiryId) {
         throw new Error('[roofImagery] fetchAndStoreRoofImage: enquiryId required');
@@ -55,11 +60,17 @@ export function createRoofImageryFetcher({
           || typeof longitude !== 'number' || Number.isNaN(longitude)) {
         throw new Error('[roofImagery] fetchAndStoreRoofImage: latitude/longitude required as numbers');
       }
+      // Radius: use caller's value if provided, else fall back to default.
+      // Google Solar's minimum is 10m; anything smaller is silently clamped
+      // upstream so we don't need a check here.
+      const effectiveRadius = typeof radiusMeters === 'number' && radiusMeters > 0
+        ? radiusMeters
+        : DEFAULT_RADIUS_METERS;
 
       // ── Step 1: dataLayers → get URLs ──────────────────────────────────
       let dlResult;
       try {
-        dlResult = await client.dataLayers({ latitude, longitude });
+        dlResult = await client.dataLayers({ latitude, longitude, radiusMeters: effectiveRadius });
       } catch (err) {
         return { ok: false, reason: 'datalayers-throw', error: err?.message || String(err) };
       }
@@ -139,6 +150,7 @@ export function createRoofImageryFetcher({
         sizeBytes: pngBuffer.length,
         imageryQuality: dlResult.data.imageryQuality || null,
         imageryDate:    dlResult.data.imageryDate    || null,
+        radiusMeters:   effectiveRadius,
       };
     },
   };

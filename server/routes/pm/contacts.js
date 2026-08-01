@@ -196,7 +196,8 @@ router.get('/:id/latest-roof-analysis', async (req, res) => {
         max_sunshine_hours_per_year, carbon_offset_factor_kg_per_kwh,
         roof_segments, error_message, created_at,
         roof_image_storage_bucket, roof_image_storage_path,
-        roof_image_fetched_at, roof_image_error_message
+        roof_image_fetched_at, roof_image_error_message,
+        tile_radius_m, imagery_source
       `)
       .eq('contact_id', req.params.id)
       .order('created_at', { ascending: false })

@@ -65,4 +65,26 @@ export default {
     alertAtPct: parseInt(process.env.GOOGLE_SOLAR_ALERT_AT_PCT) || 80,
     adminEmail: process.env.GOOGLE_SOLAR_ADMIN_EMAIL || 'reddy@goldenrayenergy.nz',
   },
+  linz: {
+    // LINZ Basemap Standard access API key. Auto-issued at basemaps.linz.govt.nz
+    // (no registration required, but keys expire after 90 days — auto-regenerated
+    // on next visit). Production later should use a Developer key: email
+    // basemaps@linz.govt.nz.
+    apiKey: (() => {
+      if (process.env.LINZ_BASEMAP_API_KEY) return process.env.LINZ_BASEMAP_API_KEY;
+      if (process.env.FEATURE_LINZ_IMAGERY === 'true'
+          && (process.env.NODE_ENV || 'development') === 'production') {
+        throw new Error(
+          '[env] FEATURE_LINZ_IMAGERY=true in production but LINZ_BASEMAP_API_KEY is not set. ' +
+          'Set LINZ_BASEMAP_API_KEY on Render before enabling this feature, or set FEATURE_LINZ_IMAGERY=false.'
+        );
+      }
+      return null;
+    })(),
+    enabled: process.env.FEATURE_LINZ_IMAGERY === 'true',
+    // Default tile format — WebP is smallest at good quality; sharp reads it.
+    tileFormat: process.env.LINZ_TILE_FORMAT || 'webp',
+    // Base URL for the Basemap tile service.
+    baseUrl: process.env.LINZ_BASEMAP_BASE_URL || 'https://basemaps.linz.govt.nz',
+  },
 };
