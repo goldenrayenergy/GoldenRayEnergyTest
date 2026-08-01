@@ -364,3 +364,36 @@ export function totalKilowatts(state, catalogueBySku) {
   }
   return +(totalWatts / 1000).toFixed(3);   // kW to 3dp
 }
+
+// ── Geometry helpers ──────────────────────────────────────────────────────
+// Even-odd ray-cast: is (lat, lng) inside the closed polygon? Polygon is an
+// array of {latitude, longitude} vertices (order matters, but self-closing —
+// we don't require the last vertex to equal the first).
+//
+// The lat/lng plane is treated as locally flat, which is fine at the ~50m
+// scale of a single roof. For a full-country problem we'd project first, but
+// for a suburban roof the error is well under a pixel.
+export function pointInPolygon(polygon, lat, lng) {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].longitude, yi = polygon[i].latitude;
+    const xj = polygon[j].longitude, yj = polygon[j].latitude;
+    const intersects = (yi > lat) !== (yj > lat)
+      && lng < ((xj - xi) * (lat - yi) / (yj - yi)) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+// Return the FIRST face containing the given (lat, lng), or null if none do.
+// Callers use this to attach a dropped panel to a specific face. If the point
+// is on a boundary the ray-cast result is not guaranteed either way — an
+// acceptable trade-off since users can't click a mathematically zero-width edge.
+export function faceContainingPoint(state, lat, lng) {
+  const faces = state?.roof?.faces || [];
+  for (const face of faces) {
+    if (pointInPolygon(face.polygon, lat, lng)) return face;
+  }
+  return null;
+}

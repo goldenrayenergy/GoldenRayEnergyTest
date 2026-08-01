@@ -359,6 +359,81 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /disabled=\{traceVertexCount\s*<\s*3\}/.test(page));
 }
 
+// ── Phase 3b.4 — panel palette + drop + overlay + footer ─────────────────
+{
+  console.log('\n▸ Phase 3b.4 — panel palette + drop');
+  assert('imports useCatalogueOptions hook (default export)',
+    /import\s+useCatalogueOptions\s+from\s+['"]\.\.\/hooks\/useCatalogueOptions['"]/.test(page),
+    'the hook is a default export — named-import destructure would evaluate to undefined');
+  assert('imports makePanel + addPanel + faceContainingPoint + totalKilowatts',
+    /import\s*\{[\s\S]{0,600}makePanel[\s\S]{0,200}addPanel[\s\S]{0,200}faceContainingPoint[\s\S]{0,200}totalKilowatts[\s\S]{0,200}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('armedPanelSku state + ref (mouse handler reads ref)',
+    /\[armedPanelSku,\s*setArmedPanelSku\]\s*=\s*useState\(null\)/.test(page)
+      && /armedPanelSkuRef\s*=\s*useRef\(null\)/.test(page)
+      && /armedPanelSkuRef\.current\s*=\s*armedPanelSku/.test(page));
+  assert('panelCount + totalKw reactive state',
+    /\[panelCount,\s*setPanelCount\]/.test(page)
+      && /\[totalKw,\s*setTotalKw\]/.test(page));
+  assert('panelCatalogueBySku Map built via useMemo',
+    /panelCatalogueBySku\s*=\s*useMemo/.test(page)
+      && /for \(const p of catalogue\?\.panels[\s\S]{0,100}m\.set\(p\.sku/.test(page));
+
+  assert('mouse:down: drop panel when armed + face contains click',
+    /armedPanelSkuRef\.current[\s\S]{0,900}faceContainingPoint[\s\S]{0,600}makePanel\(/.test(page),
+    'drop uses faceContainingPoint to attach panel to the clicked face');
+  assert('drop uses face.azimuthDegrees for panel rotation',
+    /rotationDegrees:\s*typeof face\.azimuthDegrees\s*===\s*['"]number['"]/.test(page),
+    'panels default to the face azimuth so they look roof-aligned out of the box');
+  assert('drop dirties the design (autosave)',
+    /addPanel\(stateRef\.current[\s\S]{0,400}setDirty\(true\)/.test(page));
+
+  assert('overlayPanels helper defined',
+    /function overlayPanels\(/.test(page));
+  assert('overlayPanels sizes rectangle by catalogue length_mm × width_mm',
+    /overlayPanels[\s\S]{0,2500}length_mm[\s\S]{0,500}width_mm/.test(page));
+  assert('overlayPanels renders as Fabric.Rect with rotation',
+    /overlayPanels[\s\S]{0,3000}new fabric\.Rect\([\s\S]{0,900}angle:\s*Number\(panel\.rotationDegrees\)/.test(page));
+  assert('layoutAndDraw stitches panel objects into overlayObjectsRef',
+    /overlayPanels\({[\s\S]{0,600}\}\);[\s\S]{0,800}\[\s*\.\.\.facePolys,\s*\.\.\.panelObjs/.test(page));
+
+  assert('PanelPalette component defined',
+    /function PanelPalette\(/.test(page));
+  assert('PanelPalette groups panels by brand',
+    /PanelPalette[\s\S]{0,600}byBrand\s*=\s*new Map\(\)/.test(page));
+  assert('PanelPalette shows loading + error states',
+    /Loading catalogue/.test(page) && /Couldn't load panel catalogue/.test(page));
+  assert('armed card gets a visual highlight',
+    /armed\s*\?[\s\S]{0,300}bg-blue-50/.test(page));
+
+  assert('armed-panel indicator overlay rendered on canvas region',
+    /armedPanelSku\s*&&[\s\S]{0,900}Click a roof face to drop/.test(page));
+  assert('Esc un-arms the panel',
+    /armedPanelSku[\s\S]{0,600}Escape[\s\S]{0,100}setArmedPanelSku\(null\)/.test(page));
+
+  assert('footer shows Panels count + System kW',
+    /Panels:[\s\S]{0,300}\{panelCount\}[\s\S]{0,300}System:[\s\S]{0,300}\{totalKw\.toFixed/.test(page));
+
+  // ── Regression: captureCanvasState must preserve roof/panels/arrays ──
+  // Bug: the Phase 3a helper returned only { view, canvas } and was never
+  // updated when Phase 3b added the design data model. Autosave silently
+  // wiped every traced face and dropped panel 2s after each change — the
+  // Fabric polygon stayed on screen (stale render) but stateRef.current
+  // lost the data, so subsequent clicks reported "no face at this point".
+  assert('regression: captureCanvasState spreads stateRef.current so roof/panels/arrays survive save',
+    /captureCanvasState\s*=\s*useCallback\([\s\S]{0,1200}\.\.\.base[\s\S]{0,400}view,\s*canvas:\s*\{\s*serialized/.test(page),
+    'must return {...stateRef.current, view, canvas} — else Phase 3b sections get stripped');
+
+  // Server-side contract: catalogue route must expose panel dimensions so the
+  // palette can render at real-world size on the canvas.
+  const cat = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/catalogue.js'), 'utf8');
+  assert('catalogue /options exposes panel length_mm + width_mm',
+    /panels[\s\S]{0,1000}length_mm:\s*p\.length_mm[\s\S]{0,200}width_mm:\s*p\.width_mm/.test(cat));
+
+  const loader = fs.readFileSync(path.join(REPO_ROOT, 'server/services/pm/proposalEngine/catalogue/dbLoader.js'), 'utf8');
+  assert('mapPanel passes physical dimensions through',
+    /mapPanel[\s\S]{0,2000}length_mm:\s*num\(s\.length_mm\)[\s\S]{0,200}width_mm:\s*num\(s\.width_mm\)/.test(loader));
+}
+
 // ── PmApp.jsx route wiring ────────────────────────────────────────────────
 {
   console.log('\n▸ Route registration in PmApp.jsx');

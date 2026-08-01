@@ -23,6 +23,7 @@ const {
   facesById, panelsByFace, totalKilowatts,
   faceId, obstId, panelId, arrayId,
   googleSegmentToRoofFace, googleSegmentsToRoofFaces, importGoogleSegments,
+  pointInPolygon, faceContainingPoint,
 } = await import(url);
 
 let pass = 0, fail = 0;
@@ -350,6 +351,82 @@ console.log('test-design-state\n');
   state = importGoogleSegments(state, segs);
   assert('re-import drops panel on old google face, keeps manual-face panel',
     state.panels.length === 1 && state.panels[0].id === manualPanel.id);
+}
+
+// ── pointInPolygon (Phase 3b.4 panel drop) ────────────────────────────────
+{
+  console.log('\n▸ pointInPolygon — even-odd raycast');
+  // Unit square: (0,0) → (0,1) → (1,1) → (1,0)
+  const square = [
+    { latitude: 0, longitude: 0 },
+    { latitude: 1, longitude: 0 },
+    { latitude: 1, longitude: 1 },
+    { latitude: 0, longitude: 1 },
+  ];
+  assert('centre point is inside',              pointInPolygon(square, 0.5, 0.5) === true);
+  assert('quarter-in point is inside',          pointInPolygon(square, 0.25, 0.75) === true);
+  assert('point outside north',                 pointInPolygon(square, 1.5, 0.5) === false);
+  assert('point outside south',                 pointInPolygon(square, -0.5, 0.5) === false);
+  assert('point outside east',                  pointInPolygon(square, 0.5, 1.5) === false);
+  assert('point outside west',                  pointInPolygon(square, 0.5, -0.5) === false);
+  assert('polygon with <3 vertices → false',    pointInPolygon([{ latitude: 0, longitude: 0 }], 0.5, 0.5) === false);
+  assert('null polygon → false',                pointInPolygon(null, 0, 0) === false);
+
+  // A concave (L-shaped) polygon should exclude the notch
+  //   ┌────┐
+  //   │    │
+  //   │    └──┐
+  //   │       │
+  //   └───────┘
+  const L = [
+    { latitude: 0, longitude: 0 },
+    { latitude: 0, longitude: 3 },
+    { latitude: 2, longitude: 3 },
+    { latitude: 2, longitude: 1 },
+    { latitude: 3, longitude: 1 },
+    { latitude: 3, longitude: 0 },
+  ];
+  assert('L-shape: point in main stem is inside',  pointInPolygon(L, 2.5, 0.5) === true);
+  assert('L-shape: point in the arm is inside',    pointInPolygon(L, 1, 2) === true);
+  assert('L-shape: point in the notch is OUT',     pointInPolygon(L, 2.5, 2) === false);
+}
+
+// ── faceContainingPoint (Phase 3b.4 panel drop attaches panel to face) ────
+{
+  console.log('\n▸ faceContainingPoint');
+  let s = emptyDesignState();
+  // Face 1: unit square around (0,0) — (0,0)/(0,1)/(1,1)/(1,0)
+  const f1 = makeRoofFace({
+    source: 'manual',
+    polygon: [
+      { latitude: 0, longitude: 0 },
+      { latitude: 1, longitude: 0 },
+      { latitude: 1, longitude: 1 },
+      { latitude: 0, longitude: 1 },
+    ],
+  });
+  // Face 2: unit square offset to (10,10)
+  const f2 = makeRoofFace({
+    source: 'manual',
+    polygon: [
+      { latitude: 10, longitude: 10 },
+      { latitude: 11, longitude: 10 },
+      { latitude: 11, longitude: 11 },
+      { latitude: 10, longitude: 11 },
+    ],
+  });
+  s = addFace(addFace(s, f1), f2);
+
+  assert('point inside face 1 → returns face 1',
+    faceContainingPoint(s, 0.5, 0.5)?.id === f1.id);
+  assert('point inside face 2 → returns face 2',
+    faceContainingPoint(s, 10.5, 10.5)?.id === f2.id);
+  assert('point outside both → returns null',
+    faceContainingPoint(s, 5, 5) === null);
+  assert('empty state → returns null',
+    faceContainingPoint(emptyDesignState(), 0, 0) === null);
+  assert('null state → returns null (defensive)',
+    faceContainingPoint(null, 0, 0) === null);
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

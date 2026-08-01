@@ -21,16 +21,27 @@
 //   • Proposal PDF push
 // ────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import * as fabric from 'fabric';
-import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle } from 'lucide-react';
+import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle, X } from 'lucide-react';
 import { pmQuotesAPI, pmContactsAPI } from '../services/pmQuotesApi';
 import { pmDesignsAPI, emptyDesignState, migrateDesignState } from '../services/pmDesignsApi';
 import { makeLatLngToPixel, makePixelToLatLng } from '../utils/roofOverlay';
-import { importGoogleSegments, makeRoofFace, addFace } from '../utils/designState';
+import {
+  importGoogleSegments, makeRoofFace, addFace,
+  makePanel, addPanel,
+  faceContainingPoint, totalKilowatts,
+} from '../utils/designState';
+import useCatalogueOptions from '../hooks/useCatalogueOptions';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
 // Phase 3b will re-import them when we render segment polygons for panel placement.
+
+// Fallback panel dimensions used when a catalogue row has no length_mm/width_mm
+// populated yet (older SKUs). Rep can still drop the panel and it renders at a
+// typical residential-mono size (~1755 × 1038 mm — approx a 400W Q.PEAK).
+const DEFAULT_PANEL_LENGTH_MM = 1755;
+const DEFAULT_PANEL_WIDTH_MM  = 1038;
 
 // Fallback tile radius when the roof_analyses row has no stored value
 // (pre-Migration-040 rows). Modern rows include tile_radius_m and the client
@@ -45,6 +56,24 @@ const REFETCH_THRESHOLD_METERS = 20;
 function radiusForAnalysis(roofAnalysis) {
   const stored = Number(roofAnalysis?.tile_radius_m);
   return Number.isFinite(stored) && stored > 0 ? stored : FALLBACK_TILE_RADIUS_METERS;
+}
+
+// Convert a Fabric scene-space pointer to WGS84 lat/lng using the aerial
+// image's current transform. Shared by trace-vertex placement (Phase 3b.3)
+// and panel drop (Phase 3b.4). Returns null if the image isn't ready.
+function canvasToLatLng(scenePoint, img, roof) {
+  if (!img || !roof) return null;
+  const scale = img.scaleX || 1;
+  const imgPxX = (scenePoint.x - (img.left || 0)) / scale;
+  const imgPxY = (scenePoint.y - (img.top  || 0)) / scale;
+  const toLatLng = makePixelToLatLng({
+    centerLat:    Number(roof.latitude),
+    centerLng:    Number(roof.longitude),
+    radiusMeters: radiusForAnalysis(roof),
+    imgWidth:  img.width,
+    imgHeight: img.height,
+  });
+  return toLatLng(imgPxX, imgPxY);
 }
 
 // Fabric.js v6+ changed the default originX/originY from 'left'/'top' to
@@ -99,6 +128,22 @@ export default function DesignPage() {
   const isTracingRef = useRef(false);                    // synced from React state; ref for mouse handler
   const traceVerticesRef = useRef([]);                   // {latitude, longitude} array being built
   const finishTraceRef = useRef(null);                   // dblclick handler calls the latest finishTrace via this ref
+
+  // Phase 3b.4 — panel palette + drop
+  const { options: catalogue, loading: catalogueLoading, error: catalogueError } = useCatalogueOptions();
+  const [armedPanelSku, setArmedPanelSku] = useState(null);   // sku the next click drops
+  const armedPanelSkuRef = useRef(null);                      // stable read for mouse handler
+  const [panelCount, setPanelCount] = useState(0);            // reactive mirror of state.panels.length
+  const [totalKw, setTotalKw]       = useState(0);            // reactive mirror of totalKilowatts()
+  // Panel-catalogue lookup by SKU — Map so palette + drop + overlay all share
+  // the same shape. Rebuilt whenever the catalogue reloads.
+  const panelCatalogueBySku = useMemo(() => {
+    const m = new Map();
+    for (const p of catalogue?.panels || []) m.set(p.sku, p);
+    return m;
+  }, [catalogue]);
+  const panelCatalogueRef = useRef(panelCatalogueBySku);
+  useEffect(() => { panelCatalogueRef.current = panelCatalogueBySku; }, [panelCatalogueBySku]);
 
   // ── Load quote + roof analysis + existing design ───────────────────────
   useEffect(() => {
@@ -170,6 +215,10 @@ export default function DesignPage() {
         // Mirror face count into React state so UI conditionals react on
         // load AND on subsequent mutations (see importFromGoogle below).
         setFaceCount(stateRef.current?.roof?.faces?.length ?? 0);
+        // Phase 3b.4 — mirror panel count + total kW so the footer reflects
+        // the design's actual state after loading a previously-saved design.
+        setPanelCount(stateRef.current?.panels?.length ?? 0);
+        setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
       } catch (e) {
         if (!cancelled) setLoadError(e.response?.data?.error || e.message);
       } finally {
@@ -179,15 +228,33 @@ export default function DesignPage() {
     return () => { cancelled = true; };
   }, [quoteId]);
 
-  // ── Serialize the current canvas + view state into the state blob ──────
+  // ── Serialize the current design state into the save payload ───────────
+  // MUST spread `stateRef.current` so that Phase 3b sections (roof.faces,
+  // roof.obstructions, panels, arrays, schemaVersion) survive the round-trip.
+  // A previous version returned only { view, canvas } — a Phase 3a artefact
+  // from when there was no data model — which silently wiped every traced
+  // face and dropped panel 2 s after the autosave debounce fired. The
+  // symptom was maddening: the Fabric polygon stayed drawn on screen (old
+  // canvas render, not re-drawn) while stateRef.current lost all faces,
+  // so subsequent clicks reported "no face contains this point" and
+  // couldn't drop panels.
   const captureCanvasState = useCallback(() => {
+    const base = stateRef.current || emptyDesignState();
     const canvas = canvasRef.current;
-    if (!canvas) return stateRef.current;
-    const zoom = canvas.getZoom();
-    const vpt = canvas.viewportTransform;
+    const view = canvas
+      ? {
+          zoom: canvas.getZoom(),
+          panX: canvas.viewportTransform?.[4] ?? 0,
+          panY: canvas.viewportTransform?.[5] ?? 0,
+        }
+      : base.view;
+    const canvasSerialized = canvas
+      ? JSON.stringify(canvas.toJSON())
+      : base.canvas?.serialized ?? null;
     return {
-      view: { zoom, panX: vpt?.[4] ?? 0, panY: vpt?.[5] ?? 0 },
-      canvas: { serialized: JSON.stringify(canvas.toJSON()) },
+      ...base,
+      view,
+      canvas: { serialized: canvasSerialized },
     };
   }, []);
 
@@ -249,6 +316,28 @@ export default function DesignPage() {
   // Sync isTracing → isTracingRef so mouse:down (a stable closure inside the
   // canvas-init effect) can check the current tracing state without re-binding.
   useEffect(() => { isTracingRef.current = isTracing; }, [isTracing]);
+
+  // Sync armedPanelSku → ref so the stable mouse:down closure can read it
+  // without needing to re-bind on every arm/unarm.
+  useEffect(() => { armedPanelSkuRef.current = armedPanelSku; }, [armedPanelSku]);
+
+  // Recompute total kW when the catalogue arrives after the design has loaded.
+  // Wattage lives in the catalogue (not the panel entity), so a design that
+  // loaded before the catalogue would otherwise show 0 kW until the next drop.
+  useEffect(() => {
+    if (loading) return;
+    setTotalKw(totalKilowatts(stateRef.current, panelCatalogueBySku));
+  }, [panelCatalogueBySku, loading]);
+
+  // Esc un-arms the panel. Separate effect from the tracing Esc handler so
+  // pressing Esc while both are active un-arms the panel first (matches the
+  // trace flow: cancel trace to leave tracing mode, then Esc again to un-arm).
+  useEffect(() => {
+    if (!armedPanelSku || isTracing) return;
+    const onKey = (e) => { if (e.key === 'Escape') setArmedPanelSku(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [armedPanelSku, isTracing]);
 
   // ── Initialize Fabric once the DOM canvas + container are ready ────────
   useEffect(() => {
@@ -320,6 +409,15 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
+        // Phase 3b.4 — dropped panels (rectangles at real-world dimensions).
+        const panelObjs = overlayPanels({
+          canvas: c,
+          panels: stateRef.current?.panels || [],
+          panelCatalogueBySku: panelCatalogueRef.current,
+          roofAnalysis: roofAnalysisRef.current,
+          imgWidth: img.width, imgHeight: img.height,
+          left, top, scale,
+        });
         // Phase 3b.3 — in-progress trace on top of everything.
         const traceObjects = overlayTraceInProgress({
           canvas: c,
@@ -328,7 +426,7 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
-        overlayObjectsRef.current = [...facePolys, ...traceObjects];
+        overlayObjectsRef.current = [...facePolys, ...panelObjs, ...traceObjects];
 
         // First layout only: auto-zoom so the customer's roof fills the view.
         // Google Solar tile is 100m × 100m — much bigger than a typical NZ
@@ -357,35 +455,61 @@ export default function DesignPage() {
     let lastPosX = 0, lastPosY = 0;
 
     canvas.on('mouse:down', (opt) => {
+      // Fabric v7 replaced canvas.getPointer(e) with getScenePoint(e) —
+      // returns the pointer in world/scene coords (post viewport-transform),
+      // which is what our image-space math expects. The old getPointer call
+      // silently threw inside Fabric's event dispatch and no vertex was ever
+      // added — a real crash swallowed by the framework.
+      const pointer = canvas.getScenePoint(opt.e);
+
       // Phase 3b.3 — while tracing, clicks add polygon vertices instead of panning.
       // We read the ref (not React state) so this closure stays stable across renders.
       if (isTracingRef.current) {
-        // Fabric v7 replaced canvas.getPointer(e) with getScenePoint(e) —
-        // returns the pointer in world/scene coords (post viewport-transform),
-        // which is what our image-space math expects. The old getPointer call
-        // silently threw inside Fabric's event dispatch and no vertex was ever
-        // added — a real crash swallowed by the framework.
-        const pointer = canvas.getScenePoint(opt.e);
-        // Convert scene coord → image pixel → lat/lng using refs synced in effects above.
         const img  = roofImgRef.current;
         const roof = roofAnalysisRef.current;
         if (!img || !roof) return;
-        const scale = img.scaleX || 1;
-        const imgPxX = (pointer.x - (img.left || 0)) / scale;
-        const imgPxY = (pointer.y - (img.top  || 0)) / scale;
-        const toLatLng = makePixelToLatLng({
-          centerLat:    Number(roof.latitude),
-          centerLng:    Number(roof.longitude),
-          radiusMeters: Number.isFinite(Number(roof.tile_radius_m)) && Number(roof.tile_radius_m) > 0
-                          ? Number(roof.tile_radius_m)
-                          : FALLBACK_TILE_RADIUS_METERS,
-          imgWidth:  img.width,
-          imgHeight: img.height,
-        });
-        traceVerticesRef.current.push(toLatLng(imgPxX, imgPxY));
+        const latLng = canvasToLatLng(pointer, img, roof);
+        if (!latLng) return;
+        traceVerticesRef.current.push(latLng);
         setTraceVertexCount(traceVerticesRef.current.length);
         layoutAndDrawRef.current?.();
         return;   // don't initiate a pan
+      }
+
+      // Phase 3b.4 — when a panel is armed, click drops the panel on whichever
+      // roof face contains the click. Missing-target case falls through to pan
+      // so the rep isn't left wondering why nothing happened; we surface the
+      // reason via the palette header hint ("Click on a traced roof face").
+      if (armedPanelSkuRef.current) {
+        const img  = roofImgRef.current;
+        const roof = roofAnalysisRef.current;
+        if (img && roof) {
+          const latLng = canvasToLatLng(pointer, img, roof);
+          if (latLng) {
+            const face = faceContainingPoint(stateRef.current, latLng.latitude, latLng.longitude);
+            if (face) {
+              try {
+                const panel = makePanel({
+                  faceId: face.id,
+                  sku: armedPanelSkuRef.current,
+                  center: latLng,
+                  rotationDegrees: typeof face.azimuthDegrees === 'number' ? face.azimuthDegrees : 0,
+                  orientation: 'landscape',
+                });
+                stateRef.current = addPanel(stateRef.current, panel);
+                setPanelCount(stateRef.current.panels.length);
+                setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+                setDirty(true);
+                layoutAndDrawRef.current?.();
+              } catch (err) {
+                console.warn('[DesignPage] failed to drop panel:', err?.message || err);
+              }
+              return;   // don't initiate a pan
+            }
+          }
+        }
+        // No face under the click — fall through to pan so the drag still works;
+        // the palette header already tells the rep to click a traced face.
       }
 
       const evt = opt.e;
@@ -758,7 +882,8 @@ export default function DesignPage() {
         </div>
       </div>
 
-      {/* ── Canvas region ───────────────────────────────────────────── */}
+      {/* ── Main row: canvas + right-side palette ───────────────────── */}
+      <div className="flex-1 flex overflow-hidden">
       <div ref={containerRef} className="flex-1 relative overflow-hidden bg-[#f1eddb]">
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center text-slate-500">
@@ -811,6 +936,23 @@ export default function DesignPage() {
           <canvas ref={canvasElRef} />
         </div>
 
+        {/* Phase 3b.4 — armed panel indicator (bottom-centre overlay) */}
+        {armedPanelSku && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 bg-blue-50 border border-blue-300 text-blue-900 px-4 py-2 rounded-lg shadow-md text-sm flex items-center gap-3">
+            <span className="font-semibold">📌 {armedPanelLabel(catalogue, armedPanelSku)}</span>
+            <span className="text-blue-700">
+              {faceCount === 0 ? 'Trace a roof face first, then click to drop' : 'Click a roof face to drop this panel'}
+            </span>
+            <button
+              onClick={() => setArmedPanelSku(null)}
+              className="ml-1 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 rounded"
+              title="Un-arm (Esc)"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Zoom controls (bottom-left overlay) */}
         <div className="absolute bottom-4 left-4 bg-white border border-slate-200 rounded shadow-sm flex flex-col divide-y divide-slate-200">
           <button onClick={zoomIn}  className="p-2 hover:bg-slate-50" title="Zoom in"><ZoomIn className="w-4 h-4" /></button>
@@ -819,11 +961,24 @@ export default function DesignPage() {
         </div>
       </div>
 
+      {/* ── Right sidebar: panel palette (Phase 3b.4) ─────────────────── */}
+      <PanelPalette
+        panels={catalogue?.panels || []}
+        loading={catalogueLoading}
+        error={catalogueError}
+        armedPanelSku={armedPanelSku}
+        onArm={setArmedPanelSku}
+        panelCount={panelCount}
+      />
+      </div>
+
       {/* ── Footer status bar ───────────────────────────────────────── */}
       <div className="border-t border-slate-200 bg-white px-4 py-1.5 flex-shrink-0 flex items-center justify-between text-xs text-slate-500">
         <div className="flex gap-4">
           <span>Zoom: <b className="text-slate-800">{Math.round(zoomDisplay * 100)}%</b></span>
           <span>Design version: <b className="text-slate-800">v{versionRef.current}</b></span>
+          <span>Panels: <b className="text-slate-800">{panelCount}</b></span>
+          <span>System: <b className="text-slate-800">{totalKw.toFixed(2)} kW</b></span>
           <span className="text-slate-400">
             Autosave: on ({AUTOSAVE_DEBOUNCE_MS / 1000}s)
           </span>
@@ -832,7 +987,7 @@ export default function DesignPage() {
           {roofAnalysis?.imagery_source === 'linz' && (
             <>Aerial imagery: LINZ · </>
           )}
-          Phase 3a — canvas + roof image + pan/zoom. Panels come in Phase 3b.
+          Phase 3b — palette + drop. Rotate / arrays / rules ship in later phases.
         </div>
       </div>
     </div>
@@ -1055,6 +1210,67 @@ function overlayTraceInProgress({ canvas, traceVertices, roofAnalysis, imgWidth,
   return created;
 }
 
+// Phase 3b.4 — draw the dropped panels as real-world-sized rectangles.
+// Each panel rendered at its catalogue length_mm × width_mm converted to
+// image pixels via the tile's radiusMeters, then scaled to canvas coords.
+// Rotation is `rotationDegrees` from the design state — defaults to the
+// face's azimuth at drop time so panels look roughly aligned to the roof.
+// Missing catalogue rows fall back to a Q.PEAK-sized default so the panel
+// still renders (rep can swap SKU later without re-dropping).
+function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
+  const created = [];
+  if (!Array.isArray(panels) || panels.length === 0) return created;
+
+  const centerLat = Number(roofAnalysis?.latitude);
+  const centerLng = Number(roofAnalysis?.longitude);
+  if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) return created;
+
+  const radiusMeters = Number(roofAnalysis?.tile_radius_m) > 0
+    ? Number(roofAnalysis.tile_radius_m)
+    : ROOF_TILE_RADIUS_METERS_FALLBACK;
+
+  const toPixel = makeLatLngToPixel({
+    centerLat, centerLng, radiusMeters,
+    imgWidth, imgHeight,
+  });
+  const toCanvas = (p) => ({ x: left + p.x * scale, y: top + p.y * scale });
+
+  // metres → canvas pixels: (m / (2 * radiusMeters)) * imgWidth * scale
+  // (Same math the polygon overlay uses; kept explicit here for clarity.)
+  const metresToCanvasPx = (metres) => (metres / (2 * radiusMeters)) * imgWidth * scale;
+
+  for (const panel of panels) {
+    if (!panel?.center || typeof panel.center.latitude !== 'number') continue;
+
+    const spec = panelCatalogueBySku?.get?.(panel.sku);
+    const lenMm = Number(spec?.length_mm) > 0 ? Number(spec.length_mm) : DEFAULT_PANEL_LENGTH_MM;
+    const widMm = Number(spec?.width_mm)  > 0 ? Number(spec.width_mm)  : DEFAULT_PANEL_WIDTH_MM;
+    // orientation: 'landscape' = long edge horizontal, 'portrait' = long edge vertical
+    const isLandscape = panel.orientation !== 'portrait';
+    const widthMetres  = (isLandscape ? lenMm : widMm) / 1000;
+    const heightMetres = (isLandscape ? widMm : lenMm) / 1000;
+
+    const centerCanvas = toCanvas(toPixel(panel.center.latitude, panel.center.longitude));
+
+    const rect = new fabric.Rect({
+      left: centerCanvas.x, top: centerCanvas.y,
+      originX: 'center', originY: 'center',
+      width:  metresToCanvasPx(widthMetres),
+      height: metresToCanvasPx(heightMetres),
+      angle:  Number(panel.rotationDegrees) || 0,
+      fill:   'rgba(30, 58, 138, 0.55)',   // dark blue-ish PV panel look
+      stroke: '#0F172A',                    // slate-900 edge
+      strokeWidth: 1,
+      strokeUniform: true,                  // don't scale the border with the rect
+      selectable: false, evented: false,    // Phase 3b.7 will make panels selectable
+    });
+    canvas.add(rect);
+    created.push(rect);
+  }
+
+  return created;
+}
+
 // Compute the centroid of a polygon defined by canvas-pixel points.
 // Simple arithmetic mean works well for convex + near-convex polygons.
 function polygonCentroid(points) {
@@ -1210,4 +1426,103 @@ function formatImageryDate(d) {
     return `${d.month ? months[d.month - 1] + ' ' : ''}${d.year}`;
   }
   return '';
+}
+
+// Short label for the armed-panel indicator ("Q.PEAK 475W" style).
+function armedPanelLabel(catalogue, sku) {
+  const p = catalogue?.panels?.find(x => x.sku === sku);
+  if (!p) return sku;
+  const brand = p.brand || '';
+  const watts = p.watts ? `${p.watts}W` : '';
+  return [brand, watts].filter(Boolean).join(' · ') || sku;
+}
+
+// ── Panel palette (Phase 3b.4) ───────────────────────────────────────────
+// Right-side sidebar listing every panel SKU in the catalogue. Rep clicks
+// a card to "arm" that SKU; the next click on a traced roof face drops the
+// panel. Grouped by brand so the list stays scannable when catalogues get
+// large. Cards show brand, watts, and physical dimensions so the rep can
+// eyeball the fit against the roof before dropping.
+function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount }) {
+  const grouped = useMemo(() => {
+    const byBrand = new Map();
+    for (const p of panels || []) {
+      const key = p.brand || 'Other';
+      if (!byBrand.has(key)) byBrand.set(key, []);
+      byBrand.get(key).push(p);
+    }
+    return Array.from(byBrand.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [panels]);
+
+  return (
+    <aside className="w-72 flex-shrink-0 border-l border-slate-200 bg-white flex flex-col overflow-hidden">
+      <div className="px-4 py-3 border-b border-slate-200 flex-shrink-0">
+        <div className="text-sm font-semibold text-slate-900">Panel palette</div>
+        <div className="text-xs text-slate-500 mt-0.5">
+          {panelCount > 0
+            ? `${panelCount} panel${panelCount === 1 ? '' : 's'} placed · click a card to arm`
+            : 'Click a card to arm, then click the roof to drop'}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {loading && (
+          <div className="px-4 py-6 text-xs text-slate-500 flex items-center gap-2">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading catalogue…
+          </div>
+        )}
+        {error && !loading && (
+          <div className="px-4 py-3 text-xs text-red-700">
+            Couldn't load panel catalogue: {error}
+          </div>
+        )}
+        {!loading && !error && grouped.length === 0 && (
+          <div className="px-4 py-6 text-xs text-slate-500">
+            No panels in the catalogue yet. Ask an admin to add SKUs under Admin → Products.
+          </div>
+        )}
+
+        {grouped.map(([brand, list]) => (
+          <div key={brand} className="border-b border-slate-100 last:border-b-0">
+            <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50">
+              {brand}
+            </div>
+            <ul className="divide-y divide-slate-100">
+              {list.map(p => {
+                const armed = p.sku === armedPanelSku;
+                const dims = p.length_mm && p.width_mm
+                  ? `${p.length_mm} × ${p.width_mm} mm`
+                  : 'dims not set';
+                return (
+                  <li key={p.sku}>
+                    <button
+                      type="button"
+                      onClick={() => onArm(armed ? null : p.sku)}
+                      className={
+                        'w-full text-left px-4 py-2.5 text-xs transition-colors ' +
+                        (armed
+                          ? 'bg-blue-50 hover:bg-blue-100 border-l-4 border-blue-500'
+                          : 'hover:bg-slate-50 border-l-4 border-transparent')
+                      }
+                      title={p.label || p.sku}
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className={`font-semibold ${armed ? 'text-blue-900' : 'text-slate-800'}`}>
+                          {p.watts ? `${p.watts}W` : '—W'}
+                        </span>
+                        <span className="font-mono text-[10px] text-slate-400 truncate">
+                          {p.sku}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">{dims}</div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
 }
