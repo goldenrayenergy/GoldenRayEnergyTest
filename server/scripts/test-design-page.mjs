@@ -150,8 +150,9 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     'must react to container resize, not only window resize');
   assert('uses getBoundingClientRect for accurate measurement',
     /getBoundingClientRect/.test(page));
-  assert('overlayRoofSegments returns created objects for later cleanup',
-    /return created/.test(page));
+  assert('overlay helpers return created objects for later cleanup',
+    /return created/.test(page),
+    'overlayRoofFaces / overlayTraceInProgress both return the array so layoutAndDraw can remove them on next redraw');
   assert('layoutAndDraw clears old overlays before redrawing',
     /overlayObjectsRef[\s\S]{0,200}c\.remove/.test(page));
 
@@ -171,27 +172,46 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('regression: image uses top-left origin',
     /fabric\.Image\.fromURL[\s\S]{0,400}\.\.\.TL_ORIGIN/.test(page),
     'image .set() must spread TL_ORIGIN so left/top are treated as top-left corner');
-  assert('regression: crosshair lines use top-left origin',
-    (page.match(/new fabric\.Line\([^)]+,\s*\{[^}]*\.\.\.TL_ORIGIN/g) || []).length >= 2,
-    'both crosshair lines must use TL_ORIGIN');
-  assert('regression: property pin text uses top-left origin',
-    /new fabric\.Text\('◉ Customer property'[\s\S]{0,200}\.\.\.TL_ORIGIN/.test(page),
-    '"Customer property" pin must use TL_ORIGIN');
+  // Regression removed: crosshair lines + "◉ Customer property" pin were Phase 3a
+  // scaffolding, deleted once roof-face polygons + manual tracing became the
+  // primary interaction. The tile is already centred on the customer's property
+  // and the top bar shows their name/address — the marker only obscured the roof.
   assert('regression: debug markers stripped from production',
     !/DEBUG-MARKERS/.test(page),
     'debug console.log + red/blue/green markers must not ship');
 
-  // ── Phase 3a scope: property marker only, segments deferred to 3b ────
-  // Phase 3b.2 reintroduces fabric.Polygon for roof-face rendering — different
-  // from the Google-Solar segment polygons we removed in Phase 3a. Verify the
-  // Phase 3a change stuck: overlayRoofSegments MUST NOT itself create polygons
-  // (it now only draws the property marker; face polygons live in overlayRoofFaces).
-  assert('overlayRoofSegments does not create polygons (property marker only)',
-    !/function overlayRoofSegments[\s\S]{0,4000}new fabric\.Polygon/.test(page),
-    'polygons live in overlayRoofFaces, not overlayRoofSegments');
-  assert('phase 3a: does NOT import segment helpers from roofOverlay',
+  // ── Regression: Fabric v7 pointer API ────────────────────────────────
+  // Bug: canvas.getPointer(e) was removed in Fabric v7. The old call throws
+  // silently inside Fabric's event dispatch, so mouse:down entered the tracing
+  // branch, hit the throw, no vertex was ever added, and no error surfaced.
+  // Fix: use canvas.getScenePoint(e) — the v7 replacement that returns the
+  // pointer in world coords (post viewport-transform), which is what our
+  // image-space math expects.
+  assert('regression: uses Fabric v7 getScenePoint, not getPointer',
+    /canvas\.getScenePoint\(opt\.e\)/.test(page)
+      && !/canvas\.getPointer\(opt\.e\)/.test(page),
+    'Fabric v7 removed canvas.getPointer — must use getScenePoint');
+
+  // ── Regression: canvas isolated in its own wrapper div ───────────────
+  // Bug: Fabric wraps <canvas> in a .canvas-container div at init, which
+  // mutates the parent's children behind React's back. React later crashed
+  // with NotFoundError on insertBefore when a conditional sibling (the
+  // trace-mode instruction bar) tried to mount, because its reference node
+  // (the original <canvas>) was no longer a direct child.
+  // Fix: put <canvas> inside its own dedicated wrapper div so Fabric's
+  // mutations don't touch the outer container's React-managed children.
+  assert('regression: canvas is isolated in its own wrapper div',
+    /<div className="absolute inset-0">\s*<canvas ref=\{canvasElRef\} \/>\s*<\/div>/.test(page),
+    'Fabric mutates DOM behind React — canvas must live in its own wrapper');
+
+  // ── Property marker removed (was Phase 3a scaffolding) ────────────────
+  assert('property marker (crosshair + "◉ Customer property" pin) removed',
+    !/['"`]◉ Customer property/.test(page)
+      && !/function overlayRoofSegments\(/.test(page),
+    'Phase 3a marker was superseded by roof-face polygons + manual tracing');
+  assert('face-tracing does not import segment helpers (still deferred)',
     !/import\s*\{[^}]*(segmentBboxToPolygon|segmentLabel)[^}]*\}\s*from\s*['"]\.\.\/utils\/roofOverlay/.test(page),
-    'segment helpers stay in roofOverlay.js for Phase 3b re-import');
+    'segment helpers stay in roofOverlay.js for later panel-placement phases');
 
   // ── Auto-zoom to customer's roof (fixes "showing whole neighbourhood") ──
   assert('auto-zoom: autoZoomToRoof helper defined',

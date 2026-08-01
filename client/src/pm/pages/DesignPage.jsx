@@ -307,13 +307,12 @@ export default function DesignPage() {
         img.setCoords();
 
         // Clear old overlays, redraw at current transform.
+        // Phase 3a's centre-crosshair "Customer property" marker was removed —
+        // the LINZ tile is already centred on the customer's property and the
+        // name/address show in the top bar, so the marker added no signal and
+        // sat right on top of the roof the rep is trying to trace.
         for (const obj of overlayObjectsRef.current) c.remove(obj);
-        const propertyMarker = overlayRoofSegments({
-          canvas: c, roofAnalysis: roofAnalysisRef.current,
-          imgWidth: img.width, imgHeight: img.height,
-          left, top, scale,
-        });
-        // Phase 3b.2 — draw the imported/manual roof faces on top of the image.
+        // Phase 3b.2 — imported/manual roof faces (sage/amber outlines).
         const facePolys = overlayRoofFaces({
           canvas: c,
           faces: stateRef.current?.roof?.faces || [],
@@ -321,7 +320,7 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
-        // Phase 3b.3 — draw the in-progress trace on top of everything
+        // Phase 3b.3 — in-progress trace on top of everything.
         const traceObjects = overlayTraceInProgress({
           canvas: c,
           traceVertices: traceVerticesRef.current || [],
@@ -329,7 +328,7 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
-        overlayObjectsRef.current = [...propertyMarker, ...facePolys, ...traceObjects];
+        overlayObjectsRef.current = [...facePolys, ...traceObjects];
 
         // First layout only: auto-zoom so the customer's roof fills the view.
         // Google Solar tile is 100m × 100m — much bigger than a typical NZ
@@ -361,8 +360,13 @@ export default function DesignPage() {
       // Phase 3b.3 — while tracing, clicks add polygon vertices instead of panning.
       // We read the ref (not React state) so this closure stays stable across renders.
       if (isTracingRef.current) {
-        const pointer = canvas.getPointer(opt.e);   // canvas coords, viewport-aware
-        // Convert canvas coord → image pixel → lat/lng using refs synced in effects above.
+        // Fabric v7 replaced canvas.getPointer(e) with getScenePoint(e) —
+        // returns the pointer in world/scene coords (post viewport-transform),
+        // which is what our image-space math expects. The old getPointer call
+        // silently threw inside Fabric's event dispatch and no vertex was ever
+        // added — a real crash swallowed by the framework.
+        const pointer = canvas.getScenePoint(opt.e);
+        // Convert scene coord → image pixel → lat/lng using refs synced in effects above.
         const img  = roofImgRef.current;
         const roof = roofAnalysisRef.current;
         if (!img || !roof) return;
@@ -718,7 +722,7 @@ export default function DesignPage() {
           {roofAnalysis?.roof_image_signed_url && !isTracing && (
             <button
               onClick={startTrace}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-sage-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-full px-3 py-1"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-full px-3 py-1"
               title="Manually trace a roof face by clicking each corner on the image"
             >
               ✏️ Trace face
@@ -793,7 +797,19 @@ export default function DesignPage() {
             </button>
           </div>
         )}
-        <canvas ref={canvasElRef} />
+        {/*
+          Fabric.js wraps the <canvas> in a `.canvas-container` <div> and adds
+          a second <canvas> sibling during initialization — that mutates the
+          DOM tree behind React's back. Placing the <canvas> directly inside
+          the container caused React's diffing to crash with NotFoundError:
+          insertBefore on a stale node reference whenever a conditional
+          sibling (loading state, trace instruction bar) appeared/disappeared.
+          Isolating Fabric's mutations under its own dedicated wrapper div
+          keeps React's children of `containerRef` stable across renders.
+        */}
+        <div className="absolute inset-0">
+          <canvas ref={canvasElRef} />
+        </div>
 
         {/* Zoom controls (bottom-left overlay) */}
         <div className="absolute bottom-4 left-4 bg-white border border-slate-200 rounded shadow-sm flex flex-col divide-y divide-slate-200">
@@ -827,66 +843,6 @@ export default function DesignPage() {
 function clampZoom(z) {
   if (!Number.isFinite(z)) return 1;
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
-}
-
-// Overlay a marker at the property centre — a crosshair + ring + "Customer
-// property" pin. Positioned in image-pixel space then transformed to canvas
-// coords using the same (left, top, scale) as the underlying image, so it
-// stays locked to the roof no matter how the user pans/zooms.
-//
-// Phase 3a intentionally only draws the property marker. Segment polygons +
-// labels made the small NZ suburban roof (~50m² across 3 tiny faces) too
-// cluttered to read. Segments come back in Phase 3b when panels are being
-// dropped onto specific faces — at that point the polygons ARE the interaction
-// target, not decoration, so they belong on the canvas again.
-function overlayRoofSegments({ canvas, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
-  const created = [];
-  const centerLat = Number(roofAnalysis?.latitude);
-  const centerLng = Number(roofAnalysis?.longitude);
-  if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) return created;
-
-  const toPixel = makeLatLngToPixel({
-    centerLat, centerLng,
-    radiusMeters: radiusForAnalysis(roofAnalysis),
-    imgWidth, imgHeight,
-  });
-  const toCanvas = (p) => ({ x: left + p.x * scale, y: top + p.y * scale });
-
-  // ── Property centre crosshair + label ─────────────────────────────────
-  const centerCanvas = toCanvas({ x: imgWidth / 2, y: imgHeight / 2 });
-  const cross1 = new fabric.Line(
-    [centerCanvas.x - 14, centerCanvas.y, centerCanvas.x + 14, centerCanvas.y],
-    { ...TL_ORIGIN, stroke: '#FF6A00', strokeWidth: 2, selectable: false, evented: false }
-  );
-  const cross2 = new fabric.Line(
-    [centerCanvas.x, centerCanvas.y - 14, centerCanvas.x, centerCanvas.y + 14],
-    { ...TL_ORIGIN, stroke: '#FF6A00', strokeWidth: 2, selectable: false, evented: false }
-  );
-  const ring = new fabric.Circle({
-    left: centerCanvas.x, top: centerCanvas.y,
-    originX: 'center', originY: 'center',   // centre-origin: ring sits ON the crosshair centre
-    radius: 7,
-    fill: 'transparent',
-    stroke: '#FF6A00',
-    strokeWidth: 2,
-    selectable: false, evented: false,
-  });
-  const pin = new fabric.Text('◉ Customer property', {
-    ...TL_ORIGIN,
-    left: centerCanvas.x + 12,
-    top: centerCanvas.y - 24,
-    fontSize: 11,
-    fontWeight: '700',
-    fontFamily: '-apple-system, "Segoe UI", system-ui, sans-serif',
-    fill: '#7A2E0A',
-    backgroundColor: 'rgba(253, 224, 204, 0.95)',
-    padding: 3,
-    selectable: false, evented: false,
-  });
-  canvas.add(cross1, cross2, ring, pin);
-  created.push(cross1, cross2, ring, pin);
-
-  return created;
 }
 
 // Compute the union bounding box of Google Solar's detected roof segments in
