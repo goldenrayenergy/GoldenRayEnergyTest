@@ -48,6 +48,34 @@ export function makeLatLngToPixel({ centerLat, centerLng, radiusMeters, imgWidth
 }
 
 /**
+ * INVERSE of makeLatLngToPixel — returns a function that converts an
+ * image-pixel coordinate back to lat/lng using the SAME tile parameters
+ * (centre, radius, image dimensions). Needed by the manual-roof-tracing
+ * flow (Phase 3b.3) where the rep clicks a canvas point and we need to
+ * record it in lat/lng so it survives pan/zoom + can be rendered at any
+ * future canvas size.
+ *
+ * The math is exactly the forward transform inverted; kept in the same
+ * file so the two functions stay in lockstep if we ever change the tile
+ * projection (which we won't for Web Mercator, but still).
+ */
+export function makePixelToLatLng({ centerLat, centerLng, radiusMeters, imgWidth, imgHeight }) {
+  const metersPerDegreeLng = METERS_PER_DEG_LAT * Math.cos(centerLat * Math.PI / 180);
+  const halfW = imgWidth  / 2;
+  const halfH = imgHeight / 2;
+  return function pixelToLatLng(x, y) {
+    const nx =  (x - halfW) / halfW;
+    const ny = -(y - halfH) / halfH;   // reverse the ny = -metersNorth/radius from forward
+    const metersEast  = nx * radiusMeters;
+    const metersNorth = ny * radiusMeters;
+    return {
+      latitude:  centerLat + metersNorth / METERS_PER_DEG_LAT,
+      longitude: centerLng + metersEast  / metersPerDegreeLng,
+    };
+  };
+}
+
+/**
  * Convert a Google roof-segment boundingBox {ne, sw} to a 4-corner polygon
  * in image-pixel coordinates. Corners returned clockwise starting NW.
  *

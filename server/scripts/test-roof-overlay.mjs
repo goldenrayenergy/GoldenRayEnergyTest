@@ -17,7 +17,7 @@ const overlayUrl = pathToFileURL(path.join(
   REPO_ROOT, 'client/src/pm/utils/roofOverlay.js'
 )).href;
 
-const { makeLatLngToPixel, segmentBboxToPolygon, segmentLabel } = await import(overlayUrl);
+const { makeLatLngToPixel, makePixelToLatLng, segmentBboxToPolygon, segmentLabel } = await import(overlayUrl);
 
 let pass = 0;
 let fail = 0;
@@ -144,6 +144,43 @@ const toPixel = makeLatLngToPixel({
   const eastEdge = wide(CENTER_LAT, CENTER_LNG + 50 / metersPerDegLng);
   assert('non-square: 50m east reaches right edge (2000)',
     close(eastEdge.x, 2000, 5));
+}
+
+// ── Phase 3b.3 — inverse transform (canvas pixel → lat/lng) ─────────────
+{
+  console.log('\n▸ makePixelToLatLng round-trip');
+  const params = {
+    centerLat: CENTER_LAT, centerLng: CENTER_LNG,
+    radiusMeters: RADIUS_M,
+    imgWidth: IMG_W, imgHeight: IMG_H,
+  };
+  const forward = makeLatLngToPixel(params);
+  const inverse = makePixelToLatLng(params);
+
+  // Centre pixel → centre lat/lng
+  const centreLL = inverse(IMG_W / 2, IMG_H / 2);
+  assert('centre pixel → centre lat',   close(centreLL.latitude,  CENTER_LAT, 1e-9));
+  assert('centre pixel → centre lng',   close(centreLL.longitude, CENTER_LNG, 1e-9));
+
+  // Round-trip 25 test points across the tile
+  let maxErrDeg = 0;
+  for (let i = 0; i < 25; i++) {
+    const dLat = (i - 12) / 12 * 0.0001;
+    const dLng = ((i * 7) % 25 - 12) / 12 * 0.0001;
+    const p = forward(CENTER_LAT + dLat, CENTER_LNG + dLng);
+    const back = inverse(p.x, p.y);
+    maxErrDeg = Math.max(maxErrDeg,
+      Math.abs(back.latitude  - (CENTER_LAT + dLat)),
+      Math.abs(back.longitude - (CENTER_LNG + dLng)));
+  }
+  assert('round-trip max error < 1e-9°', maxErrDeg < 1e-9, `maxErr=${maxErrDeg}`);
+
+  // 25m east of centre → back to correct lng
+  const metersPerDegLng = 111320 * Math.cos(CENTER_LAT * Math.PI / 180);
+  const p25E = forward(CENTER_LAT, CENTER_LNG + 25 / metersPerDegLng);
+  const back25E = inverse(p25E.x, p25E.y);
+  assert('25m east round-trips within 1cm',
+    Math.abs((back25E.longitude - CENTER_LNG) * metersPerDegLng - 25) < 0.01);
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

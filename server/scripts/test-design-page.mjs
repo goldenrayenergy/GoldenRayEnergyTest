@@ -280,6 +280,63 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('layoutAndDraw stitches roof-face polygons into overlayObjectsRef',
     /overlayRoofFaces\(\{[\s\S]{0,300}stateRef\.current/.test(page),
     'faces must be drawn every layout so they survive resize/refetch');
+
+  // ── Phase 3b.3 — manual roof-face tracing ────────────────────────────
+  assert('imports makePixelToLatLng inverse',
+    /import\s+\{[^}]*makePixelToLatLng[^}]*\}\s+from\s+['"]\.\.\/utils\/roofOverlay['"]/.test(page),
+    'manual tracing needs canvas-pixel → lat/lng conversion');
+  assert('imports makeRoofFace + addFace',
+    /import\s+\{[^}]*makeRoofFace[^}]*\}\s+from\s+['"]\.\.\/utils\/designState['"]/.test(page)
+    && /import\s+\{[^}]*addFace[^}]*\}\s+from\s+['"]\.\.\/utils\/designState['"]/.test(page),
+    'finishTrace calls makeRoofFace + addFace to persist the traced polygon');
+
+  assert('trace mode state (React + ref)',
+    /const \[isTracing, setIsTracing\]/.test(page)
+    && /isTracingRef = useRef\(false\)/.test(page),
+    'React state drives UI, ref lets stable canvas handlers read current mode');
+  assert('traceVerticesRef holds in-progress vertices',
+    /traceVerticesRef = useRef\(\[\]\)/.test(page));
+  assert('finishTraceRef bridges React callback to canvas dblclick handler',
+    /finishTraceRef = useRef\(null\)/.test(page)
+    && /finishTraceRef\.current = finishTrace/.test(page));
+
+  assert('startTrace / cancelTrace / finishTrace defined',
+    /const startTrace = useCallback/.test(page)
+    && /const cancelTrace = useCallback/.test(page)
+    && /const finishTrace = useCallback/.test(page));
+  assert('finishTrace rejects <3 vertices',
+    /finishTrace = useCallback[\s\S]{0,600}vertices\.length < 3/.test(page),
+    'a polygon needs at least 3 corners');
+  assert('finishTrace calls makeRoofFace with source=manual',
+    /finishTrace[\s\S]{0,800}makeRoofFace\(\{\s*source:\s*['"]manual['"]/.test(page));
+  assert('finishTrace dirties the design (autosave)',
+    /finishTrace[\s\S]{0,1000}setDirty\(true\)/.test(page));
+
+  assert('mouse:down adds vertex when tracing (not pan)',
+    /mouse:down[\s\S]{0,1500}isTracingRef\.current[\s\S]{0,1500}traceVerticesRef\.current\.push/.test(page),
+    'clicks in trace mode add vertices instead of starting a pan');
+  assert('mouse:dblclick finishes the trace',
+    /mouse:dblclick[\s\S]{0,400}finishTraceRef\.current/.test(page));
+  // Escape-key handler order-agnostic: both the addEventListener('keydown')
+  // AND an Escape → cancelTrace mapping must exist within a small window.
+  assert('Esc cancels an in-progress trace',
+    /Escape[\s\S]{0,100}cancelTrace\(\)/.test(page)
+    && /window\.addEventListener\(['"]keydown['"]/.test(page),
+    'Esc must interrupt tracing');
+
+  assert('overlayTraceInProgress helper defined',
+    /function overlayTraceInProgress\(/.test(page),
+    'renders in-progress vertices + connecting lines');
+  assert('overlayTraceInProgress shows dashed closing line when >=3 vertices',
+    /points\.length >= 3[\s\S]{0,800}strokeDashArray/.test(page),
+    'visualises the polygon that Finish will save');
+
+  assert('Trace face button rendered when image present + not tracing',
+    /roofAnalysis\?\.roof_image_signed_url[\s\S]{0,300}!isTracing[\s\S]{0,600}Trace face/.test(page));
+  assert('Trace mode instruction bar rendered when isTracing=true',
+    /isTracing\s*&&[\s\S]{0,600}Tracing roof face[\s\S]{0,1200}Finish[\s\S]{0,400}Cancel/.test(page));
+  assert('Finish button disabled with <3 vertices',
+    /disabled=\{traceVertexCount\s*<\s*3\}/.test(page));
 }
 
 // ── PmApp.jsx route wiring ────────────────────────────────────────────────

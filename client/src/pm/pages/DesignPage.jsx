@@ -27,8 +27,8 @@ import * as fabric from 'fabric';
 import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle } from 'lucide-react';
 import { pmQuotesAPI, pmContactsAPI } from '../services/pmQuotesApi';
 import { pmDesignsAPI, emptyDesignState, migrateDesignState } from '../services/pmDesignsApi';
-import { makeLatLngToPixel } from '../utils/roofOverlay';
-import { importGoogleSegments } from '../utils/designState';
+import { makeLatLngToPixel, makePixelToLatLng } from '../utils/roofOverlay';
+import { importGoogleSegments, makeRoofFace, addFace } from '../utils/designState';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
 // Phase 3b will re-import them when we render segment polygons for panel placement.
 
@@ -93,6 +93,12 @@ export default function DesignPage() {
   const [refetching, setRefetching] = useState(false);   // background tile upgrade
   const [faceCount, setFaceCount] = useState(0);         // reactive mirror of state.roof.faces.length
   const [importingSegments, setImportingSegments] = useState(false);
+  // Phase 3b.3 — manual roof-face tracing
+  const [isTracing, setIsTracing] = useState(false);
+  const [traceVertexCount, setTraceVertexCount] = useState(0);
+  const isTracingRef = useRef(false);                    // synced from React state; ref for mouse handler
+  const traceVerticesRef = useRef([]);                   // {latitude, longitude} array being built
+  const finishTraceRef = useRef(null);                   // dblclick handler calls the latest finishTrace via this ref
 
   // ── Load quote + roof analysis + existing design ───────────────────────
   useEffect(() => {
@@ -240,6 +246,10 @@ export default function DesignPage() {
     hasAutoZoomedRef.current = false;
   }, [roofAnalysis]);
 
+  // Sync isTracing → isTracingRef so mouse:down (a stable closure inside the
+  // canvas-init effect) can check the current tracing state without re-binding.
+  useEffect(() => { isTracingRef.current = isTracing; }, [isTracing]);
+
   // ── Initialize Fabric once the DOM canvas + container are ready ────────
   useEffect(() => {
     if (loading || !canvasElRef.current || !containerRef.current) return;
@@ -311,7 +321,15 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
-        overlayObjectsRef.current = [...propertyMarker, ...facePolys];
+        // Phase 3b.3 — draw the in-progress trace on top of everything
+        const traceObjects = overlayTraceInProgress({
+          canvas: c,
+          traceVertices: traceVerticesRef.current || [],
+          roofAnalysis: roofAnalysisRef.current,
+          imgWidth: img.width, imgHeight: img.height,
+          left, top, scale,
+        });
+        overlayObjectsRef.current = [...propertyMarker, ...facePolys, ...traceObjects];
 
         // First layout only: auto-zoom so the customer's roof fills the view.
         // Google Solar tile is 100m × 100m — much bigger than a typical NZ
@@ -340,12 +358,49 @@ export default function DesignPage() {
     let lastPosX = 0, lastPosY = 0;
 
     canvas.on('mouse:down', (opt) => {
+      // Phase 3b.3 — while tracing, clicks add polygon vertices instead of panning.
+      // We read the ref (not React state) so this closure stays stable across renders.
+      if (isTracingRef.current) {
+        const pointer = canvas.getPointer(opt.e);   // canvas coords, viewport-aware
+        // Convert canvas coord → image pixel → lat/lng using refs synced in effects above.
+        const img  = roofImgRef.current;
+        const roof = roofAnalysisRef.current;
+        if (!img || !roof) return;
+        const scale = img.scaleX || 1;
+        const imgPxX = (pointer.x - (img.left || 0)) / scale;
+        const imgPxY = (pointer.y - (img.top  || 0)) / scale;
+        const toLatLng = makePixelToLatLng({
+          centerLat:    Number(roof.latitude),
+          centerLng:    Number(roof.longitude),
+          radiusMeters: Number.isFinite(Number(roof.tile_radius_m)) && Number(roof.tile_radius_m) > 0
+                          ? Number(roof.tile_radius_m)
+                          : FALLBACK_TILE_RADIUS_METERS,
+          imgWidth:  img.width,
+          imgHeight: img.height,
+        });
+        traceVerticesRef.current.push(toLatLng(imgPxX, imgPxY));
+        setTraceVertexCount(traceVerticesRef.current.length);
+        layoutAndDrawRef.current?.();
+        return;   // don't initiate a pan
+      }
+
       const evt = opt.e;
       isPanning = true;
       canvas.setCursor('grabbing');
       canvas.defaultCursor = 'grabbing';
       lastPosX = evt.clientX;
       lastPosY = evt.clientY;
+    });
+
+    // Double-click finishes an in-progress trace. The dblclick fires a
+    // preceding single-click (which adds a vertex) — that's fine; the finish
+    // handler ignores traces with <3 vertices, and users double-click AFTER
+    // they've placed all corners.
+    canvas.on('mouse:dblclick', () => {
+      if (!isTracingRef.current) return;
+      if (traceVerticesRef.current.length < 3) return;
+      // Delegate to the React-state-aware finishTrace (captured via ref).
+      finishTraceRef.current?.();
     });
 
     canvas.on('mouse:move', (opt) => {
@@ -471,6 +526,89 @@ export default function DesignPage() {
     }
   }, [importingSegments]);
 
+  // ── Manual roof-face tracing — Phase 3b.3 ────────────────────────────
+  // Rep clicks 'Trace face', clicks each corner on the aerial to build a
+  // polygon, then double-clicks (or clicks Finish) to close + save. Esc
+  // cancels mid-draw. Vertices are stored in lat/lng from the moment they're
+  // clicked, so they survive pan/zoom + container resizes.
+  const startTrace = useCallback(() => {
+    if (isTracing) return;
+    traceVerticesRef.current = [];
+    setTraceVertexCount(0);
+    setIsTracing(true);
+    // Redraw so previously-visible controls (e.g. pan cursor) update
+    layoutAndDrawRef.current?.();
+  }, [isTracing]);
+
+  const cancelTrace = useCallback(() => {
+    if (!isTracing) return;
+    traceVerticesRef.current = [];
+    setTraceVertexCount(0);
+    setIsTracing(false);
+    layoutAndDrawRef.current?.();
+  }, [isTracing]);
+
+  const finishTrace = useCallback(() => {
+    if (!isTracing) return;
+    const vertices = traceVerticesRef.current;
+    if (vertices.length < 3) {
+      // silently ignore — the finish button is disabled anyway, but the
+      // dblclick path can hit this with 1–2 vertices
+      return;
+    }
+    try {
+      const face = makeRoofFace({ source: 'manual', polygon: vertices });
+      stateRef.current = addFace(stateRef.current, face);
+      setFaceCount(stateRef.current.roof.faces.length);
+      setDirty(true);
+    } catch (err) {
+      // makeRoofFace validates the polygon — unlikely to throw here since
+      // we've filtered to >=3 vertices, but be defensive.
+      console.warn('[DesignPage] failed to save traced face:', err?.message || err);
+    } finally {
+      traceVerticesRef.current = [];
+      setTraceVertexCount(0);
+      setIsTracing(false);
+      layoutAndDrawRef.current?.();
+    }
+  }, [isTracing]);
+
+  // Convert a canvas-space pointer coordinate to lat/lng using the current
+  // image transform + tile radius. Returns null if the roof image or analysis
+  // isn't loaded yet (shouldn't happen once trace mode is active).
+  const canvasPointerToLatLng = useCallback((pointerX, pointerY) => {
+    const img  = roofImgRef.current;
+    const roof = roofAnalysisRef.current;
+    if (!img || !roof) return null;
+    const scale = img.scaleX || 1;
+    const left  = img.left   || 0;
+    const top   = img.top    || 0;
+    const imgPxX = (pointerX - left) / scale;
+    const imgPxY = (pointerY - top)  / scale;
+    const toLatLng = makePixelToLatLng({
+      centerLat:    Number(roof.latitude),
+      centerLng:    Number(roof.longitude),
+      radiusMeters: Number.isFinite(Number(roof.tile_radius_m)) && Number(roof.tile_radius_m) > 0
+                      ? Number(roof.tile_radius_m)
+                      : FALLBACK_TILE_RADIUS_METERS,
+      imgWidth:  img.width,
+      imgHeight: img.height,
+    });
+    return toLatLng(imgPxX, imgPxY);
+  }, []);
+
+  // Esc cancels an in-progress trace.
+  useEffect(() => {
+    if (!isTracing) return;
+    const onKey = (e) => { if (e.key === 'Escape') cancelTrace(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isTracing, cancelTrace]);
+
+  // Keep finishTraceRef pointed at the latest useCallback so the stable
+  // mouse:dblclick handler inside the canvas-init effect can invoke it.
+  useEffect(() => { finishTraceRef.current = finishTrace; }, [finishTrace]);
+
   // ── Zoom button handlers ───────────────────────────────────────────────
   // Phase 3a: viewport changes don't dirty the design; save infrastructure is
   // ready but won't fire until Phase 3b adds real content (panels, roof faces).
@@ -576,6 +714,16 @@ export default function DesignPage() {
               {faceCount} roof face{faceCount === 1 ? '' : 's'}
             </span>
           )}
+          {/* Phase 3b.3 — manual roof-face tracing (always available once image loaded) */}
+          {roofAnalysis?.roof_image_signed_url && !isTracing && (
+            <button
+              onClick={startTrace}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-sage-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-full px-3 py-1"
+              title="Manually trace a roof face by clicking each corner on the image"
+            >
+              ✏️ Trace face
+            </button>
+          )}
           {refetching && (
             <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
               <Loader2 className="w-3 h-3 animate-spin" />
@@ -617,6 +765,32 @@ export default function DesignPage() {
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-amber-50 border border-amber-300 text-amber-900 px-4 py-2 rounded text-sm flex items-center gap-2 shadow-sm">
             <AlertCircle className="w-4 h-4" />
             No roof image on file for this customer yet — canvas is available but blank.
+          </div>
+        )}
+        {/* Phase 3b.3 — trace-mode instruction bar */}
+        {isTracing && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-emerald-50 border border-emerald-400 text-emerald-900 px-4 py-2 rounded-lg text-sm flex items-center gap-3 shadow-md">
+            <span className="font-semibold">✏️ Tracing roof face</span>
+            <span className="text-emerald-700">
+              {traceVertexCount === 0
+                ? 'Click each corner of the roof face'
+                : traceVertexCount < 3
+                  ? `${traceVertexCount} corner${traceVertexCount === 1 ? '' : 's'} — need at least 3`
+                  : `${traceVertexCount} corners · double-click or Finish to close`}
+            </span>
+            <button
+              onClick={finishTrace}
+              disabled={traceVertexCount < 3}
+              className="ml-2 px-3 py-1 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded"
+            >
+              Finish
+            </button>
+            <button
+              onClick={cancelTrace}
+              className="px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 rounded"
+            >
+              Cancel (Esc)
+            </button>
           </div>
         )}
         <canvas ref={canvasElRef} />
@@ -837,6 +1011,85 @@ function overlayRoofFaces({ canvas, faces, roofAnalysis, imgWidth, imgHeight, le
       fill: '#1B1810',
       backgroundColor: 'rgba(255, 253, 246, 0.85)',
       padding: 2,
+      selectable: false, evented: false,
+    });
+    canvas.add(label);
+    created.push(label);
+  });
+
+  return created;
+}
+
+// Phase 3b.3 — draw an in-progress trace: numbered vertex dots + solid lines
+// between consecutive vertices + a dashed "closing" line from the last vertex
+// back to the first (visual preview of the shape that Finish will save).
+function overlayTraceInProgress({ canvas, traceVertices, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
+  const created = [];
+  if (!Array.isArray(traceVertices) || traceVertices.length === 0) return created;
+
+  const centerLat = Number(roofAnalysis?.latitude);
+  const centerLng = Number(roofAnalysis?.longitude);
+  if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) return created;
+
+  const radiusMeters = Number(roofAnalysis?.tile_radius_m) > 0
+    ? Number(roofAnalysis.tile_radius_m)
+    : ROOF_TILE_RADIUS_METERS_FALLBACK;
+
+  const toPixel = makeLatLngToPixel({
+    centerLat, centerLng, radiusMeters,
+    imgWidth, imgHeight,
+  });
+  const toCanvas = (p) => ({ x: left + p.x * scale, y: top + p.y * scale });
+
+  const points = traceVertices.map(v => toCanvas(toPixel(v.latitude, v.longitude)));
+
+  // Solid lines between consecutive vertices
+  for (let i = 0; i < points.length - 1; i++) {
+    const line = new fabric.Line(
+      [points[i].x, points[i].y, points[i + 1].x, points[i + 1].y],
+      { ...TL_ORIGIN, stroke: '#22421E', strokeWidth: 2, selectable: false, evented: false }
+    );
+    canvas.add(line);
+    created.push(line);
+  }
+
+  // Dashed closing line when we have >=3 vertices (visualises the polygon that
+  // Finish would save without prematurely closing it)
+  if (points.length >= 3) {
+    const first = points[0], last = points[points.length - 1];
+    const closingLine = new fabric.Line(
+      [last.x, last.y, first.x, first.y],
+      {
+        ...TL_ORIGIN, stroke: '#4A7C59', strokeWidth: 2,
+        strokeDashArray: [6, 4],
+        selectable: false, evented: false,
+      }
+    );
+    canvas.add(closingLine);
+    created.push(closingLine);
+  }
+
+  // Numbered vertex dots on top of the lines
+  points.forEach((p, i) => {
+    const dot = new fabric.Circle({
+      left: p.x, top: p.y,
+      originX: 'center', originY: 'center',
+      radius: 6,
+      fill: '#4A7C59', stroke: '#FFFDF6', strokeWidth: 2,
+      selectable: false, evented: false,
+    });
+    canvas.add(dot);
+    created.push(dot);
+
+    // Small vertex number label above the dot
+    const label = new fabric.Text(String(i + 1), {
+      left: p.x, top: p.y - 14,
+      originX: 'center', originY: 'center',
+      fontSize: 10, fontWeight: '700',
+      fontFamily: '-apple-system, "Segoe UI", system-ui, sans-serif',
+      fill: '#22421E',
+      backgroundColor: 'rgba(255, 253, 246, 0.95)',
+      padding: 1,
       selectable: false, evented: false,
     });
     canvas.add(label);
