@@ -28,6 +28,7 @@ import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle } f
 import { pmQuotesAPI, pmContactsAPI } from '../services/pmQuotesApi';
 import { pmDesignsAPI, emptyDesignState, migrateDesignState } from '../services/pmDesignsApi';
 import { makeLatLngToPixel } from '../utils/roofOverlay';
+import { importGoogleSegments } from '../utils/designState';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
 // Phase 3b will re-import them when we render segment polygons for panel placement.
 
@@ -90,6 +91,8 @@ export default function DesignPage() {
   const [zoomDisplay, setZoomDisplay] = useState(1.0);
   const [dirty, setDirty] = useState(false);
   const [refetching, setRefetching] = useState(false);   // background tile upgrade
+  const [faceCount, setFaceCount] = useState(0);         // reactive mirror of state.roof.faces.length
+  const [importingSegments, setImportingSegments] = useState(false);
 
   // ── Load quote + roof analysis + existing design ───────────────────────
   useEffect(() => {
@@ -158,6 +161,9 @@ export default function DesignPage() {
           stateRef.current = emptyDesignState();
           versionRef.current = 0;
         }
+        // Mirror face count into React state so UI conditionals react on
+        // load AND on subsequent mutations (see importFromGoogle below).
+        setFaceCount(stateRef.current?.roof?.faces?.length ?? 0);
       } catch (e) {
         if (!cancelled) setLoadError(e.response?.data?.error || e.message);
       } finally {
@@ -292,11 +298,20 @@ export default function DesignPage() {
 
         // Clear old overlays, redraw at current transform.
         for (const obj of overlayObjectsRef.current) c.remove(obj);
-        overlayObjectsRef.current = overlayRoofSegments({
+        const propertyMarker = overlayRoofSegments({
           canvas: c, roofAnalysis: roofAnalysisRef.current,
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
+        // Phase 3b.2 — draw the imported/manual roof faces on top of the image.
+        const facePolys = overlayRoofFaces({
+          canvas: c,
+          faces: stateRef.current?.roof?.faces || [],
+          roofAnalysis: roofAnalysisRef.current,
+          imgWidth: img.width, imgHeight: img.height,
+          left, top, scale,
+        });
+        overlayObjectsRef.current = [...propertyMarker, ...facePolys];
 
         // First layout only: auto-zoom so the customer's roof fills the view.
         // Google Solar tile is 100m × 100m — much bigger than a typical NZ
@@ -433,6 +448,29 @@ export default function DesignPage() {
     return () => { cancelled = true; };
   }, [loading, roofAnalysis?.roof_image_signed_url]);
 
+  // ── "Trace from Google" — Phase 3b.2 ─────────────────────────────────
+  // Converts Google Solar's detected roof_segments into design.state.roof.faces,
+  // then redraws the canvas to show the polygons. Re-clicking replaces any
+  // Google-sourced faces (manual faces + any panels on manual faces survive;
+  // panels on the OLD google faces are dropped since their face id is gone).
+  const importFromGoogle = useCallback(() => {
+    if (importingSegments) return;
+    const segments = roofAnalysisRef.current?.roof_segments;
+    if (!Array.isArray(segments) || segments.length === 0) return;
+    setImportingSegments(true);
+    try {
+      const nextState = importGoogleSegments(stateRef.current, segments);
+      stateRef.current = nextState;
+      setFaceCount(nextState.roof.faces.length);
+      setDirty(true);
+      // Redraw so the new polygons appear immediately (autosave will PUT the
+      // updated state 2s later via the existing debounced autosave effect).
+      layoutAndDrawRef.current?.();
+    } finally {
+      setImportingSegments(false);
+    }
+  }, [importingSegments]);
+
   // ── Zoom button handlers ───────────────────────────────────────────────
   // Phase 3a: viewport changes don't dirty the design; save infrastructure is
   // ready but won't fire until Phase 3b adds real content (panels, roof faces).
@@ -520,6 +558,24 @@ export default function DesignPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Phase 3b.2 — "Trace from Google" pill, visible only until faces are imported */}
+          {faceCount === 0
+            && Array.isArray(roofAnalysis?.roof_segments)
+            && roofAnalysis.roof_segments.length > 0 && (
+              <button
+                onClick={importFromGoogle}
+                disabled={importingSegments}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-full px-3 py-1 disabled:opacity-50"
+                title={`Import ${roofAnalysis.roof_segments.length} roof face(s) detected by Google Solar`}
+              >
+                📐 Trace from Google ({roofAnalysis.roof_segments.length})
+              </button>
+          )}
+          {faceCount > 0 && (
+            <span className="text-xs text-slate-500">
+              {faceCount} roof face{faceCount === 1 ? '' : 's'}
+            </span>
+          )}
           {refetching && (
             <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
               <Loader2 className="w-3 h-3 animate-spin" />
@@ -720,6 +776,96 @@ function autoZoomToRoof(canvas, roofAnalysis, imgWidth, imgHeight, left, top, sc
   ]);
   return zoom;
 }
+
+// Draw the roof-face polygons on top of the aerial. Every face is a polygon
+// in lat/lng — we project each vertex through the tile's radiusMeters and
+// then through the image's placement transform (left/top/scale) so faces
+// stay locked to the roof under pan/zoom.
+//
+// Colour scheme:
+//   • google_solar-sourced faces → amber fill/outline (matches our brand)
+//   • manual faces               → sage fill/outline (visually distinct so
+//     rep can tell what they traced vs what came from Google)
+function overlayRoofFaces({ canvas, faces, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
+  const created = [];
+  if (!Array.isArray(faces) || faces.length === 0) return created;
+
+  const centerLat = Number(roofAnalysis?.latitude);
+  const centerLng = Number(roofAnalysis?.longitude);
+  if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) return created;
+
+  const radiusMeters = Number(roofAnalysis?.tile_radius_m) > 0
+    ? Number(roofAnalysis.tile_radius_m)
+    : ROOF_TILE_RADIUS_METERS_FALLBACK;
+
+  const toPixel = makeLatLngToPixel({
+    centerLat, centerLng, radiusMeters,
+    imgWidth, imgHeight,
+  });
+  const toCanvas = (p) => ({ x: left + p.x * scale, y: top + p.y * scale });
+
+  faces.forEach((face, i) => {
+    if (!Array.isArray(face.polygon) || face.polygon.length < 3) return;
+
+    const points = face.polygon.map(v => toCanvas(toPixel(v.latitude, v.longitude)));
+
+    const isGoogle = face.source === 'google_solar';
+    const fill   = isGoogle ? 'rgba(245, 166, 35, 0.18)' : 'rgba(74, 124, 89, 0.18)';
+    const stroke = isGoogle ? 'rgba(255, 106, 0, 0.9)'   : 'rgba(74, 124, 89, 0.9)';
+
+    const polygon = new fabric.Polygon(points, {
+      ...TL_ORIGIN,
+      fill, stroke, strokeWidth: 2,
+      selectable: false,   // Phase 3b.7 will make faces selectable
+      evented: false,
+      hoverCursor: 'grab',
+    });
+    canvas.add(polygon);
+    created.push(polygon);
+
+    // Small label at the polygon centroid with pitch + orientation
+    const centroid = polygonCentroid(points);
+    const parts = [`#${i + 1}`];
+    if (face.areaMetres2)    parts.push(`${face.areaMetres2.toFixed(1)}m²`);
+    if (face.azimuthDegrees != null) parts.push(azimuthToCompass(face.azimuthDegrees));
+    if (face.pitchDegrees   != null) parts.push(`${face.pitchDegrees.toFixed(0)}°`);
+    const label = new fabric.Text(parts.join(' · '), {
+      left: centroid.x, top: centroid.y,
+      originX: 'center', originY: 'center',
+      fontSize: 10,
+      fontFamily: '-apple-system, "Segoe UI", system-ui, sans-serif',
+      fill: '#1B1810',
+      backgroundColor: 'rgba(255, 253, 246, 0.85)',
+      padding: 2,
+      selectable: false, evented: false,
+    });
+    canvas.add(label);
+    created.push(label);
+  });
+
+  return created;
+}
+
+// Compute the centroid of a polygon defined by canvas-pixel points.
+// Simple arithmetic mean works well for convex + near-convex polygons.
+function polygonCentroid(points) {
+  const n = points.length;
+  let sx = 0, sy = 0;
+  for (const p of points) { sx += p.x; sy += p.y; }
+  return { x: sx / n, y: sy / n };
+}
+
+// Compass direction from azimuth. 0=N, 90=E, 180=S, 270=W.
+function azimuthToCompass(deg) {
+  if (deg == null || Number.isNaN(deg)) return '';
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
+// Fallback tile radius (kept in sync with FALLBACK_TILE_RADIUS_METERS)
+// so overlayRoofFaces can be called without pulling the whole DesignPage
+// closure. Only used when roofAnalysis.tile_radius_m is missing (pre-M040).
+const ROOF_TILE_RADIUS_METERS_FALLBACK = 50;
 
 // Placeholder roof drawn when no aerial image is available.
 // Gives the rep something to pan/zoom over so they can validate the canvas

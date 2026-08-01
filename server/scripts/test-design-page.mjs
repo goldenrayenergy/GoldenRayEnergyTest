@@ -182,9 +182,13 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     'debug console.log + red/blue/green markers must not ship');
 
   // ── Phase 3a scope: property marker only, segments deferred to 3b ────
-  assert('phase 3a: does NOT draw segment polygons (deferred to 3b)',
-    !/new fabric\.Polygon/.test(page),
-    'segment polygons cluttered the small NZ roof — moved to Phase 3b when they become the panel-drop target');
+  // Phase 3b.2 reintroduces fabric.Polygon for roof-face rendering — different
+  // from the Google-Solar segment polygons we removed in Phase 3a. Verify the
+  // Phase 3a change stuck: overlayRoofSegments MUST NOT itself create polygons
+  // (it now only draws the property marker; face polygons live in overlayRoofFaces).
+  assert('overlayRoofSegments does not create polygons (property marker only)',
+    !/function overlayRoofSegments[\s\S]{0,4000}new fabric\.Polygon/.test(page),
+    'polygons live in overlayRoofFaces, not overlayRoofSegments');
   assert('phase 3a: does NOT import segment helpers from roofOverlay',
     !/import\s*\{[^}]*(segmentBboxToPolygon|segmentLabel)[^}]*\}\s*from\s*['"]\.\.\/utils\/roofOverlay/.test(page),
     'segment helpers stay in roofOverlay.js for Phase 3b re-import');
@@ -211,7 +215,11 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
 
   // ── Migration 040: per-analysis tile radius + auto-refetch ─────────
   assert('uses radiusForAnalysis (not hardcoded ROOF_TILE_RADIUS_METERS)',
-    /radiusForAnalysis\(roofAnalysis\)/.test(page) && !/ROOF_TILE_RADIUS_METERS(?!\s*=\s*const)/.test(page),
+    /radiusForAnalysis\(roofAnalysis\)/.test(page)
+    // Only the FALLBACK constant name is allowed (declaration inside a helper);
+    // any bare `ROOF_TILE_RADIUS_METERS` (no _FALLBACK suffix) as a coord-math
+    // argument would mean we regressed away from per-analysis radius.
+    && !/radiusMeters:\s*ROOF_TILE_RADIUS_METERS(?!_FALLBACK)/.test(page),
     'client must read tile_radius_m from the stored row, not use a hardcoded constant');
   assert('fallback radius constant is 50m',
     /FALLBACK_TILE_RADIUS_METERS\s*=\s*50/.test(page),
@@ -242,6 +250,36 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('header uses imageryLabel not raw imagery_quality',
     /\{imageryLabel\(roofAnalysis\)/.test(page),
     'header should call the helper — using raw imagery_quality misleads for LINZ tiles');
+
+  // ── Phase 3b.2 — Trace-from-Google button + roof-face polygon overlay ──
+  assert('imports importGoogleSegments helper',
+    /import\s+\{[^}]*importGoogleSegments[^}]*\}\s+from\s+['"]\.\.\/utils\/designState['"]/.test(page),
+    'DesignPage must import the segments→faces helper');
+  assert('has importFromGoogle handler',
+    /const importFromGoogle = useCallback/.test(page),
+    'click handler for "Trace from Google" must be present');
+  assert('handler dirties the design (autosave)',
+    /importFromGoogle[\s\S]{0,400}setDirty\(true\)/.test(page),
+    'importing faces is a real content change — must trigger autosave');
+  assert('handler triggers redraw via layoutAndDrawRef',
+    /importFromGoogle\s*=\s*useCallback[\s\S]{0,1200}layoutAndDrawRef\.current\?\.\(\)/.test(page),
+    'polygons only appear if we redraw after mutation');
+  assert('shows "Trace from Google" pill when faceCount is 0',
+    /faceCount === 0[\s\S]{0,900}Trace from Google/.test(page),
+    'pill visible only when no faces imported yet');
+  assert('pill hidden after faces imported',
+    /faceCount > 0[\s\S]{0,200}roof face/.test(page),
+    'once imported, show the count instead of the button');
+
+  assert('overlayRoofFaces helper defined',
+    /function overlayRoofFaces\(/.test(page),
+    'need a helper that renders face polygons on the canvas');
+  assert('overlayRoofFaces colours google vs manual differently',
+    /google_solar[\s\S]{0,600}rgba\(245, 166, 35[\s\S]{0,200}rgba\(74, 124, 89/.test(page),
+    'visual distinction between imported vs traced faces');
+  assert('layoutAndDraw stitches roof-face polygons into overlayObjectsRef',
+    /overlayRoofFaces\(\{[\s\S]{0,300}stateRef\.current/.test(page),
+    'faces must be drawn every layout so they survive resize/refetch');
 }
 
 // ── PmApp.jsx route wiring ────────────────────────────────────────────────

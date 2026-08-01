@@ -267,6 +267,82 @@ export function removeArray(state, id) {
   return { ...state, arrays: state.arrays.filter(a => a.id !== id) };
 }
 
+// ── Google Solar segment → roof face conversion (Phase 3b.2) ─────────────
+// A Google Solar `roofSegmentStat` looks like:
+//   { boundingBox: { ne: {latitude, longitude}, sw: {latitude, longitude} },
+//     center: { latitude, longitude },
+//     pitchDegrees, azimuthDegrees,
+//     stats: { areaMeters2, ... } }
+//
+// We convert the axis-aligned bbox to a 4-vertex polygon. This is a
+// SIMPLIFIED approximation — real roof faces are rarely axis-aligned to
+// lat/lng, so the polygon shows where the face is, not its exact edges.
+// Phase 3b.3 (manual tracing) will let the rep drag vertices to refine.
+// Later phases can use Google's `boundaryPolygon` if/when we start reading it.
+export function googleSegmentToRoofFace(seg) {
+  const bbox = seg?.boundingBox;
+  if (!bbox?.ne || !bbox?.sw) return null;
+  if (typeof bbox.ne.latitude !== 'number' || typeof bbox.ne.longitude !== 'number') return null;
+  if (typeof bbox.sw.latitude !== 'number' || typeof bbox.sw.longitude !== 'number') return null;
+
+  // Order: NW → NE → SE → SW (clockwise from top-left)
+  const polygon = [
+    { latitude: bbox.ne.latitude, longitude: bbox.sw.longitude },  // NW
+    { latitude: bbox.ne.latitude, longitude: bbox.ne.longitude },  // NE
+    { latitude: bbox.sw.latitude, longitude: bbox.ne.longitude },  // SE
+    { latitude: bbox.sw.latitude, longitude: bbox.sw.longitude },  // SW
+  ];
+
+  return makeRoofFace({
+    source: 'google_solar',
+    polygon,
+    pitchDegrees:   typeof seg.pitchDegrees   === 'number' ? seg.pitchDegrees   : null,
+    azimuthDegrees: typeof seg.azimuthDegrees === 'number' ? seg.azimuthDegrees : null,
+    areaMetres2:    typeof seg?.stats?.areaMeters2 === 'number' ? seg.stats.areaMeters2 : 0,
+  });
+}
+
+// Convert an ENTIRE Google Solar segment array (roof_analyses.roof_segments)
+// to roof-face objects, dropping any segments that fail conversion.
+export function googleSegmentsToRoofFaces(segments) {
+  if (!Array.isArray(segments)) return [];
+  const faces = [];
+  for (const seg of segments) {
+    const f = googleSegmentToRoofFace(seg);
+    if (f) faces.push(f);
+  }
+  return faces;
+}
+
+// Import Google segments into state.roof.faces. Returns a NEW state object.
+// If state already has faces, this REPLACES the Google-sourced ones and keeps
+// any manual faces — so hitting "Trace from Google" twice won't duplicate.
+export function importGoogleSegments(state, segments) {
+  const newGoogleFaces = googleSegmentsToRoofFaces(segments);
+  const manualFaces    = state.roof.faces.filter(f => f.source !== 'google_solar');
+
+  // Collect any panel IDs that were on old google faces — they'll be orphaned
+  // unless we drop them. Panels persist attach-to-face id, so replacing faces
+  // requires clearing panels that were on the old ones.
+  const oldGoogleFaceIds = new Set(
+    state.roof.faces.filter(f => f.source === 'google_solar').map(f => f.id),
+  );
+  const survivingPanels = state.panels.filter(p => !oldGoogleFaceIds.has(p.faceId));
+  const droppedPanelIds = new Set(
+    state.panels.filter(p => oldGoogleFaceIds.has(p.faceId)).map(p => p.id),
+  );
+  const cleanArrays = state.arrays
+    .map(a => ({ ...a, panelIds: a.panelIds.filter(pid => !droppedPanelIds.has(pid)) }))
+    .filter(a => a.panelIds.length > 0);
+
+  return {
+    ...state,
+    roof: { ...state.roof, faces: [...manualFaces, ...newGoogleFaces] },
+    panels: survivingPanels,
+    arrays: cleanArrays,
+  };
+}
+
 // ── Query helpers ─────────────────────────────────────────────────────────
 export function facesById(state) {
   const map = new Map();

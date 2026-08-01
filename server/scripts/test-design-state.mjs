@@ -22,6 +22,7 @@ const {
   makeArray, addArray, removeArray,
   facesById, panelsByFace, totalKilowatts,
   faceId, obstId, panelId, arrayId,
+  googleSegmentToRoofFace, googleSegmentsToRoofFaces, importGoogleSegments,
 } = await import(url);
 
 let pass = 0, fail = 0;
@@ -257,6 +258,98 @@ console.log('test-design-state\n');
   // Unknown SKUs don't crash
   const s2 = addPanel(s, makePanel({ faceId: f1.id, sku: 'UNKNOWN', center: { latitude: 0.5, longitude: 0.5 } }));
   assert('totalKilowatts skips unknown SKUs', totalKilowatts(s2, cat) === 1.425);
+}
+
+// ── Google Solar segment → roof face conversion (Phase 3b.2) ─────────────
+{
+  console.log('\n▸ googleSegmentToRoofFace');
+  const seg = {
+    boundingBox: {
+      ne: { latitude: -36.9097, longitude: 174.6948 },
+      sw: { latitude: -36.9099, longitude: 174.6946 },
+    },
+    center: { latitude: -36.9098, longitude: 174.6947 },
+    pitchDegrees: 22.5,
+    azimuthDegrees: 180,
+    stats: { areaMeters2: 41.2 },
+  };
+  const face = googleSegmentToRoofFace(seg);
+  assert('produces a face',                   !!face);
+  assert('source=google_solar',               face.source === 'google_solar');
+  assert('polygon has 4 vertices (from bbox)', face.polygon.length === 4);
+  assert('pitch preserved',                    face.pitchDegrees === 22.5);
+  assert('azimuth preserved',                  face.azimuthDegrees === 180);
+  assert('area preserved',                     face.areaMetres2 === 41.2);
+  // Polygon corner order: NW, NE, SE, SW
+  assert('vertex 0 = NW',
+    face.polygon[0].latitude === seg.boundingBox.ne.latitude
+    && face.polygon[0].longitude === seg.boundingBox.sw.longitude);
+  assert('vertex 2 = SE',
+    face.polygon[2].latitude === seg.boundingBox.sw.latitude
+    && face.polygon[2].longitude === seg.boundingBox.ne.longitude);
+
+  // Bad input → returns null, not throw
+  assert('null seg → null',           googleSegmentToRoofFace(null) === null);
+  assert('missing bbox → null',       googleSegmentToRoofFace({}) === null);
+  assert('bbox with no ne → null',    googleSegmentToRoofFace({ boundingBox: { sw: seg.boundingBox.sw } }) === null);
+  assert('non-numeric lat → null',
+    googleSegmentToRoofFace({ boundingBox: {
+      ne: { latitude: 'x', longitude: 0 }, sw: { latitude: 0, longitude: 0 } } }) === null);
+}
+
+{
+  console.log('\n▸ googleSegmentsToRoofFaces');
+  const segs = [
+    { boundingBox: { ne: { latitude: 0.001, longitude: 0.001 }, sw: { latitude: 0, longitude: 0 } }, pitchDegrees: 22, azimuthDegrees: 0 },
+    { boundingBox: { ne: { latitude: 0.001, longitude: 0.002 }, sw: { latitude: 0, longitude: 0.001 } }, pitchDegrees: 22, azimuthDegrees: 180 },
+    null,   // bad — should be dropped
+    { boundingBox: null },  // bad — should be dropped
+  ];
+  const faces = googleSegmentsToRoofFaces(segs);
+  assert('drops invalid segments', faces.length === 2);
+  assert('each survivor is a valid face',
+    faces.every(f => f.source === 'google_solar' && f.polygon.length === 4));
+
+  assert('null input → []',       googleSegmentsToRoofFaces(null).length === 0);
+  assert('non-array input → []',  googleSegmentsToRoofFaces('x').length === 0);
+}
+
+{
+  console.log('\n▸ importGoogleSegments');
+  // Start with an empty state
+  let state = emptyDesignState();
+  const segs = [
+    { boundingBox: { ne: { latitude: 0.001, longitude: 0.001 }, sw: { latitude: 0, longitude: 0 } } },
+    { boundingBox: { ne: { latitude: 0.001, longitude: 0.002 }, sw: { latitude: 0, longitude: 0.001 } } },
+  ];
+  state = importGoogleSegments(state, segs);
+  assert('imports 2 faces into empty state', state.roof.faces.length === 2);
+  assert('all imported faces have source=google_solar',
+    state.roof.faces.every(f => f.source === 'google_solar'));
+
+  // Re-importing REPLACES the google faces (no duplication)
+  state = importGoogleSegments(state, segs);
+  assert('re-import replaces (still 2, not 4)', state.roof.faces.length === 2);
+
+  // Manual faces survive re-import
+  const poly = [{ latitude: 0, longitude: 0 }, { latitude: 1, longitude: 0 }, { latitude: 0, longitude: 1 }];
+  const manual = makeRoofFace({ source: 'manual', polygon: poly });
+  state = addFace(state, manual);
+  assert('manual face added → 3 total', state.roof.faces.length === 3);
+  state = importGoogleSegments(state, segs);
+  assert('re-import: manual survives + google refreshed', state.roof.faces.length === 3);
+  assert('manual face still present', state.roof.faces.some(f => f.id === manual.id));
+
+  // Re-import DROPS panels that were on the old google faces
+  const oldGoogleFace = state.roof.faces.find(f => f.source === 'google_solar');
+  const p = makePanel({ faceId: oldGoogleFace.id, sku: 'A', center: { latitude: 0.0005, longitude: 0.0005 } });
+  state = addPanel(state, p);
+  const manualPanel = makePanel({ faceId: manual.id, sku: 'A', center: { latitude: 0.5, longitude: 0.5 } });
+  state = addPanel(state, manualPanel);
+  assert('panels attached before re-import', state.panels.length === 2);
+  state = importGoogleSegments(state, segs);
+  assert('re-import drops panel on old google face, keeps manual-face panel',
+    state.panels.length === 1 && state.panels[0].id === manualPanel.id);
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
