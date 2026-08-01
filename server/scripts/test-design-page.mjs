@@ -379,7 +379,7 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
       && /for \(const p of catalogue\?\.panels[\s\S]{0,100}m\.set\(p\.sku/.test(page));
 
   assert('mouse:down: drop panel when armed + face contains click',
-    /armedPanelSkuRef\.current[\s\S]{0,900}faceContainingPoint[\s\S]{0,600}makePanel\(/.test(page),
+    /armedPanelSkuRef\.current[\s\S]{0,900}faceContainingPoint[\s\S]{0,2600}makePanel\(/.test(page),
     'drop uses faceContainingPoint to attach panel to the clicked face');
   assert('drop uses face.azimuthDegrees for panel rotation',
     /rotationDegrees:\s*typeof face\.azimuthDegrees\s*===\s*['"]number['"]/.test(page),
@@ -391,10 +391,28 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /function overlayPanels\(/.test(page));
   assert('overlayPanels sizes rectangle by catalogue length_mm × width_mm',
     /overlayPanels[\s\S]{0,2500}length_mm[\s\S]{0,500}width_mm/.test(page));
-  assert('overlayPanels renders as Fabric.Rect with rotation',
-    /overlayPanels[\s\S]{0,3000}new fabric\.Rect\([\s\S]{0,900}angle:\s*Number\(panel\.rotationDegrees\)/.test(page));
-  assert('layoutAndDraw stitches panel objects into overlayObjectsRef',
-    /overlayPanels\({[\s\S]{0,600}\}\);[\s\S]{0,800}\[\s*\.\.\.facePolys,\s*\.\.\.panelObjs/.test(page));
+  assert('overlayPanels renders a Fabric.Group (body Rect + centre busbar Line) with rotation',
+    /overlayPanels[\s\S]{0,4000}new fabric\.Group\(\[body,\s*busbar\][\s\S]{0,500}angle:\s*Number\(panel\.rotationDegrees\)/.test(page),
+    'realistic panel = darker fill Rect + silver frame + centre busbar line, grouped so the rotation applies to both');
+  assert('overlayPanels body uses dark navy fill + silver frame',
+    /body\s*=\s*new fabric\.Rect\([\s\S]{0,600}fill:[\s\S]{0,200}rgba\(15,\s*29,\s*58/.test(page)
+      && /body\s*=\s*new fabric\.Rect\([\s\S]{0,600}stroke:[\s\S]{0,200}#C4C9D4/.test(page));
+  assert('layoutAndDraw stitches face grid + panels + trace into overlayObjectsRef',
+    /\[\s*\.\.\.facePolys,\s*\.\.\.gridObjs,\s*\.\.\.panelObjs,\s*\.\.\.traceObjects\s*\]/.test(page));
+
+  // ── Phase 3b.6 (viz) — snap grid preview when a panel is armed ───────
+  assert('overlayFaceGrid helper defined',
+    /function overlayFaceGrid\(/.test(page));
+  assert('overlayFaceGrid uses armed panel dims + PANEL_GRID_GAP_MM for cell size',
+    /overlayFaceGrid[\s\S]{0,600}cellUm\s*=[\s\S]{0,200}length_mm[\s\S]{0,150}PANEL_GRID_GAP_MM/.test(page));
+  assert('overlayFaceGrid clips grid to face polygon bounds (face-local u,v extents)',
+    /overlayFaceGrid[\s\S]{0,2000}uMin\s*=[\s\S]{0,300}uMax\s*=[\s\S]{0,300}vMin\s*=[\s\S]{0,300}vMax\s*=/.test(page));
+  assert('overlayFaceGrid draws dashed lines (visual: subtle grid preview)',
+    /overlayFaceGrid[\s\S]{0,3000}strokeDashArray:\s*\[3,\s*3\]/.test(page));
+  assert('layoutAndDraw calls overlayFaceGrid with armed SKU',
+    /overlayFaceGrid\(\{[\s\S]{0,600}armedSku:\s*armedPanelSkuRef\.current/.test(page));
+  assert('armed sync effect triggers redraw so grid appears/disappears immediately',
+    /armedPanelSkuRef\.current\s*=\s*armedPanelSku[\s\S]{0,200}layoutAndDrawRef\.current\?\.\(\)/.test(page));
 
   assert('PanelPalette component defined',
     /function PanelPalette\(/.test(page));
@@ -412,6 +430,54 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
 
   assert('footer shows Panels count + System kW',
     /Panels:[\s\S]{0,300}\{panelCount\}[\s\S]{0,300}System:[\s\S]{0,300}\{totalKw\.toFixed/.test(page));
+
+  // ── Phase 3b.6 — grid snap wired into the drop handler ───────────────
+  assert('imports snapToFaceGrid + polygonCentroidLL + PANEL_GRID_GAP_MM',
+    /import\s*\{[\s\S]{0,600}snapToFaceGrid[\s\S]{0,100}polygonCentroidLL[\s\S]{0,100}PANEL_GRID_GAP_MM[\s\S]{0,50}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('drop handler snaps click to face-aligned grid before makePanel',
+    /snapToFaceGrid\(\{[\s\S]{0,800}faceAzimuthDegrees:\s*face\.azimuthDegrees[\s\S]{0,1600}makePanel\(/.test(page),
+    'raw click must be snapped so identical panels on a face tile edge-to-edge');
+  assert('snap uses catalogue panel dims (length_mm, width_mm) with default fallback',
+    /snapToFaceGrid\([\s\S]{0,900}panelLengthMm:\s*Number\(spec\?\.length_mm\)\s*\|\|\s*DEFAULT_PANEL_LENGTH_MM/.test(page));
+  assert('snap uses PANEL_GRID_GAP_MM (not a hard-coded number)',
+    /snapToFaceGrid\([\s\S]{0,1000}gapMm:\s*PANEL_GRID_GAP_MM/.test(page));
+  assert('panel.center passed to makePanel is the snapped centre',
+    /snappedCenter\s*=\s*snapToFaceGrid\([\s\S]{0,1600}center:\s*snappedCenter/.test(page));
+  assert('finishTrace infers face azimuth from polygon (manual faces get real azimuth)',
+    /finishTrace[\s\S]{0,800}inferAzimuthFromPolygon\(vertices\)[\s\S]{0,300}makeRoofFace\(\{\s*source:\s*['"]manual['"][\s\S]{0,200}azimuthDegrees/.test(page),
+    'without inferred azimuth, grid stays north-aligned on rotated roofs');
+  assert('drop dedupes: skip if a panel already sits within 100mm on same face',
+    /distanceMetres\(p\.center,\s*snappedCenter\)\s*<\s*0\.1[\s\S]{0,100}isDupe/.test(page)
+      || /isDupe\s*=[\s\S]{0,300}distanceMetres\(p\.center,\s*snappedCenter\)\s*<\s*0\.1/.test(page),
+    'repeat clicks in the same grid cell must not stack panels');
+
+  // ── Phase 3b.7 (part) — click-to-select + Delete-key removal ─────────
+  assert('imports removePanel',
+    /import\s*\{[\s\S]{0,600}removePanel[\s\S]{0,300}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('selectedPanelId state + ref (keydown handler reads ref)',
+    /\[selectedPanelId,\s*setSelectedPanelId\]\s*=\s*useState\(null\)/.test(page)
+      && /selectedPanelIdRef\s*=\s*useRef\(null\)/.test(page)
+      && /selectedPanelIdRef\.current\s*=\s*selectedPanelId/.test(page));
+  assert('overlayPanels stashes panelId on each rendered panel object',
+    /overlayPanels[\s\S]{0,4000}(rect|group)\.data\s*=\s*\{\s*panelId:\s*panel\.id\s*\}/.test(page),
+    'mouse:down needs data.panelId to identify which panel was clicked (whether we store the id on a plain Rect or a Group wrapping the panel visual)');
+  assert('overlayPanels renders selected panel with highlight stroke',
+    /overlayPanels[\s\S]{0,3000}isSelected\s*=\s*panel\.id\s*===\s*selectedPanelId/.test(page)
+      && /overlayPanels[\s\S]{0,3000}isSelected\s*\?[\s\S]{0,300}strokeWidth/.test(page));
+  assert('mouse:down: click on a panel selects it and returns (no drop/pan)',
+    /clickedPanelId\s*=\s*opt\.target\?\.data\?\.panelId[\s\S]{0,300}setSelectedPanelId\(clickedPanelId\)/.test(page));
+  assert('mouse:down: click on empty area deselects a selected panel',
+    /selectedPanelIdRef\.current\s*&&\s*!clickedPanelId[\s\S]{0,300}setSelectedPanelId\(null\)/.test(page));
+  assert('deleteSelectedPanel handler removes panel + updates count/kW/dirty',
+    /deleteSelectedPanel\s*=\s*useCallback\([\s\S]{0,600}removePanel\(stateRef\.current[\s\S]{0,300}setPanelCount[\s\S]{0,300}setTotalKw[\s\S]{0,300}setSelectedPanelId\(null\)/.test(page));
+  assert('Delete + Backspace keys trigger deleteSelectedPanel',
+    /['"]Delete['"][\s\S]{0,50}['"]Backspace['"][\s\S]{0,200}deleteSelectedPanel\(\)/.test(page));
+  assert('keydown handler ignores INPUT/TEXTAREA (rep is typing)',
+    /INPUT[\s\S]{0,80}TEXTAREA[\s\S]{0,80}isContentEditable/.test(page));
+  assert('selected-panel hint bar rendered with Delete button',
+    /selectedPanelId\s*&&\s*!isTracing[\s\S]{0,800}Delete\/Backspace[\s\S]{0,500}deleteSelectedPanel/.test(page));
+  assert('layoutAndDraw passes selectedPanelId into overlayPanels',
+    /overlayPanels\(\{[\s\S]{0,600}selectedPanelId:\s*selectedPanelIdRef\.current/.test(page));
 
   // ── Regression: captureCanvasState must preserve roof/panels/arrays ──
   // Bug: the Phase 3a helper returned only { view, canvas } and was never

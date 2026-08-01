@@ -24,6 +24,8 @@ const {
   faceId, obstId, panelId, arrayId,
   googleSegmentToRoofFace, googleSegmentsToRoofFaces, importGoogleSegments,
   pointInPolygon, faceContainingPoint,
+  polygonCentroidLL, snapToFaceGrid, PANEL_GRID_GAP_MM,
+  distanceMetres, edgeBearingDegrees, inferAzimuthFromPolygon,
 } = await import(url);
 
 let pass = 0, fail = 0;
@@ -427,6 +429,381 @@ console.log('test-design-state\n');
     faceContainingPoint(emptyDesignState(), 0, 0) === null);
   assert('null state → returns null (defensive)',
     faceContainingPoint(null, 0, 0) === null);
+}
+
+// ── polygonCentroidLL (Phase 3b.6 — grid origin) ─────────────────────────
+{
+  console.log('\n▸ polygonCentroidLL');
+  assert('null polygon → null',   polygonCentroidLL(null) === null);
+  assert('empty polygon → null',  polygonCentroidLL([]) === null);
+
+  const unitSquare = [
+    { latitude: 0, longitude: 0 },
+    { latitude: 1, longitude: 0 },
+    { latitude: 1, longitude: 1 },
+    { latitude: 0, longitude: 1 },
+  ];
+  const c = polygonCentroidLL(unitSquare);
+  assert('unit square: centroid at (0.5, 0.5)',
+    Math.abs(c.latitude - 0.5) < 1e-9 && Math.abs(c.longitude - 0.5) < 1e-9);
+
+  // Skewed L-shape — mean-of-vertices is a defensible-but-not-perfect centroid
+  const L = [
+    { latitude: 0, longitude: 0 },
+    { latitude: 0, longitude: 3 },
+    { latitude: 2, longitude: 3 },
+    { latitude: 2, longitude: 1 },
+    { latitude: 3, longitude: 1 },
+    { latitude: 3, longitude: 0 },
+  ];
+  const cL = polygonCentroidLL(L);
+  const expLat = (0 + 0 + 2 + 2 + 3 + 3) / 6;
+  const expLng = (0 + 3 + 3 + 1 + 1 + 0) / 6;
+  assert('L-shape: arithmetic-mean centroid',
+    Math.abs(cL.latitude - expLat) < 1e-9 && Math.abs(cL.longitude - expLng) < 1e-9);
+}
+
+// ── snapToFaceGrid (Phase 3b.6 — panel grid snap) ────────────────────────
+{
+  console.log('\n▸ snapToFaceGrid');
+  assert('gap default is 20mm', PANEL_GRID_GAP_MM === 20);
+
+  // Auckland roof-scale centroid so lng/metres math exercises cos(lat).
+  const centroid = { latitude: -36.9098, longitude: 174.6948 };
+  const panelDims = { panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape', gapMm: 20 };
+
+  // Centre → centre (target == centroid → snapped centre = centroid)
+  {
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 0,
+      faceCentroid: centroid,
+      target: { ...centroid },
+      ...panelDims,
+    });
+    assert('centre point snaps to centroid (any azimuth)',
+      Math.abs(r.latitude - centroid.latitude)   < 1e-9
+      && Math.abs(r.longitude - centroid.longitude) < 1e-9);
+  }
+
+  // A north-aligned grid (azimuth=0), landscape 1800×1100 + 20mm gap:
+  //   cellU (east) = (1800 + 20)/1000 = 1.82 m
+  //   cellV (north) = (1100 + 20)/1000 = 1.12 m
+  {
+    // Click 0.5m east — 0.5/1.82 = 0.275, unambiguously rounds to cell 0.
+    const metresPerDegLng = 111320 * Math.cos(centroid.latitude * Math.PI / 180);
+    const target = {
+      latitude: centroid.latitude,
+      longitude: centroid.longitude + 0.5 / metresPerDegLng,
+    };
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 0,
+      faceCentroid: centroid, target,
+      ...panelDims,
+    });
+    const dEast = (r.longitude - centroid.longitude) * metresPerDegLng;
+    assert('az=0, 0.5m east: snaps to cell 0 (centroid)', Math.abs(dEast) < 0.001);
+  }
+
+  // Click 2m east of centroid → nearest cell along east is 1 * 1.82m = 1.82m
+  {
+    const metresPerDegLng = 111320 * Math.cos(centroid.latitude * Math.PI / 180);
+    const target = {
+      latitude: centroid.latitude,
+      longitude: centroid.longitude + 2.0 / metresPerDegLng,
+    };
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 0,
+      faceCentroid: centroid, target,
+      ...panelDims,
+    });
+    const dEast = (r.longitude - centroid.longitude) * metresPerDegLng;
+    assert('az=0, 2m east: snaps to 1.82m (cellU=1.82)',
+      Math.abs(dEast - 1.82) < 0.001, `got dEast=${dEast}`);
+  }
+
+  // With azimuth=90 the grid rotates so cellU aligns with north-south.
+  // Click 2m NORTH now snaps to the U-cell (1.82m) instead of the V-cell.
+  {
+    const target = {
+      latitude: centroid.latitude + 2.0 / 111320,
+      longitude: centroid.longitude,
+    };
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 90,
+      faceCentroid: centroid, target,
+      ...panelDims,
+    });
+    const dNorth = (r.latitude - centroid.latitude) * 111320;
+    assert('az=90, 2m north: snaps to 1.82m (cellU along north-south)',
+      Math.abs(dNorth - 1.82) < 0.005, `got dNorth=${dNorth}`);
+  }
+
+  // ── Regression: rotated face — grid must align with eave, not normal ───
+  // Bug: a sign error in the (east,north) → (u,v) rotation aligned the
+  // u-axis with the face NORMAL instead of the eave. Panels visually
+  // rotated correctly (rendered at Fabric angle = face.azimuth) but tiled
+  // on an axis 90° off, producing gaps + overlaps instead of clean rows.
+  // Caught only by rotated-face tests — az=0 and az=90 pass either way
+  // because sin(0)=0 masks the sign.
+  //
+  // For az=45 (NE-facing face), the eave runs NW→SE (bearing 135°). A
+  // click 1m SE of centroid lies exactly on the u-axis at u=1m. With
+  // cellU=1.82m the click snaps to u=1.82m → 1.82m SE of centroid.
+  {
+    const mPerDegLng = 111320 * Math.cos(centroid.latitude * Math.PI / 180);
+    // 1m along bearing 135° (SE): dEast = sin(135°), dNorth = cos(135°)
+    const dEast  = Math.sin(135 * Math.PI / 180);   //  +0.707
+    const dNorth = Math.cos(135 * Math.PI / 180);   //  -0.707
+    const target = {
+      latitude:  centroid.latitude  + dNorth / 111320,
+      longitude: centroid.longitude + dEast  / mPerDegLng,
+    };
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 45,
+      faceCentroid: centroid, target,
+      ...panelDims,
+    });
+    // Snapped position should be 1.82m SE of centroid.
+    const rEast  = (r.longitude - centroid.longitude) * mPerDegLng;
+    const rNorth = (r.latitude  - centroid.latitude)  * 111320;
+    const bearingRad = Math.atan2(rEast, rNorth);
+    const dist = Math.hypot(rEast, rNorth);
+    assert('az=45: click 1m SE snaps to 1.82m along SE (grid aligns with eave, not normal)',
+      Math.abs(dist - 1.82) < 0.01 && Math.abs(bearingRad - 135 * Math.PI / 180) < 0.01,
+      `expected dist≈1.82m, bearing≈135°; got dist=${dist.toFixed(3)}, bearing=${(bearingRad*180/Math.PI).toFixed(1)}°`);
+  }
+
+  // Same face — a click 1m along the SLOPE direction (bearing 45°, NE)
+  // is perpendicular to the eave. With cellV=1.12m and 1m in v, round(1/1.12)=1
+  // → snaps to 1.12m NE of centroid.
+  {
+    const mPerDegLng = 111320 * Math.cos(centroid.latitude * Math.PI / 180);
+    const dEast  = Math.sin(45 * Math.PI / 180);   //  +0.707
+    const dNorth = Math.cos(45 * Math.PI / 180);   //  +0.707
+    const target = {
+      latitude:  centroid.latitude  + dNorth / 111320,
+      longitude: centroid.longitude + dEast  / mPerDegLng,
+    };
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 45,
+      faceCentroid: centroid, target,
+      ...panelDims,
+    });
+    const rEast  = (r.longitude - centroid.longitude) * mPerDegLng;
+    const rNorth = (r.latitude  - centroid.latitude)  * 111320;
+    const bearingRad = Math.atan2(rEast, rNorth);
+    const dist = Math.hypot(rEast, rNorth);
+    assert('az=45: click 1m NE snaps to 1.12m along NE (perpendicular to eave)',
+      Math.abs(dist - 1.12) < 0.01 && Math.abs(bearingRad - 45 * Math.PI / 180) < 0.01,
+      `expected dist≈1.12m, bearing≈45°; got dist=${dist.toFixed(3)}, bearing=${(bearingRad*180/Math.PI).toFixed(1)}°`);
+  }
+
+  // Two panels dropped one cell apart in the u-axis land exactly cellU metres apart.
+  {
+    const cellU = (1800 + 20) / 1000;
+    const metresPerDegLng = 111320 * Math.cos(centroid.latitude * Math.PI / 180);
+    const p1 = snapToFaceGrid({
+      faceAzimuthDegrees: 0,
+      faceCentroid: centroid,
+      target: { latitude: centroid.latitude, longitude: centroid.longitude + (cellU * 0.4) / metresPerDegLng },
+      ...panelDims,
+    });
+    const p2 = snapToFaceGrid({
+      faceAzimuthDegrees: 0,
+      faceCentroid: centroid,
+      target: { latitude: centroid.latitude, longitude: centroid.longitude + (cellU * 1.4) / metresPerDegLng },
+      ...panelDims,
+    });
+    const dLngMetres = (p2.longitude - p1.longitude) * metresPerDegLng;
+    assert('two clicks in adjacent cells → snapped centres exactly cellU apart',
+      Math.abs(dLngMetres - cellU) < 0.001, `expected ${cellU}, got ${dLngMetres}`);
+  }
+
+  // Portrait orientation swaps cellU and cellV.
+  {
+    const metresPerDegLng = 111320 * Math.cos(centroid.latitude * Math.PI / 180);
+    const target = {
+      latitude: centroid.latitude,
+      longitude: centroid.longitude + 2.0 / metresPerDegLng,
+    };
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 0,
+      faceCentroid: centroid, target,
+      panelLengthMm: 1800, panelWidthMm: 1100,
+      orientation: 'portrait',
+      gapMm: 20,
+    });
+    const dEast = (r.longitude - centroid.longitude) * metresPerDegLng;
+    // portrait: cellU = 1120mm/1000 = 1.12 → 2m east snaps to round(2/1.12)*1.12 = 2 * 1.12 = 2.24
+    assert('portrait: cellU = width+gap, 2m east snaps to 2.24m',
+      Math.abs(dEast - 2.24) < 0.001, `got dEast=${dEast}`);
+  }
+
+  // Defensive: missing centroid → return raw target
+  {
+    const target = { latitude: 1, longitude: 2 };
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 0,
+      faceCentroid: null, target,
+      panelLengthMm: 1800, panelWidthMm: 1100,
+    });
+    assert('null centroid → returns raw target', r === target);
+  }
+
+  // Defensive: missing panel dims → return raw target
+  {
+    const target = { latitude: 1, longitude: 2 };
+    const r = snapToFaceGrid({
+      faceAzimuthDegrees: 0,
+      faceCentroid: centroid, target,
+      panelLengthMm: null, panelWidthMm: 0,
+    });
+    assert('missing panel dims → returns raw target', r === target);
+  }
+}
+
+// ── distanceMetres + edgeBearingDegrees (Phase 3b.6 helpers) ─────────────
+{
+  console.log('\n▸ distanceMetres + edgeBearingDegrees');
+  const centre = { latitude: -36.9098, longitude: 174.6948 };
+
+  // 1° latitude ≈ 111,320m at any longitude → 0.001° lat ≈ 111.32m
+  const oneKmNorth = { latitude: centre.latitude + 1000 / 111320, longitude: centre.longitude };
+  assert('distanceMetres: 1000m north within 1m',
+    Math.abs(distanceMetres(centre, oneKmNorth) - 1000) < 1);
+
+  const mPerDegLng = 111320 * Math.cos(centre.latitude * Math.PI / 180);
+  const oneKmEast = { latitude: centre.latitude, longitude: centre.longitude + 1000 / mPerDegLng };
+  assert('distanceMetres: 1000m east within 1m',
+    Math.abs(distanceMetres(centre, oneKmEast) - 1000) < 1);
+
+  assert('distanceMetres: null args → Infinity', distanceMetres(null, centre) === Infinity);
+
+  assert('edgeBearingDegrees: straight north = 0°',
+    Math.abs(edgeBearingDegrees(centre, oneKmNorth)) < 0.1);
+  assert('edgeBearingDegrees: straight east = 90°',
+    Math.abs(edgeBearingDegrees(centre, oneKmEast) - 90) < 0.1);
+
+  const oneKmSouth = { latitude: centre.latitude - 1000 / 111320, longitude: centre.longitude };
+  assert('edgeBearingDegrees: straight south = 180°',
+    Math.abs(edgeBearingDegrees(centre, oneKmSouth) - 180) < 0.1);
+
+  const oneKmWest = { latitude: centre.latitude, longitude: centre.longitude - 1000 / mPerDegLng };
+  assert('edgeBearingDegrees: straight west = 270°',
+    Math.abs(edgeBearingDegrees(centre, oneKmWest) - 270) < 0.1);
+}
+
+// ── inferAzimuthFromPolygon (Phase 3b.6 auto-azimuth for manual traces) ─
+{
+  console.log('\n▸ inferAzimuthFromPolygon');
+  assert('null polygon → null', inferAzimuthFromPolygon(null) === null);
+  assert('polygon with <3 vertices → null', inferAzimuthFromPolygon([{ latitude: 0, longitude: 0 }, { latitude: 1, longitude: 0 }]) === null);
+
+  // Rectangle 10m east-west × 4m north-south. Longest edge runs east-west
+  // (bearing 90° from any north-south vertex). Face azimuth = 90 - 90 = 0.
+  const centre = { latitude: -36.9098, longitude: 174.6948 };
+  const mPerDegLng = 111320 * Math.cos(centre.latitude * Math.PI / 180);
+  const rectEW = [
+    { latitude: centre.latitude - 2 / 111320, longitude: centre.longitude },
+    { latitude: centre.latitude - 2 / 111320, longitude: centre.longitude + 10 / mPerDegLng },
+    { latitude: centre.latitude + 2 / 111320, longitude: centre.longitude + 10 / mPerDegLng },
+    { latitude: centre.latitude + 2 / 111320, longitude: centre.longitude },
+  ];
+  const azEW = inferAzimuthFromPolygon(rectEW);
+  assert('rect 10m east-west long edge → azimuth ≈ 0 (or 180, same axis)',
+    Math.abs(azEW) < 1 || Math.abs(azEW - 180) < 1, `got ${azEW}`);
+
+  // Rectangle 4m east-west × 10m north-south. Longest edge is north-south
+  // (bearing 0° or 180°). Face azimuth = 0 - 90 = -90 → 270 (or 90).
+  const rectNS = [
+    { latitude: centre.latitude - 5 / 111320, longitude: centre.longitude },
+    { latitude: centre.latitude - 5 / 111320, longitude: centre.longitude + 4 / mPerDegLng },
+    { latitude: centre.latitude + 5 / 111320, longitude: centre.longitude + 4 / mPerDegLng },
+    { latitude: centre.latitude + 5 / 111320, longitude: centre.longitude },
+  ];
+  const azNS = inferAzimuthFromPolygon(rectNS);
+  assert('rect 10m north-south long edge → azimuth ≈ 90 or 270',
+    Math.abs(azNS - 90) < 1 || Math.abs(azNS - 270) < 1, `got ${azNS}`);
+
+  // Rectangle rotated 45° — long edge runs NE-SW. Face azimuth = 45 - 90 = -45 → 315 (or 135).
+  // Build a 10m × 4m rect rotated 45° around the centre.
+  const rot45 = (dx, dy) => ({
+    dx: (dx - dy) / Math.SQRT2,
+    dy: (dx + dy) / Math.SQRT2,
+  });
+  const dims = [ [-5, -2], [5, -2], [5, 2], [-5, 2] ];
+  const rect45 = dims.map(([dx, dy]) => {
+    const r = rot45(dx, dy);
+    return {
+      latitude:  centre.latitude + r.dy / 111320,
+      longitude: centre.longitude + r.dx / mPerDegLng,
+    };
+  });
+  const az45 = inferAzimuthFromPolygon(rect45);
+  // Long edge bearing = 45° (NE) or 225° (SW). Face az = -45 or 135.
+  assert('rect rotated 45° → azimuth ≈ 315 or 135',
+    Math.abs(az45 - 315) < 2 || Math.abs(az45 - 135) < 2, `got ${az45}`);
+}
+
+// ── migrateDesignState backfills azimuth on legacy manual faces ─────────
+{
+  console.log('\n▸ migrateDesignState azimuth backfill');
+  const legacyState = {
+    schemaVersion: 2,
+    view: { zoom: 1, panX: 0, panY: 0 },
+    canvas: { serialized: null },
+    roof: {
+      faces: [
+        // Manual face with no azimuth — should get one
+        {
+          id: 'face-legacy1', source: 'manual',
+          polygon: [
+            { latitude: 0, longitude: 0 },
+            { latitude: 0, longitude: 0.001 },
+            { latitude: 0.0001, longitude: 0.001 },
+            { latitude: 0.0001, longitude: 0 },
+          ],
+          azimuthDegrees: null,
+        },
+        // Google face — must be left alone
+        {
+          id: 'face-legacy2', source: 'google_solar',
+          polygon: [
+            { latitude: 1, longitude: 1 },
+            { latitude: 1, longitude: 1.001 },
+            { latitude: 1.001, longitude: 1.001 },
+          ],
+          azimuthDegrees: 236.5,
+        },
+        // Manual face WITH azimuth already — must be left alone
+        {
+          id: 'face-legacy3', source: 'manual',
+          polygon: [
+            { latitude: 2, longitude: 2 },
+            { latitude: 2, longitude: 2.001 },
+            { latitude: 2.001, longitude: 2.001 },
+          ],
+          azimuthDegrees: 42,
+        },
+      ],
+      obstructions: [],
+    },
+    panels: [], arrays: [],
+  };
+  const m = migrateDesignState(legacyState);
+  const [f1, f2, f3] = m.roof.faces;
+  assert('legacy manual face gets a computed azimuth',
+    typeof f1.azimuthDegrees === 'number' && !Number.isNaN(f1.azimuthDegrees));
+  assert('google face keeps its original azimuth (236.5)', f2.azimuthDegrees === 236.5);
+  assert('manual face with existing azimuth keeps its value (42)', f3.azimuthDegrees === 42);
+
+  // Manual face with degenerate polygon → azimuth stays null (no crash)
+  const degenerate = migrateDesignState({
+    ...legacyState,
+    roof: { faces: [{ id: 'x', source: 'manual', polygon: [], azimuthDegrees: null }], obstructions: [] },
+  });
+  assert('degenerate polygon → azimuth stays null (no crash)',
+    degenerate.roof.faces[0].azimuthDegrees == null);
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

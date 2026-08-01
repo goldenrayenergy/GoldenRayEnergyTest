@@ -106,13 +106,25 @@ export function emptyDesignState() {
 // unchanged in case a future version adds them and we need to round-trip.
 export function migrateDesignState(state) {
   if (!state || typeof state !== 'object') return emptyDesignState();
+  const faces = Array.isArray(state.roof?.faces) ? state.roof.faces : [];
+  // Phase 3b.6 — backfill azimuth on any manually-traced face that predates
+  // azimuth inference. Purely additive: only fires when azimuthDegrees is
+  // null/undefined AND the polygon has enough vertices. Google-imported
+  // faces already have Google's own azimuth and are left untouched.
+  const facesWithAzimuth = faces.map(f => {
+    if (f?.source === 'manual' && (f.azimuthDegrees == null)) {
+      const az = inferAzimuthFromPolygon(f.polygon);
+      if (az != null) return { ...f, azimuthDegrees: az };
+    }
+    return f;
+  });
   const migrated = {
     ...state,
     schemaVersion: SCHEMA_VERSION,
     view:   state.view   || { zoom: 1.0, panX: 0, panY: 0 },
     canvas: state.canvas || { serialized: null },
     roof: {
-      faces:        Array.isArray(state.roof?.faces)        ? state.roof.faces        : [],
+      faces:        facesWithAzimuth,
       obstructions: Array.isArray(state.roof?.obstructions) ? state.roof.obstructions : [],
     },
     panels: Array.isArray(state.panels) ? state.panels : [],
@@ -396,4 +408,151 @@ export function faceContainingPoint(state, lat, lng) {
     if (pointInPolygon(face.polygon, lat, lng)) return face;
   }
   return null;
+}
+
+// ── Grid snap (Phase 3b.6) ────────────────────────────────────────────────
+// Default gap between adjacent panels in millimetres. 20mm is a typical
+// rail-only clearance; installers with edge-clamp systems can go tighter,
+// but 20mm is a safe default that survives thermal expansion.
+export const PANEL_GRID_GAP_MM = 20;
+
+// Locally-flat lat/lng ↔ metres approximation. Fine at the ~30m scale of
+// a single roof face (sub-mm error vs proper projection).
+const METRES_PER_DEG_LAT_GRID = 111320;
+
+// Distance in metres between two lat/lng points (locally-flat approximation,
+// valid at roof scale). Reused by inferAzimuthFromPolygon and by the
+// drop-dedup check in the DesignPage.
+export function distanceMetres(v1, v2) {
+  if (!v1 || !v2) return Infinity;
+  const centreLatRad = ((v1.latitude + v2.latitude) / 2) * Math.PI / 180;
+  const dEast  = (v2.longitude - v1.longitude) * METRES_PER_DEG_LAT_GRID * Math.cos(centreLatRad);
+  const dNorth = (v2.latitude  - v1.latitude)  * METRES_PER_DEG_LAT_GRID;
+  return Math.hypot(dEast, dNorth);
+}
+
+// Compass bearing (0=N, 90=E, 180=S, 270=W) from v1 → v2.
+// Returns 0 for a zero-length edge (defensive; caller should filter).
+export function edgeBearingDegrees(v1, v2) {
+  const centreLatRad = ((v1.latitude + v2.latitude) / 2) * Math.PI / 180;
+  const dEast  = (v2.longitude - v1.longitude) * METRES_PER_DEG_LAT_GRID * Math.cos(centreLatRad);
+  const dNorth = (v2.latitude  - v1.latitude)  * METRES_PER_DEG_LAT_GRID;
+  if (dEast === 0 && dNorth === 0) return 0;
+  const bearing = Math.atan2(dEast, dNorth) * 180 / Math.PI;
+  return (bearing + 360) % 360;
+}
+
+// Infer a face azimuth from a manually-traced polygon by finding the longest
+// edge and treating it as the eave (or ridge — 180° ambiguous, doesn't matter
+// for grid alignment). The face azimuth is then perpendicular to the eave.
+//
+// This is a heuristic. It works well for rectangular roof faces (the vast
+// majority of NZ residential) and degrades to "close enough" for irregular
+// shapes. For Google-imported faces we already have Google's own azimuth, so
+// this only fires on manual traces (see makeRoofFace call sites).
+//
+// Returns null for degenerate polygons; callers keep the existing null in
+// that case rather than silently forcing to 0.
+export function inferAzimuthFromPolygon(polygon) {
+  if (!Array.isArray(polygon) || polygon.length < 3) return null;
+  let longestLen = 0;
+  let longestBearing = 0;
+  for (let i = 0; i < polygon.length; i++) {
+    const v1 = polygon[i];
+    const v2 = polygon[(i + 1) % polygon.length];
+    const len = distanceMetres(v1, v2);
+    if (len > longestLen) {
+      longestLen = len;
+      longestBearing = edgeBearingDegrees(v1, v2);
+    }
+  }
+  if (longestLen === 0) return null;
+  // Face azimuth = eave bearing - 90° (rotates eave direction onto the grid's
+  // u-axis, which snapToFaceGrid uses for row-alignment).
+  return (longestBearing - 90 + 360) % 360;
+}
+
+// Arithmetic-mean centroid of a lat/lng polygon. Good enough for the
+// near-convex roof faces we get from Google Solar or manual tracing.
+// Reused as the origin of each face's snap grid so dropped panels tile
+// outward from the face's visual centre.
+export function polygonCentroidLL(polygon) {
+  if (!Array.isArray(polygon) || polygon.length === 0) return null;
+  let latSum = 0, lngSum = 0;
+  for (const v of polygon) {
+    latSum += v.latitude;
+    lngSum += v.longitude;
+  }
+  return {
+    latitude:  latSum / polygon.length,
+    longitude: lngSum / polygon.length,
+  };
+}
+
+// Snap a raw drop location to the nearest cell in a face-aligned grid.
+//   • origin  = the face's polygon centroid
+//   • axes    = rotated by the face's compass azimuth (0° = north-aligned,
+//               90° = east-aligned, ...) so panel rows run parallel to
+//               the eave regardless of roof orientation
+//   • cell    = (long edge + gap) × (short edge + gap), swapped for portrait
+//
+// A landscape panel has its LONG edge horizontal (along the eave); a
+// portrait panel has its long edge running up the slope. The grid math
+// treats those as (u = eave-parallel, v = up-slope) so identical panels
+// on the same face tile without overlap when snapped.
+//
+// Face-local math uses a locally-flat approximation, valid at the ~30m
+// scale of a single roof face — sub-mm positional error vs Web Mercator.
+export function snapToFaceGrid({
+  faceAzimuthDegrees,
+  faceCentroid,
+  target,
+  panelLengthMm,
+  panelWidthMm,
+  orientation = 'landscape',
+  gapMm = PANEL_GRID_GAP_MM,
+} = {}) {
+  if (!faceCentroid || !target) return target || null;
+  const lenMm = Number(panelLengthMm);
+  const widMm = Number(panelWidthMm);
+  if (!Number.isFinite(lenMm) || !Number.isFinite(widMm) || lenMm <= 0 || widMm <= 0) {
+    return target;   // no dims → no snap (caller uses raw click)
+  }
+
+  const az = Number(faceAzimuthDegrees) || 0;
+  const azRad = az * Math.PI / 180;
+
+  // Metres east/north of the centroid.
+  const centroidLatRad = faceCentroid.latitude * Math.PI / 180;
+  const metresPerDegLng = METRES_PER_DEG_LAT_GRID * Math.cos(centroidLatRad);
+  const dEast  = (target.longitude - faceCentroid.longitude) * metresPerDegLng;
+  const dNorth = (target.latitude  - faceCentroid.latitude)  * METRES_PER_DEG_LAT_GRID;
+
+  // Rotate (east, north) → face-local (u, v).
+  //   u-axis = along the eave (perpendicular to the face-normal / azimuth)
+  //   v-axis = up the slope (parallel to the face-normal)
+  // Compass eave-bearing = az + 90°, whose unit vector is (cos az, -sin az)
+  // in (east, north). Projecting (dEast, dNorth) onto that gives u.
+  // A previous version had a sign error that rotated the grid 90° off from
+  // the panel rendering — panels looked aligned to the roof but tiled on
+  // the wrong axis, producing overlaps and gaps instead of clean rows.
+  const cosA = Math.cos(azRad), sinA = Math.sin(azRad);
+  const u = dEast * cosA - dNorth * sinA;
+  const v = dEast * sinA + dNorth * cosA;
+
+  // Cell sizes (metres). Landscape = long edge along u (parallel to eave).
+  const cellUm = ((orientation === 'landscape' ? lenMm : widMm) + gapMm) / 1000;
+  const cellVm = ((orientation === 'landscape' ? widMm : lenMm) + gapMm) / 1000;
+
+  const uSnap = Math.round(u / cellUm) * cellUm;
+  const vSnap = Math.round(v / cellVm) * cellVm;
+
+  // Inverse rotation: (u, v) → (east, north).
+  const dEastSnap  =  uSnap * cosA + vSnap * sinA;
+  const dNorthSnap = -uSnap * sinA + vSnap * cosA;
+
+  return {
+    latitude:  faceCentroid.latitude  + dNorthSnap / METRES_PER_DEG_LAT_GRID,
+    longitude: faceCentroid.longitude + dEastSnap  / metresPerDegLng,
+  };
 }

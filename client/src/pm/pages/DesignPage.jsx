@@ -24,14 +24,16 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import * as fabric from 'fabric';
-import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle, X } from 'lucide-react';
+import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle, X, Trash2 } from 'lucide-react';
 import { pmQuotesAPI, pmContactsAPI } from '../services/pmQuotesApi';
 import { pmDesignsAPI, emptyDesignState, migrateDesignState } from '../services/pmDesignsApi';
 import { makeLatLngToPixel, makePixelToLatLng } from '../utils/roofOverlay';
 import {
   importGoogleSegments, makeRoofFace, addFace,
-  makePanel, addPanel,
+  makePanel, addPanel, removePanel,
   faceContainingPoint, totalKilowatts,
+  snapToFaceGrid, polygonCentroidLL, PANEL_GRID_GAP_MM,
+  inferAzimuthFromPolygon, distanceMetres,
 } from '../utils/designState';
 import useCatalogueOptions from '../hooks/useCatalogueOptions';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
@@ -135,6 +137,10 @@ export default function DesignPage() {
   const armedPanelSkuRef = useRef(null);                      // stable read for mouse handler
   const [panelCount, setPanelCount] = useState(0);            // reactive mirror of state.panels.length
   const [totalKw, setTotalKw]       = useState(0);            // reactive mirror of totalKilowatts()
+
+  // Phase 3b.7 (part) — click-to-select + Delete-key removal
+  const [selectedPanelId, setSelectedPanelId] = useState(null);
+  const selectedPanelIdRef = useRef(null);
   // Panel-catalogue lookup by SKU — Map so palette + drop + overlay all share
   // the same shape. Rebuilt whenever the catalogue reloads.
   const panelCatalogueBySku = useMemo(() => {
@@ -318,8 +324,21 @@ export default function DesignPage() {
   useEffect(() => { isTracingRef.current = isTracing; }, [isTracing]);
 
   // Sync armedPanelSku → ref so the stable mouse:down closure can read it
-  // without needing to re-bind on every arm/unarm.
-  useEffect(() => { armedPanelSkuRef.current = armedPanelSku; }, [armedPanelSku]);
+  // without needing to re-bind on every arm/unarm. Also triggers a redraw
+  // so the snap-grid preview appears/disappears immediately when the rep
+  // arms or un-arms a panel (Phase 3b.6 viz).
+  useEffect(() => {
+    armedPanelSkuRef.current = armedPanelSku;
+    layoutAndDrawRef.current?.();
+  }, [armedPanelSku]);
+
+  // Sync selectedPanelId → ref (same reason: keydown handler needs the
+  // latest value without re-binding the listener on every selection change)
+  // AND trigger a redraw so the selected panel's highlight updates.
+  useEffect(() => {
+    selectedPanelIdRef.current = selectedPanelId;
+    layoutAndDrawRef.current?.();
+  }, [selectedPanelId]);
 
   // Recompute total kW when the catalogue arrives after the design has loaded.
   // Wattage lives in the catalogue (not the panel entity), so a design that
@@ -338,6 +357,38 @@ export default function DesignPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [armedPanelSku, isTracing]);
+
+  // Phase 3b.7 (part) — delete the selected panel via keyboard.
+  // Delete + Backspace both work (macOS reps use Backspace, Windows uses Delete).
+  // Esc deselects without deleting. Guarded against typing in text inputs
+  // (search boxes, notes) so we don't nuke a panel while the rep is typing.
+  const deleteSelectedPanel = useCallback(() => {
+    const id = selectedPanelIdRef.current;
+    if (!id) return;
+    stateRef.current = removePanel(stateRef.current, id);
+    setPanelCount(stateRef.current.panels.length);
+    setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+    setSelectedPanelId(null);
+    setDirty(true);
+    layoutAndDrawRef.current?.();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedPanelId) return;
+    const onKey = (e) => {
+      // Ignore key events fired while the rep is typing in a text field.
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        deleteSelectedPanel();
+      } else if (e.key === 'Escape') {
+        setSelectedPanelId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedPanelId, deleteSelectedPanel]);
 
   // ── Initialize Fabric once the DOM canvas + container are ready ────────
   useEffect(() => {
@@ -409,7 +460,20 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
+        // Phase 3b.6 (viz) — dashed grid preview on each face while a panel
+        // is armed, so the rep can see where the next drop will land.
+        const gridObjs = overlayFaceGrid({
+          canvas: c,
+          faces: stateRef.current?.roof?.faces || [],
+          panelCatalogueBySku: panelCatalogueRef.current,
+          armedSku: armedPanelSkuRef.current,
+          roofAnalysis: roofAnalysisRef.current,
+          imgWidth: img.width, imgHeight: img.height,
+          left, top, scale,
+        });
         // Phase 3b.4 — dropped panels (rectangles at real-world dimensions).
+        // 3b.7 (part) — pass selectedPanelId so the selected panel gets the
+        // highlight stroke/fill treatment.
         const panelObjs = overlayPanels({
           canvas: c,
           panels: stateRef.current?.panels || [],
@@ -417,6 +481,7 @@ export default function DesignPage() {
           roofAnalysis: roofAnalysisRef.current,
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
+          selectedPanelId: selectedPanelIdRef.current,
         });
         // Phase 3b.3 — in-progress trace on top of everything.
         const traceObjects = overlayTraceInProgress({
@@ -426,7 +491,7 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
-        overlayObjectsRef.current = [...facePolys, ...panelObjs, ...traceObjects];
+        overlayObjectsRef.current = [...facePolys, ...gridObjs, ...panelObjs, ...traceObjects];
 
         // First layout only: auto-zoom so the customer's roof fills the view.
         // Google Solar tile is 100m × 100m — much bigger than a typical NZ
@@ -462,6 +527,24 @@ export default function DesignPage() {
       // added — a real crash swallowed by the framework.
       const pointer = canvas.getScenePoint(opt.e);
 
+      // Phase 3b.7 (part) — click on a panel selects it (highest priority so
+      // it wins over tracing/dropping/panning). Clicked panel is identified
+      // via the custom `data.panelId` we attach in overlayPanels. Clicking
+      // empty area deselects. We skip this while tracing so vertex placement
+      // inside a face's overlay isn't hijacked by a stray panel.
+      const clickedPanelId = opt.target?.data?.panelId;
+      if (!isTracingRef.current && clickedPanelId) {
+        setSelectedPanelId(clickedPanelId);
+        return;
+      }
+      // Any click NOT on a panel deselects. Cheap way to give the rep
+      // "click somewhere blank to deselect" behaviour without a modifier key.
+      if (selectedPanelIdRef.current && !clickedPanelId) {
+        setSelectedPanelId(null);
+        // continue to the tracing/drop/pan branches — a click on empty roof
+        // should also allow the next action (e.g. drop the armed panel).
+      }
+
       // Phase 3b.3 — while tracing, clicks add polygon vertices instead of panning.
       // We read the ref (not React state) so this closure stays stable across renders.
       if (isTracingRef.current) {
@@ -489,10 +572,34 @@ export default function DesignPage() {
             const face = faceContainingPoint(stateRef.current, latLng.latitude, latLng.longitude);
             if (face) {
               try {
+                // Phase 3b.6 — snap the raw click to the face-aligned grid so
+                // dropped panels tile edge-to-edge instead of overlapping at
+                // arbitrary offsets. Grid origin = face centroid, axes rotated
+                // by face azimuth, cell = panel dims + 20mm rail gap.
+                const spec = panelCatalogueRef.current?.get?.(armedPanelSkuRef.current);
+                const snappedCenter = snapToFaceGrid({
+                  faceAzimuthDegrees: face.azimuthDegrees,
+                  faceCentroid: polygonCentroidLL(face.polygon),
+                  target: latLng,
+                  panelLengthMm: Number(spec?.length_mm) || DEFAULT_PANEL_LENGTH_MM,
+                  panelWidthMm:  Number(spec?.width_mm)  || DEFAULT_PANEL_WIDTH_MM,
+                  orientation: 'landscape',
+                  gapMm: PANEL_GRID_GAP_MM,
+                });
+                // Dedup: repeat clicks in the same grid cell would snap to the
+                // exact same centre and silently stack panels. Skip the drop
+                // if there's already a panel on this face within 100mm of the
+                // snapped centre. Full no-overlap enforcement (different SKUs,
+                // partial overlaps, setback checks) lands in Phase 3b.8.
+                const isDupe = stateRef.current.panels.some(p =>
+                  p.faceId === face.id
+                  && distanceMetres(p.center, snappedCenter) < 0.1
+                );
+                if (isDupe) return;
                 const panel = makePanel({
                   faceId: face.id,
                   sku: armedPanelSkuRef.current,
-                  center: latLng,
+                  center: snappedCenter,
                   rotationDegrees: typeof face.azimuthDegrees === 'number' ? face.azimuthDegrees : 0,
                   orientation: 'landscape',
                 });
@@ -685,7 +792,12 @@ export default function DesignPage() {
       return;
     }
     try {
-      const face = makeRoofFace({ source: 'manual', polygon: vertices });
+      // Phase 3b.6 — infer face azimuth from the longest polygon edge so the
+      // panel snap grid aligns with the roof's eave/ridge instead of true
+      // north. Google faces already have Google's azimuth; this only fires
+      // on manual traces.
+      const azimuthDegrees = inferAzimuthFromPolygon(vertices);
+      const face = makeRoofFace({ source: 'manual', polygon: vertices, azimuthDegrees });
       stateRef.current = addFace(stateRef.current, face);
       setFaceCount(stateRef.current.roof.faces.length);
       setDirty(true);
@@ -935,6 +1047,21 @@ export default function DesignPage() {
         <div className="absolute inset-0">
           <canvas ref={canvasElRef} />
         </div>
+
+        {/* Phase 3b.7 (part) — selected-panel hint bar (top-centre overlay) */}
+        {selectedPanelId && !isTracing && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-sky-50 border border-sky-300 text-sky-900 px-4 py-2 rounded-lg shadow-md text-sm flex items-center gap-3">
+            <span className="font-semibold">🔷 Panel selected</span>
+            <span className="text-sky-700">Delete/Backspace to remove · Esc or click elsewhere to deselect</span>
+            <button
+              onClick={deleteSelectedPanel}
+              className="ml-2 px-2 py-1 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded inline-flex items-center gap-1"
+              title="Delete this panel"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </button>
+          </div>
+        )}
 
         {/* Phase 3b.4 — armed panel indicator (bottom-centre overlay) */}
         {armedPanelSku && (
@@ -1217,7 +1344,15 @@ function overlayTraceInProgress({ canvas, traceVertices, roofAnalysis, imgWidth,
 // face's azimuth at drop time so panels look roughly aligned to the roof.
 // Missing catalogue rows fall back to a Q.PEAK-sized default so the panel
 // still renders (rep can swap SKU later without re-dropping).
-function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
+//
+// Phase 3b.7 (part) — each rect carries a `panelId` custom property so the
+// mouse:down handler can identify which panel was clicked for selection.
+// Selected panel gets a thicker, brighter stroke so it stands out from the
+// crowd. Panels are `evented: true` but `selectable: false` because we
+// implement single-select ourselves (Fabric's built-in selection would let
+// users drag/scale/rotate panels, which we want to control explicitly in
+// later phases; drag = 3b.7b, rotate = 3b.7c).
+function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgWidth, imgHeight, left, top, scale, selectedPanelId }) {
   const created = [];
   if (!Array.isArray(panels) || panels.length === 0) return created;
 
@@ -1252,22 +1387,128 @@ function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgW
 
     const centerCanvas = toCanvas(toPixel(panel.center.latitude, panel.center.longitude));
 
-    const rect = new fabric.Rect({
+    const isSelected = panel.id === selectedPanelId;
+    const wPx = metresToCanvasPx(widthMetres);
+    const hPx = metresToCanvasPx(heightMetres);
+    // Panel body — dark navy near-opaque with a silver frame. Selected state
+    // swaps to a bright cyan fill + stroke that reads through the transparency.
+    const body = new fabric.Rect({
+      left: 0, top: 0,
+      originX: 'center', originY: 'center',
+      width: wPx, height: hPx,
+      fill:   isSelected ? 'rgba(56, 189, 248, 0.75)' : 'rgba(15, 29, 58, 0.90)',
+      stroke: isSelected ? '#38BDF8' : '#C4C9D4',   // silver frame for the unselected state
+      strokeWidth: isSelected ? 2.5 : 1.2,
+      strokeUniform: true,
+    });
+    // Centre busbar strip — modern half-cut panels have a visible horizontal
+    // seam across the middle. One thin line is enough to sell the look at
+    // typical canvas scales without becoming visual noise when zoomed out.
+    const busbar = new fabric.Line([-wPx / 2, 0, wPx / 2, 0], {
+      stroke: 'rgba(196, 201, 212, 0.5)',
+      strokeWidth: 0.6,
+      strokeUniform: true,
+    });
+    const group = new fabric.Group([body, busbar], {
       left: centerCanvas.x, top: centerCanvas.y,
       originX: 'center', originY: 'center',
-      width:  metresToCanvasPx(widthMetres),
-      height: metresToCanvasPx(heightMetres),
       angle:  Number(panel.rotationDegrees) || 0,
-      fill:   'rgba(30, 58, 138, 0.55)',   // dark blue-ish PV panel look
-      stroke: '#0F172A',                    // slate-900 edge
-      strokeWidth: 1,
-      strokeUniform: true,                  // don't scale the border with the rect
-      selectable: false, evented: false,    // Phase 3b.7 will make panels selectable
+      selectable: false, evented: true,     // Fabric selection off — we handle click-to-select in mouse:down
+      hoverCursor: 'pointer',
     });
-    canvas.add(rect);
-    created.push(rect);
+    group.data = { panelId: panel.id };     // stash id so mouse:down can look it up
+    canvas.add(group);
+    created.push(group);
   }
 
+  return created;
+}
+
+// Phase 3b.6 (viz) — draw the snap grid on each face when a panel is armed.
+// Cell dimensions come from the armed panel's SKU + PANEL_GRID_GAP_MM, so the
+// grid the rep sees is exactly the grid the drop handler will snap to. Lines
+// are clipped to each face's own bounding box in face-local coords so they
+// don't spray across the whole aerial.
+function overlayFaceGrid({ canvas, faces, panelCatalogueBySku, armedSku, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
+  const created = [];
+  if (!armedSku || !Array.isArray(faces) || faces.length === 0) return created;
+  const spec = panelCatalogueBySku?.get?.(armedSku);
+  const cellUm = ((Number(spec?.length_mm) || DEFAULT_PANEL_LENGTH_MM) + PANEL_GRID_GAP_MM) / 1000;
+  const cellVm = ((Number(spec?.width_mm)  || DEFAULT_PANEL_WIDTH_MM)  + PANEL_GRID_GAP_MM) / 1000;
+
+  const centerLat = Number(roofAnalysis?.latitude);
+  const centerLng = Number(roofAnalysis?.longitude);
+  if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) return created;
+  const radiusMeters = Number(roofAnalysis?.tile_radius_m) > 0
+    ? Number(roofAnalysis.tile_radius_m)
+    : ROOF_TILE_RADIUS_METERS_FALLBACK;
+  const toPixel = makeLatLngToPixel({ centerLat, centerLng, radiusMeters, imgWidth, imgHeight });
+  const toCanvas = (p) => ({ x: left + p.x * scale, y: top + p.y * scale });
+
+  const METRES_PER_DEG_LAT_LOCAL = 111320;
+
+  for (const face of faces) {
+    if (!Array.isArray(face.polygon) || face.polygon.length < 3) continue;
+    const centroid = polygonCentroidLL(face.polygon);
+    if (!centroid) continue;
+    const az = Number(face.azimuthDegrees) || 0;
+    const azRad = az * Math.PI / 180;
+    const cosA = Math.cos(azRad), sinA = Math.sin(azRad);
+    const centreLatRad = centroid.latitude * Math.PI / 180;
+    const metresPerDegLng = METRES_PER_DEG_LAT_LOCAL * Math.cos(centreLatRad);
+
+    // Project each polygon vertex into face-local (u,v) to get grid extents.
+    let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+    for (const vert of face.polygon) {
+      const dE = (vert.longitude - centroid.longitude) * metresPerDegLng;
+      const dN = (vert.latitude  - centroid.latitude)  * METRES_PER_DEG_LAT_LOCAL;
+      const u = dE * cosA - dN * sinA;
+      const v = dE * sinA + dN * cosA;
+      if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+      if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+    }
+
+    // Helper to project a face-local (u, v) point back to canvas pixels.
+    const uvToCanvas = (u, v) => {
+      const dE =  u * cosA + v * sinA;
+      const dN = -u * sinA + v * cosA;
+      const lat = centroid.latitude  + dN / METRES_PER_DEG_LAT_LOCAL;
+      const lng = centroid.longitude + dE / metresPerDegLng;
+      return toCanvas(toPixel(lat, lng));
+    };
+
+    const gridLineStyle = {
+      ...TL_ORIGIN,
+      stroke: 'rgba(56, 189, 248, 0.45)',   // sky-400 translucent
+      strokeWidth: 0.6,
+      strokeDashArray: [3, 3],
+      strokeUniform: true,
+      selectable: false, evented: false,
+    };
+
+    // Vertical grid lines (constant u, spanning v range)
+    const iMin = Math.floor(uMin / cellUm);
+    const iMax = Math.ceil(uMax  / cellUm);
+    for (let i = iMin; i <= iMax; i++) {
+      const u = i * cellUm;
+      const a = uvToCanvas(u, vMin);
+      const b = uvToCanvas(u, vMax);
+      const line = new fabric.Line([a.x, a.y, b.x, b.y], gridLineStyle);
+      canvas.add(line);
+      created.push(line);
+    }
+    // Horizontal grid lines (constant v, spanning u range)
+    const jMin = Math.floor(vMin / cellVm);
+    const jMax = Math.ceil(vMax  / cellVm);
+    for (let j = jMin; j <= jMax; j++) {
+      const v = j * cellVm;
+      const a = uvToCanvas(uMin, v);
+      const b = uvToCanvas(uMax, v);
+      const line = new fabric.Line([a.x, a.y, b.x, b.y], gridLineStyle);
+      canvas.add(line);
+      created.push(line);
+    }
+  }
   return created;
 }
 
