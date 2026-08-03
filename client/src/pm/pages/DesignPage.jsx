@@ -37,6 +37,7 @@ import {
   inferAzimuthFromPolygon, distanceMetres,
   checkPanelDropRules, DROP_REASON_HUMAN, DEFAULT_FACE_SETBACK_M,
   buildPanelLabelMap, copyArrayToFace,
+  autoLayoutFace, panelSkusInDesign,
 } from '../utils/designState';
 import useCatalogueOptions from '../hooks/useCatalogueOptions';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
@@ -562,6 +563,47 @@ export default function DesignPage() {
   // Phase 3b.9 — destructive counterpart: remove every panel in the array
   // (each removePanel call cascades through remaining arrays too). Used by
   // the "Delete panels" branch of the array-row confirm dialog.
+  // Phase 3b.13 — auto-fill a face with the currently-armed panel SKU.
+  // One click drops every panel that fits (respecting setback, overlap,
+  // obstruction) and groups them into a new array named after the face
+  // direction. Requires an armed SKU — pops a hint via the reject-toast
+  // slot if the rep hasn't picked one yet.
+  const autoFillFaceHandler = useCallback((faceId) => {
+    const sku = armedPanelSkuRef.current;
+    if (!sku) {
+      setDropRejectReason('Arm a panel first (click one in the palette), then Auto-fill.');
+      if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+      dropRejectTimerRef.current = setTimeout(() => setDropRejectReason(null), 3000);
+      return;
+    }
+    const face = stateRef.current?.roof?.faces?.find(f => f.id === faceId);
+    if (!face) return;
+    const suggested = (typeof face.azimuthDegrees === 'number' && azimuthToCompass(face.azimuthDegrees))
+      ? `${azimuthToCompass(face.azimuthDegrees)} array`
+      : `Array ${(stateRef.current?.arrays?.length ?? 0) + 1}`;
+    const result = autoLayoutFace({
+      state: stateRef.current,
+      faceId, sku,
+      panelCatalogueBySku: panelCatalogueRef.current,
+      gapMm: PANEL_GRID_GAP_MM,
+      orientation: 'landscape',
+      arrayName: suggested,
+    });
+    stateRef.current = result.state;
+    setPanelCount(stateRef.current.panels.length);
+    setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+    setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
+    setDirty(true);
+    setSelectedPanelIds([]);
+    layoutAndDrawRef.current?.();
+    const msg = result.placed > 0
+      ? `Auto-filled ${result.placed} panel${result.placed === 1 ? '' : 's'} on this face (new array "${suggested}").`
+      : `Couldn't place any panels — face may be too small for the armed SKU or already full.`;
+    setDropRejectReason(msg);
+    if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+    dropRejectTimerRef.current = setTimeout(() => setDropRejectReason(null), 4500);
+  }, []);
+
   // Phase 3b.10 — copy an array's layout onto another face. Preserves
   // relative positions (source face-local (u,v) → target face-local (u,v)),
   // snaps each candidate onto the target's grid, rule-checks each drop,
@@ -1703,6 +1745,9 @@ export default function DesignPage() {
         faces={stateRef.current?.roof?.faces || []}
         allPanels={stateRef.current?.panels || []}
         onDeleteFace={(faceId) => deleteFaceById(faceId)}
+        onAutoFillFace={autoFillFaceHandler}
+        armedPanelSku={armedPanelSku}
+        distinctSkuCount={panelSkusInDesign(stateRef.current).size}
       />
       </div>
 
@@ -2335,7 +2380,7 @@ function armedPanelLabel(catalogue, sku) {
 // panel. Grouped by brand so the list stays scannable when catalogues get
 // large. Cards show brand, watts, and physical dimensions so the rep can
 // eyeball the fit against the roof before dropping.
-function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, onCopyArrayToFace, faces, allPanels, onDeleteFace }) {
+function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, onCopyArrayToFace, faces, allPanels, onDeleteFace, onAutoFillFace, distinctSkuCount }) {
   const panelsPerFace = useMemo(() => {
     const map = new Map();
     for (const p of allPanels || []) map.set(p.faceId, (map.get(p.faceId) || 0) + 1);
@@ -2411,14 +2456,29 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
           </div>
         </div>
       </div>
+      {/* Phase 3b.13 — mixed-SKU advisory. Non-blocking: flags that the
+          design uses more than one panel model so the engineer confirms
+          MPPT/string design assumptions before pricing. */}
+      {distinctSkuCount > 1 && (
+        <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-[11px] text-amber-900 flex items-start gap-2">
+          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>
+            Design uses <b>{distinctSkuCount} panel SKUs</b>. Each string must
+            be a single model — confirm inverter MPPT capacity before pricing.
+          </span>
+        </div>
+      )}
+
       {/* Phase 3b.9 — roof faces list. Delete-face row + panel count. Collapsed
-          when zero faces so a fresh design isn't crowded. */}
+          when zero faces so a fresh design isn't crowded.
+          Phase 3b.13 — auto-fill button per row uses the currently-armed SKU
+          to greedy-fill every valid grid cell on the face. */}
       {Array.isArray(faces) && faces.length > 0 && (
         <div className="border-b border-slate-200 flex-shrink-0">
           <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-100">
             Roof faces ({faces.length})
           </div>
-          <ul className="divide-y divide-slate-100 max-h-40 overflow-y-auto">
+          <ul className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
             {faces.map((f, i) => {
               const panelsOnFace = panelsPerFace.get(f.id) || 0;
               const source = f.source === 'google_solar' ? 'Google' : 'Traced';
@@ -2434,6 +2494,16 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
                       {source} · {panelsOnFace} panel{panelsOnFace === 1 ? '' : 's'}
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => onAutoFillFace?.(f.id)}
+                    className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-emerald-700 transition-opacity"
+                    title={armedPanelSku
+                      ? 'Auto-fill this face with the armed panel'
+                      : 'Arm a panel first, then click to auto-fill'}
+                  >
+                    🪄
+                  </button>
                   <button
                     type="button"
                     onClick={() => onDeleteFace?.(f.id)}

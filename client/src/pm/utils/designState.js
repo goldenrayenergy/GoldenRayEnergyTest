@@ -556,6 +556,125 @@ export function copyArrayToFace({
   return { state: next, copied, skipped, reasonCounts };
 }
 
+// ── Auto-layout (Phase 3b.13) ─────────────────────────────────────────────
+// Greedy grid fill: iterate every cell in the face-local bounding box,
+// drop a panel where the rules pass, skip where they don't. Simple,
+// deterministic, and reuses the rule engine so 'rejected' means exactly
+// the same thing as it does for manual drops.
+//
+// Iteration order is raster: outer loop v (top-to-bottom), inner loop u
+// (left-to-right). Deterministic ordering matters for auto-numbering: the
+// first cell placed becomes S1P1, next becomes S1P2, etc.
+//
+// Returns { state, placed, skipped } — no per-reason breakdown because
+// auto-layout typically skips DOZENS of cells (all the ones outside the
+// polygon), and reporting each would be noise. Skipped is the count of
+// cells that failed rules — useful only for the summary toast.
+export function autoLayoutFace({
+  state, faceId, sku,
+  panelCatalogueBySku,
+  gapMm = PANEL_GRID_GAP_MM,
+  orientation = 'landscape',
+  arrayName,
+} = {}) {
+  const empty = { state, placed: 0, skipped: 0, newArrayId: null };
+  if (!state || !sku) return empty;
+  const face = state.roof?.faces?.find(f => f.id === faceId);
+  if (!face) return empty;
+  const centroid = polygonCentroidLL(face.polygon);
+  if (!centroid) return empty;
+
+  const spec = panelCatalogueBySku?.get?.(sku);
+  const lenMm = Number(spec?.length_mm) > 0 ? Number(spec.length_mm) : 1755;
+  const widMm = Number(spec?.width_mm)  > 0 ? Number(spec.width_mm)  : 1038;
+  const cellUm = ((orientation === 'landscape' ? lenMm : widMm) + gapMm) / 1000;
+  const cellVm = ((orientation === 'landscape' ? widMm : lenMm) + gapMm) / 1000;
+
+  // Project polygon into face-local (u, v) to compute the bounding box we
+  // need to scan. Reuses the same rotation used by snapToFaceGrid.
+  const az = Number(face.azimuthDegrees) || 0;
+  const azRad = az * Math.PI / 180;
+  const cosA = Math.cos(azRad), sinA = Math.sin(azRad);
+  const centreLatRad = centroid.latitude * Math.PI / 180;
+  const metresPerDegLng = METRES_PER_DEG_LAT_GRID * Math.cos(centreLatRad);
+
+  let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+  for (const vert of face.polygon) {
+    const dE = (vert.longitude - centroid.longitude) * metresPerDegLng;
+    const dN = (vert.latitude  - centroid.latitude)  * METRES_PER_DEG_LAT_GRID;
+    const u = dE * cosA - dN * sinA;
+    const v = dE * sinA + dN * cosA;
+    if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+    if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+  }
+
+  const iMin = Math.floor(uMin / cellUm);
+  const iMax = Math.ceil(uMax  / cellUm);
+  const jMin = Math.floor(vMin / cellVm);
+  const jMax = Math.ceil(vMax  / cellVm);
+
+  let next = state;
+  const newPanelIds = [];
+  let skipped = 0;
+
+  // Raster scan: top-to-bottom (v), left-to-right (u). The panel that
+  // ends up numbered S1P1 is the top-left cell; S1P2 is one to the right.
+  for (let j = jMin; j <= jMax; j++) {
+    for (let i = iMin; i <= iMax; i++) {
+      const uCell = i * cellUm;
+      const vCell = j * cellVm;
+      const dEast  =  uCell * cosA + vCell * sinA;
+      const dNorth = -uCell * sinA + vCell * cosA;
+      const candidate = {
+        latitude:  centroid.latitude  + dNorth / METRES_PER_DEG_LAT_GRID,
+        longitude: centroid.longitude + dEast  / metresPerDegLng,
+      };
+
+      const check = checkPanelDropRules({
+        state: next, face, panelCenter: candidate,
+        panelLengthMm: lenMm, panelWidthMm: widMm,
+        orientation,
+        setbackMetres: Number.isFinite(face.setbackMetres) ? face.setbackMetres : DEFAULT_FACE_SETBACK_M,
+        panelCatalogueBySku,
+      });
+      if (!check.ok) { skipped++; continue; }
+
+      const p = makePanel({
+        faceId: face.id, sku, center: candidate,
+        rotationDegrees: typeof face.azimuthDegrees === 'number' ? face.azimuthDegrees : 0,
+        orientation,
+      });
+      next = addPanel(next, p);
+      newPanelIds.push(p.id);
+    }
+  }
+
+  let newArrayId = null;
+  if (newPanelIds.length > 0) {
+    const trimmedName = (arrayName && String(arrayName).trim()) || null;
+    if (trimmedName) {
+      const arr = makeArray({ name: trimmedName, panelIds: newPanelIds });
+      next = addArray(next, arr);
+      newArrayId = arr.id;
+    }
+  }
+
+  return { state: next, placed: newPanelIds.length, skipped, newArrayId };
+}
+
+// ── Mixed-SKU detection (Phase 3b.13) ────────────────────────────────────
+// Returns the set of distinct panel SKUs currently placed. Used by the
+// design page's mixed-SKU advisory: > 1 SKU means the design will need
+// multiple inverter MPPT inputs or separate strings, worth flagging so
+// the engineer confirms rather than assuming a homogeneous system.
+export function panelSkusInDesign(state) {
+  const set = new Set();
+  for (const p of state?.panels || []) {
+    if (p?.sku) set.add(p.sku);
+  }
+  return set;
+}
+
 // Build a Map<panelId, label> for every panel in an array. Cheaper than
 // calling panelDisplayLabel per panel during a canvas render since arrays
 // are iterated once instead of per-panel.

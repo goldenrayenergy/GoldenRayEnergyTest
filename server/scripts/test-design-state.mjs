@@ -32,6 +32,7 @@ const {
   estimateFaceSunshine, totalAnnualKwh, NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR,
   panelDisplayLabel, buildPanelLabelMap,
   copyArrayToFace,
+  autoLayoutFace, panelSkusInDesign,
 } = await import(url);
 
 let pass = 0, fail = 0;
@@ -1322,6 +1323,99 @@ console.log('test-design-state\n');
     });
     assert('bogus targetFaceId → 0 copied, no crash', r2.copied === 0 && r2.skipped === 0);
   }
+}
+
+// ── autoLayoutFace (Phase 3b.13) ─────────────────────────────────────────
+{
+  console.log('\n▸ autoLayoutFace');
+
+  // 10m × 6m north-facing face (az=0), Auckland centre. Setback 0.3m.
+  // Panel 1800×1100 landscape → cellU 1.82m, cellV 1.12m.
+  // Usable interior after setback: 9.4m × 5.4m.
+  // Cols: floor(9.4 / 1.82) = 5 → but rounding to grid centres, actual is ~5.
+  // Rows: floor(5.4 / 1.12) = 4 → actual ~4.
+  // Expect ~15-25 panels placed (depending on how the raster snap lines up).
+  const cAuck = { latitude: -36.9098, longitude: 174.6948 };
+  const mPerDegLng = 111320 * Math.cos(cAuck.latitude * Math.PI / 180);
+  const face = makeRoofFace({
+    source: 'manual',
+    polygon: [
+      { latitude: cAuck.latitude - 3 / 111320, longitude: cAuck.longitude - 5 / mPerDegLng },
+      { latitude: cAuck.latitude - 3 / 111320, longitude: cAuck.longitude + 5 / mPerDegLng },
+      { latitude: cAuck.latitude + 3 / 111320, longitude: cAuck.longitude + 5 / mPerDegLng },
+      { latitude: cAuck.latitude + 3 / 111320, longitude: cAuck.longitude - 5 / mPerDegLng },
+    ],
+    azimuthDegrees: 0, setbackMetres: 0.3,
+  });
+  const s = addFace(emptyDesignState(), face);
+  const cat = new Map([['A', { length_mm: 1800, width_mm: 1100, watts: 400 }]]);
+
+  {
+    const r = autoLayoutFace({
+      state: s, faceId: face.id, sku: 'A', panelCatalogueBySku: cat,
+    });
+    assert('placed at least 10 panels on 10x6m face', r.placed >= 10,
+      `only got ${r.placed}`);
+    assert('placed panels are all on this face',
+      r.state.panels.every(p => p.faceId === face.id));
+    assert('every placed panel uses the requested SKU',
+      r.state.panels.every(p => p.sku === 'A'));
+    assert('no array created when arrayName not passed',
+      r.state.arrays.length === 0);
+    assert('newArrayId is null when arrayName absent', r.newArrayId === null);
+  }
+
+  {
+    const r = autoLayoutFace({
+      state: s, faceId: face.id, sku: 'A', panelCatalogueBySku: cat,
+      arrayName: 'North fill',
+    });
+    assert('arrayName creates an array on successful placement',
+      r.state.arrays.length === 1 && r.state.arrays[0].name === 'North fill');
+    assert('array contains every placed panel',
+      r.state.arrays[0].panelIds.length === r.placed);
+    assert('newArrayId returned', typeof r.newArrayId === 'string' && r.newArrayId.startsWith('arr-'));
+  }
+
+  // Auto-layout on a face that already has some panels → new drops fit around them
+  {
+    // Start with 2 panels roughly at centre
+    let s2 = s;
+    s2 = addPanel(s2, makePanel({
+      faceId: face.id, sku: 'A',
+      center: cAuck, rotationDegrees: 0, orientation: 'landscape',
+    }));
+    const r = autoLayoutFace({
+      state: s2, faceId: face.id, sku: 'A', panelCatalogueBySku: cat,
+    });
+    assert('auto-layout respects existing panels (no overlap)',
+      r.state.panels.length > 1 && r.state.panels.length === 1 + r.placed);
+  }
+
+  // Bogus inputs → empty result, no crash
+  assert('no SKU → 0 placed', autoLayoutFace({ state: s, faceId: face.id, panelCatalogueBySku: cat }).placed === 0);
+  assert('bogus faceId → 0 placed', autoLayoutFace({ state: s, faceId: 'nope', sku: 'A', panelCatalogueBySku: cat }).placed === 0);
+}
+
+// ── panelSkusInDesign (Phase 3b.13) ──────────────────────────────────────
+{
+  console.log('\n▸ panelSkusInDesign');
+  assert('empty design → empty set', panelSkusInDesign(emptyDesignState()).size === 0);
+  assert('null state → empty set (defensive)', panelSkusInDesign(null).size === 0);
+
+  let s = addFace(emptyDesignState(), makeRoofFace({
+    source: 'manual',
+    polygon: [{ latitude: 0, longitude: 0 }, { latitude: 1, longitude: 0 }, { latitude: 1, longitude: 1 }],
+    azimuthDegrees: 0,
+  }));
+  const faceId = s.roof.faces[0].id;
+  s = addPanel(s, makePanel({ faceId, sku: 'A', center: { latitude: 0.5, longitude: 0.5 } }));
+  s = addPanel(s, makePanel({ faceId, sku: 'A', center: { latitude: 0.6, longitude: 0.6 } }));
+  s = addPanel(s, makePanel({ faceId, sku: 'B', center: { latitude: 0.7, longitude: 0.7 } }));
+
+  const skus = panelSkusInDesign(s);
+  assert('3 panels of 2 SKUs → set size 2', skus.size === 2);
+  assert('set contains A + B', skus.has('A') && skus.has('B'));
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

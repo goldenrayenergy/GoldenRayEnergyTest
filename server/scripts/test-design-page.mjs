@@ -577,6 +577,22 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('empty-search-result message rendered when no panels match',
     /No panels match/.test(page));
 
+  // ── Phase 3b.13 — auto-layout + mixed-SKU warning ────────────────────
+  assert('imports autoLayoutFace + panelSkusInDesign',
+    /import\s*\{[\s\S]{0,1200}autoLayoutFace[\s\S]{0,200}panelSkusInDesign[\s\S]{0,200}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('autoFillFaceHandler defined + guards on armed SKU',
+    /autoFillFaceHandler\s*=\s*useCallback\([\s\S]{0,600}armedPanelSkuRef\.current[\s\S]{0,300}!sku[\s\S]{0,300}Arm a panel first/.test(page));
+  assert('autoFillFaceHandler names the new array after the face compass direction',
+    /autoLayoutFace\(\{[\s\S]{0,1000}arrayName:\s*suggested/.test(page)
+      && /suggested\s*=\s*\([\s\S]{0,300}azimuthToCompass\(face\.azimuthDegrees\)\)/.test(page));
+  assert('face row shows a wand (auto-fill) button + delete button (both hover-reveal)',
+    /onAutoFillFace\?\.\(f\.id\)[\s\S]{0,600}onDeleteFace\?\.\(f\.id\)/.test(page));
+  assert('mixed-SKU banner renders when distinctSkuCount > 1',
+    /distinctSkuCount\s*>\s*1[\s\S]{0,600}confirm inverter MPPT/.test(page),
+    'non-blocking amber advisory when the design mixes panel models');
+  assert('distinctSkuCount passed from panelSkusInDesign(state).size',
+    /distinctSkuCount=\{panelSkusInDesign\(stateRef\.current\)\.size\}/.test(page));
+
   // ── Phase 3b.9 — delete-face (sidebar list + delete-face mode) ──────
   assert('imports removeFace helper',
     /import\s*\{[\s\S]{0,600}removeFace[\s\S]{0,600}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
