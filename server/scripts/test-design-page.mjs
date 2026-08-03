@@ -392,8 +392,11 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('overlayPanels sizes rectangle by catalogue length_mm × width_mm',
     /overlayPanels[\s\S]{0,2500}length_mm[\s\S]{0,500}width_mm/.test(page));
   assert('overlayPanels renders a Fabric.Group (body Rect + centre busbar Line) with rotation',
-    /overlayPanels[\s\S]{0,4000}new fabric\.Group\(\[body,\s*busbar\][\s\S]{0,500}angle:\s*Number\(panel\.rotationDegrees\)/.test(page),
+    /overlayPanels[\s\S]{0,4000}new fabric\.Group\(\[body,\s*busbar\][\s\S]{0,800}angle:\s*Number\(panel\.rotationDegrees\)/.test(page),
     'realistic panel = darker fill Rect + silver frame + centre busbar line, grouped so the rotation applies to both');
+  assert('panels are drag-only: selectable=true, hasControls=false, all locks set',
+    /overlayPanels[\s\S]{0,4000}selectable:\s*true[\s\S]{0,200}hasControls:\s*false[\s\S]{0,200}lockScalingX:\s*true[\s\S]{0,200}lockRotation:\s*true/.test(page),
+    'panels must be draggable but not scalable or free-rotatable');
   assert('overlayPanels body uses dark navy fill + silver frame',
     /body\s*=\s*new fabric\.Rect\([\s\S]{0,600}fill:[\s\S]{0,200}rgba\(15,\s*29,\s*58/.test(page)
       && /body\s*=\s*new fabric\.Rect\([\s\S]{0,600}stroke:[\s\S]{0,200}#C4C9D4/.test(page));
@@ -479,7 +482,7 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('keydown handler ignores INPUT/TEXTAREA (rep is typing)',
     /INPUT[\s\S]{0,80}TEXTAREA[\s\S]{0,80}isContentEditable/.test(page));
   assert('selected-panel hint bar rendered with Delete button',
-    /selectedPanelId\s*&&\s*!isTracing[\s\S]{0,800}Delete\/Backspace[\s\S]{0,500}deleteSelectedPanel/.test(page));
+    /selectedPanelId\s*&&\s*!isTracing[\s\S]{0,1200}Delete\s+to\s+remove[\s\S]{0,1000}deleteSelectedPanel/.test(page));
   assert('layoutAndDraw passes selectedPanelId into overlayPanels',
     /overlayPanels\(\{[\s\S]{0,600}selectedPanelId:\s*selectedPanelIdRef\.current/.test(page));
 
@@ -517,6 +520,25 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('sidebar shows estimated annual output in MWh/yr',
     /Est\.\s*output[\s\S]{0,600}\(\(totalKwh\s*\?\?\s*0\)\s*\/\s*1000\)\.toFixed\(1\)[\s\S]{0,100}MWh\/yr/.test(page),
     'sidebar stat block converts totalKwh to MWh for readability at typical residential sizes');
+
+  // ── Phase 3b.7 remainder — drag-to-move + P↔L toggle ────────────────
+  assert('canvas listens for object:modified to accept panel drags',
+    /canvas\.on\(['"]object:modified['"]/.test(page));
+  assert('drag-completed handler snaps to grid + runs rule check + reverts on failure',
+    /object:modified[\s\S]{0,3000}snapToFaceGrid\([\s\S]{0,1000}checkPanelDropRules\([\s\S]{0,1500}flashDropReject/.test(page),
+    'drag reuses the exact drop-rule engine so a move can\'t leave the design invalid');
+  assert('overlap check excludes the panel being dragged (stateSansSelf)',
+    /object:modified[\s\S]{0,3000}stateSansSelf\s*=\s*\{\s*\.\.\.st,\s*panels:\s*st\.panels\.filter\(p\s*=>\s*p\.id\s*!==\s*panelId\)/.test(page),
+    'else dragging any distance would self-overlap');
+
+  assert('toggleSelectedPanelOrientation handler defined',
+    /toggleSelectedPanelOrientation\s*=\s*useCallback\(/.test(page));
+  assert('toggle validates the new orientation before committing',
+    /toggleSelectedPanelOrientation[\s\S]{0,800}nextOrientation[\s\S]{0,600}checkPanelDropRules\([\s\S]{0,600}!check\.ok[\s\S]{0,200}flashDropReject/.test(page));
+  assert('R key triggers the orientation toggle',
+    /['"]r['"][\s\S]{0,60}['"]R['"][\s\S]{0,200}toggleSelectedPanelOrientation\(\)/.test(page));
+  assert('selected-panel hint bar mentions drag + R + P↔L button',
+    /selectedPanelId\s*&&\s*!isTracing[\s\S]{0,800}Drag to move[\s\S]{0,200}R to rotate[\s\S]{0,400}toggleSelectedPanelOrientation/.test(page));
   assert('overlayRoofFaces label includes per-face irradiance when known',
     /face\.sunshineKwhPerKwPerYear[\s\S]{0,300}kWh\/kW\/yr/.test(page));
 

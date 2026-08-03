@@ -391,6 +391,43 @@ export default function DesignPage() {
     layoutAndDrawRef.current?.();
   }, []);
 
+  // Phase 3b.7 — toggle the selected panel's orientation (portrait ↔ landscape).
+  // Runs the SAME rule check as a fresh drop; if the toggled dims push the
+  // panel over a face edge or into an existing panel, we revert with a
+  // reject-toast instead of leaving the design in an invalid state.
+  const toggleSelectedPanelOrientation = useCallback(() => {
+    const id = selectedPanelIdRef.current;
+    if (!id) return;
+    const st = stateRef.current;
+    const panel = st?.panels?.find(p => p.id === id);
+    if (!panel) return;
+    const face = st?.roof?.faces?.find(f => f.id === panel.faceId);
+    if (!face) return;
+    const nextOrientation = panel.orientation === 'portrait' ? 'landscape' : 'portrait';
+    const spec = panelCatalogueRef.current?.get?.(panel.sku);
+    const stateSansSelf = { ...st, panels: st.panels.filter(p => p.id !== id) };
+    const check = checkPanelDropRules({
+      state: stateSansSelf,
+      face,
+      panelCenter: panel.center,
+      panelLengthMm: Number(spec?.length_mm) || DEFAULT_PANEL_LENGTH_MM,
+      panelWidthMm:  Number(spec?.width_mm)  || DEFAULT_PANEL_WIDTH_MM,
+      orientation: nextOrientation,
+      setbackMetres: Number.isFinite(face?.setbackMetres) ? face.setbackMetres : DEFAULT_FACE_SETBACK_M,
+      panelCatalogueBySku: panelCatalogueRef.current,
+    });
+    if (!check.ok) {
+      flashDropReject(check.reason);
+      return;
+    }
+    stateRef.current = {
+      ...st,
+      panels: st.panels.map(p => p.id === id ? { ...p, orientation: nextOrientation } : p),
+    };
+    setDirty(true);
+    layoutAndDrawRef.current?.();
+  }, [flashDropReject]);
+
   useEffect(() => {
     if (!selectedPanelId) return;
     const onKey = (e) => {
@@ -402,11 +439,14 @@ export default function DesignPage() {
         deleteSelectedPanel();
       } else if (e.key === 'Escape') {
         setSelectedPanelId(null);
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        toggleSelectedPanelOrientation();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedPanelId, deleteSelectedPanel]);
+  }, [selectedPanelId, deleteSelectedPanel, toggleSelectedPanelOrientation]);
 
   // ── Initialize Fabric once the DOM canvas + container are ready ────────
   useEffect(() => {
@@ -695,6 +735,68 @@ export default function DesignPage() {
       // Persist viewport back into transform (Fabric needs this after direct vpt mutation).
       canvas.setViewportTransform(canvas.viewportTransform);
       // Phase 3a: pan doesn't dirty the design (viewport isn't persisted).
+    });
+
+    // ── Panel drag-to-move (Phase 3b.7) ────────────────────────────────
+    // Fires when Fabric finishes a drag on a selectable object. We convert
+    // the new canvas position → lat/lng → snap to face grid → run the same
+    // drop-rule check used for fresh drops. If it fails, we flash the reason
+    // and redraw to revert the visual (state.panels still has the ORIGINAL
+    // centre because we only wrote after passing validation).
+    canvas.on('object:modified', (opt) => {
+      const obj = opt.target;
+      const panelId = obj?.data?.panelId;
+      if (!panelId) return;
+      const st = stateRef.current;
+      const panel = st?.panels?.find(p => p.id === panelId);
+      if (!panel) return;
+      const face = st?.roof?.faces?.find(f => f.id === panel.faceId);
+      const img  = roofImgRef.current;
+      const roof = roofAnalysisRef.current;
+      if (!face || !img || !roof) { layoutAndDrawRef.current?.(); return; }
+
+      const newLatLng = canvasToLatLng({ x: obj.left, y: obj.top }, img, roof);
+      if (!newLatLng) { layoutAndDrawRef.current?.(); return; }
+
+      const spec = panelCatalogueRef.current?.get?.(panel.sku);
+      const snappedCenter = snapToFaceGrid({
+        faceAzimuthDegrees: face.azimuthDegrees,
+        faceCentroid: polygonCentroidLL(face.polygon),
+        target: newLatLng,
+        panelLengthMm: Number(spec?.length_mm) || DEFAULT_PANEL_LENGTH_MM,
+        panelWidthMm:  Number(spec?.width_mm)  || DEFAULT_PANEL_WIDTH_MM,
+        orientation: panel.orientation || 'landscape',
+        gapMm: PANEL_GRID_GAP_MM,
+      });
+
+      // Rule check must exclude THIS panel from overlap detection —
+      // otherwise dragging any distance triggers self-overlap.
+      const stateSansSelf = { ...st, panels: st.panels.filter(p => p.id !== panelId) };
+      const check = checkPanelDropRules({
+        state: stateSansSelf,
+        face,
+        panelCenter: snappedCenter,
+        panelLengthMm: Number(spec?.length_mm) || DEFAULT_PANEL_LENGTH_MM,
+        panelWidthMm:  Number(spec?.width_mm)  || DEFAULT_PANEL_WIDTH_MM,
+        orientation: panel.orientation || 'landscape',
+        setbackMetres: Number.isFinite(face?.setbackMetres) ? face.setbackMetres : DEFAULT_FACE_SETBACK_M,
+        panelCatalogueBySku: panelCatalogueRef.current,
+      });
+      if (!check.ok) {
+        flashDropReject(check.reason);
+        layoutAndDrawRef.current?.();   // revert visual to the un-moved position
+        return;
+      }
+
+      // Commit the move.
+      stateRef.current = {
+        ...st,
+        panels: st.panels.map(p => p.id === panelId ? { ...p, center: snappedCenter } : p),
+      };
+      setDirty(true);
+      setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+      setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
+      layoutAndDrawRef.current?.();
     });
 
     // ── Zoom (mouse wheel) ─────────────────────────────────────────────
@@ -1086,14 +1188,21 @@ export default function DesignPage() {
           <canvas ref={canvasElRef} />
         </div>
 
-        {/* Phase 3b.7 (part) — selected-panel hint bar (top-centre overlay) */}
+        {/* Phase 3b.7 — selected-panel hint bar (top-centre overlay) */}
         {selectedPanelId && !isTracing && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-sky-50 border border-sky-300 text-sky-900 px-4 py-2 rounded-lg shadow-md text-sm flex items-center gap-3">
             <span className="font-semibold">🔷 Panel selected</span>
-            <span className="text-sky-700">Delete/Backspace to remove · Esc or click elsewhere to deselect</span>
+            <span className="text-sky-700">Drag to move · R to rotate P↔L · Delete to remove · Esc to deselect</span>
+            <button
+              onClick={toggleSelectedPanelOrientation}
+              className="ml-1 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100 border border-sky-300 rounded"
+              title="Toggle portrait ↔ landscape (R)"
+            >
+              ⟳ P↔L
+            </button>
             <button
               onClick={deleteSelectedPanel}
-              className="ml-2 px-2 py-1 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded inline-flex items-center gap-1"
+              className="px-2 py-1 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded inline-flex items-center gap-1"
               title="Delete this panel"
             >
               <Trash2 className="w-3.5 h-3.5" /> Delete
@@ -1468,10 +1577,17 @@ function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgW
       left: centerCanvas.x, top: centerCanvas.y,
       originX: 'center', originY: 'center',
       angle:  Number(panel.rotationDegrees) || 0,
-      selectable: false, evented: true,     // Fabric selection off — we handle click-to-select in mouse:down
-      hoverCursor: 'pointer',
+      // Phase 3b.7 — panels are draggable, but ONLY draggable. Scaling and
+      // rotation are locked because those are structural decisions (dims
+      // come from the catalogue SKU; rotation is per-face azimuth). The
+      // selection border/controls are hidden — our own cyan highlight
+      // (in overlayPanels above) provides all the visual affordance.
+      selectable: true, evented: true,
+      hasControls: false, hasBorders: false,
+      lockScalingX: true, lockScalingY: true, lockRotation: true,
+      hoverCursor: isSelected ? 'move' : 'pointer',
     });
-    group.data = { panelId: panel.id };     // stash id so mouse:down can look it up
+    group.data = { panelId: panel.id };     // stash id so mouse:down + object:modified can look it up
     canvas.add(group);
     created.push(group);
   }
