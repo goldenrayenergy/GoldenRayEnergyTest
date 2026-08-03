@@ -537,7 +537,26 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
       && /deleteArrayAndPanels\s*=\s*useCallback\([\s\S]{0,600}for \(const pid of arr\.panelIds\)\s*next\s*=\s*removePanel\(next,\s*pid\)/.test(page),
     'un-group keeps panels; delete-panels iterates removePanel across every panelId (which cascades arrays too)');
   assert('array row shows inline confirm with 3 choices',
-    /confirmingArrayId\s*===\s*a\.id[\s\S]{0,2000}Un-group only[\s\S]{0,600}Delete panels[\s\S]{0,600}Cancel/.test(page));
+    /confirmingArrayId\s*===\s*a\.id[\s\S]{0,5000}Un-group only[\s\S]{0,600}Delete panels[\s\S]{0,600}Cancel/.test(page));
+
+  // ── Phase 3b.10 — copy array to another face ─────────────────────────
+  assert('imports copyArrayToFace helper',
+    /import\s*\{[\s\S]{0,900}copyArrayToFace[\s\S]{0,200}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('copyArrayToTargetFace handler defined',
+    /copyArrayToTargetFace\s*=\s*useCallback\([\s\S]{0,900}copyArrayToFace\(\{[\s\S]{0,600}targetFaceId/.test(page));
+  assert('copy summary reuses the toast slot with reason counts',
+    /reasonCounts[\s\S]{0,600}setDropRejectReason\(summary\)/.test(page),
+    'the copy summary flashes through the same top-centre toast used for drop rejections');
+  assert('toast renders human-readable value verbatim when key is unknown',
+    /DROP_REASON_HUMAN\[dropRejectReason\]\s*\|\|\s*dropRejectReason\b/.test(page),
+    'summary is a full sentence not an enum key');
+
+  assert('array row shows Copy button (opens face picker)',
+    /setCopyingArrayId\(a\.id\)[\s\S]{0,300}Copy this array to another face/.test(page));
+  assert('array row inline face picker lists every face except the source',
+    /copyingArrayId\s*===\s*a\.id[\s\S]{0,2000}faces\s*\|\|\s*\[\]\)\.filter\(f\s*=>\s*f\.id\s*!==\s*sourceFaceId\)/.test(page));
+  assert('picker button invokes onCopyArrayToFace with (arrayId, faceId)',
+    /onCopyArrayToFace\?\.\(a\.id,\s*f\.id\)/.test(page));
 
   // ── Phase 3b.9 — delete-face (sidebar list + delete-face mode) ──────
   assert('imports removeFace helper',

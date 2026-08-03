@@ -31,6 +31,7 @@ const {
   checkPanelDropRules, DROP_REASON_HUMAN,
   estimateFaceSunshine, totalAnnualKwh, NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR,
   panelDisplayLabel, buildPanelLabelMap,
+  copyArrayToFace,
 } = await import(url);
 
 let pass = 0, fail = 0;
@@ -1221,6 +1222,106 @@ console.log('test-design-state\n');
   assert('label map: p-a → S1P1',            map.get('p-a') === 'S1P1');
   assert('label map: p-y → S2P2',            map.get('p-y') === 'S2P2');
   assert('label map has no entry for un-arrayed panels', !map.has('p-nowhere'));
+}
+
+// ── copyArrayToFace (Phase 3b.10) ────────────────────────────────────────
+{
+  console.log('\n▸ copyArrayToFace');
+
+  // Build a state with two 20m × 12m faces, both azimuth=0 (same rotation)
+  // so a copied panel lands at the SAME face-local (u, v). Central Auckland
+  // centre for a realistic metric scale.
+  const cAuck = { latitude: -36.9098, longitude: 174.6948 };
+  const mPerDegLng = 111320 * Math.cos(cAuck.latitude * Math.PI / 180);
+  const mkRect = (centre, halfW, halfH) => [
+    { latitude: centre.latitude - halfH / 111320, longitude: centre.longitude - halfW / mPerDegLng },
+    { latitude: centre.latitude - halfH / 111320, longitude: centre.longitude + halfW / mPerDegLng },
+    { latitude: centre.latitude + halfH / 111320, longitude: centre.longitude + halfW / mPerDegLng },
+    { latitude: centre.latitude + halfH / 111320, longitude: centre.longitude - halfW / mPerDegLng },
+  ];
+  const face1 = makeRoofFace({ source: 'manual', polygon: mkRect(cAuck, 10, 6), azimuthDegrees: 0, setbackMetres: 0.3 });
+  // Face 2 offset 50m north, same shape / azimuth
+  const cFace2 = { latitude: cAuck.latitude + 50 / 111320, longitude: cAuck.longitude };
+  const face2 = makeRoofFace({ source: 'manual', polygon: mkRect(cFace2, 10, 6), azimuthDegrees: 0, setbackMetres: 0.3 });
+
+  const spec = new Map([['A', { length_mm: 1800, width_mm: 1100, watts: 400 }]]);
+
+  // Drop 3 panels on face1 (well-spaced to avoid overlap after snap)
+  let s = addFace(addFace(emptyDesignState(), face1), face2);
+  const panelCentres = [
+    { latitude: cAuck.latitude, longitude: cAuck.longitude },                                                // centre
+    { latitude: cAuck.latitude, longitude: cAuck.longitude + 2 / mPerDegLng },                                // 2m east
+    { latitude: cAuck.latitude, longitude: cAuck.longitude + 4 / mPerDegLng },                                // 4m east
+  ];
+  const panelIds = [];
+  for (const c of panelCentres) {
+    const snapped = snapToFaceGrid({
+      faceAzimuthDegrees: 0, faceCentroid: polygonCentroidLL(face1.polygon),
+      target: c, panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+    });
+    const p = makePanel({ faceId: face1.id, sku: 'A', center: snapped, rotationDegrees: 0, orientation: 'landscape' });
+    s = addPanel(s, p);
+    panelIds.push(p.id);
+  }
+  s = addArray(s, makeArray({ name: 'Source array', panelIds }));
+
+  // Copy to face2 — since face2 is same shape + azimuth, all 3 should transfer cleanly
+  {
+    const arrId = s.arrays[0].id;
+    const r = copyArrayToFace({
+      state: s, arrayId: arrId, targetFaceId: face2.id,
+      panelCatalogueBySku: spec,
+    });
+    assert('copied all 3 panels to same-shape target face', r.copied === 3);
+    assert('no rejections',                                   r.skipped === 0);
+    assert('new state has 6 panels total (3 source + 3 copy)', r.state.panels.length === 6);
+    assert('new state has 2 arrays (source + copy)',           r.state.arrays.length === 2);
+    assert('copy array is named "Copy of Source array"',       r.state.arrays[1].name === 'Copy of Source array');
+    assert('copy panels are on target face',
+      r.state.arrays[1].panelIds.every(pid => r.state.panels.find(p => p.id === pid).faceId === face2.id));
+  }
+
+  // Custom name override
+  {
+    const arrId = s.arrays[0].id;
+    const r = copyArrayToFace({
+      state: s, arrayId: arrId, targetFaceId: face2.id,
+      newArrayName: 'North twin', panelCatalogueBySku: spec,
+    });
+    assert('newArrayName override used', r.state.arrays[1].name === 'North twin');
+  }
+
+  // Target face too small → some panels rejected as outside-face
+  {
+    const tiny = makeRoofFace({
+      source: 'manual',
+      polygon: mkRect({ latitude: cAuck.latitude - 30 / 111320, longitude: cAuck.longitude }, 2, 2),
+      azimuthDegrees: 0, setbackMetres: 0.3,
+    });
+    const sWithTiny = addFace(s, tiny);
+    const arrId = s.arrays[0].id;
+    const r = copyArrayToFace({
+      state: sWithTiny, arrayId: arrId, targetFaceId: tiny.id,
+      panelCatalogueBySku: spec,
+    });
+    assert('copy to tiny face: some panels rejected',
+      r.skipped > 0 && r.copied < 3);
+    assert('reason counts include outside-face or setback',
+      r.reasonCounts.has('outside-face') || r.reasonCounts.has('setback'));
+  }
+
+  // Invalid arguments → empty result, no crash
+  {
+    const r = copyArrayToFace({
+      state: s, arrayId: 'nope', targetFaceId: face2.id, panelCatalogueBySku: spec,
+    });
+    assert('bogus arrayId → 0 copied, no crash', r.copied === 0 && r.skipped === 0);
+
+    const r2 = copyArrayToFace({
+      state: s, arrayId: s.arrays[0].id, targetFaceId: 'nope', panelCatalogueBySku: spec,
+    });
+    assert('bogus targetFaceId → 0 copied, no crash', r2.copied === 0 && r2.skipped === 0);
+  }
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

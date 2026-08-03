@@ -24,7 +24,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import * as fabric from 'fabric';
-import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle, X, Trash2 } from 'lucide-react';
+import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle, X, Trash2, Copy } from 'lucide-react';
 import { pmQuotesAPI, pmContactsAPI } from '../services/pmQuotesApi';
 import { pmDesignsAPI, emptyDesignState, migrateDesignState } from '../services/pmDesignsApi';
 import { makeLatLngToPixel, makePixelToLatLng } from '../utils/roofOverlay';
@@ -36,7 +36,7 @@ import {
   snapToFaceGrid, polygonCentroidLL, PANEL_GRID_GAP_MM,
   inferAzimuthFromPolygon, distanceMetres,
   checkPanelDropRules, DROP_REASON_HUMAN, DEFAULT_FACE_SETBACK_M,
-  buildPanelLabelMap,
+  buildPanelLabelMap, copyArrayToFace,
 } from '../utils/designState';
 import useCatalogueOptions from '../hooks/useCatalogueOptions';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
@@ -562,6 +562,50 @@ export default function DesignPage() {
   // Phase 3b.9 — destructive counterpart: remove every panel in the array
   // (each removePanel call cascades through remaining arrays too). Used by
   // the "Delete panels" branch of the array-row confirm dialog.
+  // Phase 3b.10 — copy an array's layout onto another face. Preserves
+  // relative positions (source face-local (u,v) → target face-local (u,v)),
+  // snaps each candidate onto the target's grid, rule-checks each drop,
+  // and creates a new array on the target with the surviving panels.
+  // Flashes a summary toast so the rep knows the outcome ("Copied 6 of 8;
+  // 2 rejected: 1 setback, 1 outside-face").
+  const copyArrayToTargetFace = useCallback((arrayId, targetFaceId) => {
+    const result = copyArrayToFace({
+      state: stateRef.current,
+      arrayId,
+      targetFaceId,
+      panelCatalogueBySku: panelCatalogueRef.current,
+      gapMm: PANEL_GRID_GAP_MM,
+    });
+    stateRef.current = result.state;
+    setPanelCount(stateRef.current.panels.length);
+    setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+    setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
+    setDirty(true);
+    setSelectedPanelIds([]);
+    layoutAndDrawRef.current?.();
+    // Summarise the outcome for the rep. Uses the same toast slot as drop
+    // rejections but with a bespoke message keyed by outcome shape.
+    if (result.copied === 0 && result.skipped === 0) return;
+    let summary;
+    if (result.skipped === 0) {
+      summary = `Copied ${result.copied} panel${result.copied === 1 ? '' : 's'} to the target face.`;
+    } else if (result.copied === 0) {
+      summary = `Couldn't copy any panels — target face is too small or already crowded.`;
+    } else {
+      const parts = [];
+      for (const [reason, count] of result.reasonCounts) {
+        const label = DROP_REASON_HUMAN[reason] ? reason.replace('-', ' ') : reason;
+        parts.push(`${count} ${label}`);
+      }
+      summary = `Copied ${result.copied}, skipped ${result.skipped}${parts.length ? ' (' + parts.join(', ') + ')' : ''}.`;
+    }
+    // Reuse the drop-reject state for the toast; auto-dismisses via the
+    // same timer. Adding a new state slot would be gratuitous.
+    setDropRejectReason(summary);
+    if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+    dropRejectTimerRef.current = setTimeout(() => setDropRejectReason(null), 4500);
+  }, []);
+
   const deleteArrayAndPanels = useCallback((arrayId) => {
     const st = stateRef.current;
     const arr = st?.arrays?.find(a => a.id === arrayId);
@@ -1605,11 +1649,14 @@ export default function DesignPage() {
           </div>
         )}
 
-        {/* Phase 3b.8 — drop-rejected toast. Auto-dismisses in ~2.5s. */}
+        {/* Phase 3b.8 + 3b.10 — inline toast: drop rejections use the reason
+            enum + DROP_REASON_HUMAN lookup; copy-array summaries pass a full
+            sentence directly. If the value matches a known reason we render
+            the human message; otherwise we render the value verbatim. */}
         {dropRejectReason && (
           <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-red-50 border border-red-300 text-red-900 px-4 py-2 rounded-lg shadow-md text-sm flex items-center gap-2 max-w-md">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span>{DROP_REASON_HUMAN[dropRejectReason] || `Drop rejected (${dropRejectReason})`}</span>
+            <span>{DROP_REASON_HUMAN[dropRejectReason] || dropRejectReason}</span>
           </div>
         )}
 
@@ -1652,6 +1699,7 @@ export default function DesignPage() {
         onSelectArray={selectArrayPanels}
         onUngroupArray={deleteArrayKeepPanels}
         onDeleteArrayAndPanels={deleteArrayAndPanels}
+        onCopyArrayToFace={copyArrayToTargetFace}
         faces={stateRef.current?.roof?.faces || []}
         allPanels={stateRef.current?.panels || []}
         onDeleteFace={(faceId) => deleteFaceById(faceId)}
@@ -2287,7 +2335,7 @@ function armedPanelLabel(catalogue, sku) {
 // panel. Grouped by brand so the list stays scannable when catalogues get
 // large. Cards show brand, watts, and physical dimensions so the rep can
 // eyeball the fit against the roof before dropping.
-function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, faces, allPanels, onDeleteFace }) {
+function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, onCopyArrayToFace, faces, allPanels, onDeleteFace }) {
   const panelsPerFace = useMemo(() => {
     const map = new Map();
     for (const p of allPanels || []) map.set(p.faceId, (map.get(p.faceId) || 0) + 1);
@@ -2297,6 +2345,9 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
   // confirm prompt inline in its row. null = no confirm open. Only one row
   // can be confirming at a time.
   const [confirmingArrayId, setConfirmingArrayId] = useState(null);
+  // Phase 3b.10 — which array (if any) is showing the "copy to face" picker
+  // inline. Mutually-exclusive with the delete confirm above.
+  const [copyingArrayId, setCopyingArrayId] = useState(null);
   const grouped = useMemo(() => {
     const byBrand = new Map();
     for (const p of panels || []) {
@@ -2379,6 +2430,50 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
           <ul className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
             {arrays.map(a => {
               const isConfirming = confirmingArrayId === a.id;
+              const isCopying    = copyingArrayId === a.id;
+              // Phase 3b.10 — copy target picker. Lists every face OTHER
+              // than the one this array's panels live on (copying to the
+              // same face would just overlap the source).
+              if (isCopying) {
+                const sourceFaceId = allPanels?.find(p => a.panelIds.includes(p.id))?.faceId;
+                const targets = (faces || []).filter(f => f.id !== sourceFaceId);
+                return (
+                  <li key={a.id} className="px-4 py-3 bg-sky-50 border-l-4 border-sky-400">
+                    <div className="text-xs text-slate-800 mb-2">
+                      Copy <b>{a.name}</b> ({a.panelIds.length} panel{a.panelIds.length === 1 ? '' : 's'}) to which face?
+                    </div>
+                    {targets.length === 0 ? (
+                      <div className="text-[11px] text-slate-500 italic">
+                        No other faces to copy to. Trace another face first.
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {targets.map((f, i) => (
+                          <button
+                            key={f.id}
+                            type="button"
+                            onClick={() => { onCopyArrayToFace?.(a.id, f.id); setCopyingArrayId(null); }}
+                            className="px-2 py-1 text-[11px] font-semibold text-sky-800 bg-white hover:bg-sky-100 border border-sky-300 rounded"
+                            title={`Copy this array's layout onto face #${faces.indexOf(f) + 1}`}
+                          >
+                            → #{faces.indexOf(f) + 1}
+                            {f.azimuthDegrees != null && <span className="font-normal text-sky-600 ml-1">{azimuthToCompass(f.azimuthDegrees)}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        onClick={() => setCopyingArrayId(null)}
+                        className="px-2 py-1 text-[11px] font-semibold text-slate-500 hover:text-slate-800 rounded"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </li>
+                );
+              }
               if (isConfirming) {
                 // Inline confirm — three explicit choices so a mis-click can't
                 // accidentally destroy panels.
@@ -2427,6 +2522,14 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
                     <div className="text-[10px] text-slate-500">
                       {a.panelIds.length} panel{a.panelIds.length === 1 ? '' : 's'}
                     </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCopyingArrayId(a.id)}
+                    className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-sky-600 transition-opacity"
+                    title="Copy this array to another face"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
                   </button>
                   <button
                     type="button"

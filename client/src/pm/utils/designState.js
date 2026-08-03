@@ -424,6 +424,138 @@ export function panelDisplayLabel(state, panelId) {
   return null;
 }
 
+// ── Copy array between faces (Phase 3b.10) ───────────────────────────────
+// Clone every panel in `arrayId` onto `targetFaceId`, preserving each
+// panel's position RELATIVE to its source face (same (u, v) offset from
+// the source centroid becomes the same offset from the target centroid,
+// then re-snapped to the target's grid). Each candidate is validated
+// against the target face's rules; failures are dropped from the copy
+// with a per-reason count so the UI can summarise ("6 copied, 2 rejected:
+// 1 setback, 1 outside-face"). A new array is created on the target face
+// only if at least one panel actually copied over.
+//
+// Returns { state, copied, skipped, reasonCounts }.
+export function copyArrayToFace({
+  state,
+  arrayId,
+  targetFaceId,
+  newArrayName,
+  panelCatalogueBySku,
+  gapMm = PANEL_GRID_GAP_MM,
+} = {}) {
+  const empty = { state, copied: 0, skipped: 0, reasonCounts: new Map() };
+  if (!state) return empty;
+
+  const arr = (state.arrays || []).find(a => a.id === arrayId);
+  if (!arr) return empty;
+
+  const targetFace = (state.roof?.faces || []).find(f => f.id === targetFaceId);
+  if (!targetFace) return empty;
+
+  const sourcePanels = (arr.panelIds || [])
+    .map(pid => state.panels.find(p => p.id === pid))
+    .filter(Boolean);
+  if (sourcePanels.length === 0) return empty;
+
+  // Source panels are assumed to sit on ONE face (a well-formed array's
+  // string wiring implies a single face). We use the first panel's face
+  // for the local-frame transform. Panels on other faces get dropped.
+  const sourceFaceId = sourcePanels[0].faceId;
+  const sourceFace = (state.roof?.faces || []).find(f => f.id === sourceFaceId);
+  if (!sourceFace) return empty;
+
+  const sourceCentroid = polygonCentroidLL(sourceFace.polygon);
+  const targetCentroid = polygonCentroidLL(targetFace.polygon);
+  if (!sourceCentroid || !targetCentroid) return empty;
+
+  const targetAz = Number(targetFace.azimuthDegrees) || 0;
+  const azRad = targetAz * Math.PI / 180;
+  const cosA = Math.cos(azRad), sinA = Math.sin(azRad);
+  const centreLatRad = targetCentroid.latitude * Math.PI / 180;
+  const metresPerDegLng = METRES_PER_DEG_LAT_GRID * Math.cos(centreLatRad);
+
+  let next = state;
+  const newPanelIds = [];
+  let copied = 0, skipped = 0;
+  const reasonCounts = new Map();
+
+  for (const p of sourcePanels) {
+    if (p.faceId !== sourceFaceId) {
+      // Rare: array contains panels from more than one face. Skip strangers
+      // so the copy's geometry is coherent.
+      skipped++;
+      reasonCounts.set('mixed-source-faces', (reasonCounts.get('mixed-source-faces') || 0) + 1);
+      continue;
+    }
+
+    // Project source panel centre → source face-local (u, v).
+    const uv = latLngToFaceLocal({
+      faceAzimuthDegrees: sourceFace.azimuthDegrees,
+      faceCentroid: sourceCentroid,
+      target: p.center,
+    });
+    if (!uv) { skipped++; continue; }
+
+    // Apply the same (u, v) offset in the TARGET face's frame, then convert
+    // back to lat/lng. Inverse of latLngToFaceLocal for the target frame.
+    const dEast  =  uv.u * cosA + uv.v * sinA;
+    const dNorth = -uv.u * sinA + uv.v * cosA;
+    const naiveCenter = {
+      latitude:  targetCentroid.latitude  + dNorth / METRES_PER_DEG_LAT_GRID,
+      longitude: targetCentroid.longitude + dEast  / metresPerDegLng,
+    };
+
+    const spec = panelCatalogueBySku?.get?.(p.sku);
+    const lenMm = Number(spec?.length_mm) > 0 ? Number(spec.length_mm) : 1755;
+    const widMm = Number(spec?.width_mm)  > 0 ? Number(spec.width_mm)  : 1038;
+
+    // Snap the naive projected position onto the target's grid.
+    const snapped = snapToFaceGrid({
+      faceAzimuthDegrees: targetFace.azimuthDegrees,
+      faceCentroid: targetCentroid,
+      target: naiveCenter,
+      panelLengthMm: lenMm, panelWidthMm: widMm,
+      orientation: p.orientation || 'landscape',
+      gapMm,
+    });
+
+    // Validate — same rule engine used for fresh drops and drags. `next`
+    // (not `state`) so already-copied panels in this pass count as
+    // existing for the overlap check.
+    const check = checkPanelDropRules({
+      state: next, face: targetFace, panelCenter: snapped,
+      panelLengthMm: lenMm, panelWidthMm: widMm,
+      orientation: p.orientation || 'landscape',
+      setbackMetres: Number.isFinite(targetFace.setbackMetres) ? targetFace.setbackMetres : DEFAULT_FACE_SETBACK_M,
+      panelCatalogueBySku,
+    });
+    if (!check.ok) {
+      skipped++;
+      reasonCounts.set(check.reason, (reasonCounts.get(check.reason) || 0) + 1);
+      continue;
+    }
+
+    const newPanel = makePanel({
+      faceId: targetFace.id,
+      sku: p.sku,
+      center: snapped,
+      rotationDegrees: typeof targetFace.azimuthDegrees === 'number' ? targetFace.azimuthDegrees : 0,
+      orientation: p.orientation || 'landscape',
+    });
+    next = addPanel(next, newPanel);
+    newPanelIds.push(newPanel.id);
+    copied++;
+  }
+
+  if (newPanelIds.length > 0) {
+    const name = (newArrayName && String(newArrayName).trim())
+      || `Copy of ${arr.name}`;
+    next = addArray(next, makeArray({ name, panelIds: newPanelIds }));
+  }
+
+  return { state: next, copied, skipped, reasonCounts };
+}
+
 // Build a Map<panelId, label> for every panel in an array. Cheaper than
 // calling panelDisplayLabel per panel during a canvas render since arrays
 // are iterated once instead of per-panel.
