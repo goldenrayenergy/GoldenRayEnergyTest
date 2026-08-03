@@ -401,8 +401,8 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('overlayPanels body uses dark navy fill + silver frame',
     /body\s*=\s*new fabric\.Rect\([\s\S]{0,600}fill:[\s\S]{0,200}rgba\(15,\s*29,\s*58/.test(page)
       && /body\s*=\s*new fabric\.Rect\([\s\S]{0,600}stroke:[\s\S]{0,200}#C4C9D4/.test(page));
-  assert('layoutAndDraw stitches face grid + panels + trace into overlayObjectsRef',
-    /\[\s*\.\.\.facePolys,\s*\.\.\.gridObjs,\s*\.\.\.panelObjs,\s*\.\.\.traceObjects\s*\]/.test(page));
+  assert('layoutAndDraw stitches face grid + obstructions + panels + trace into overlayObjectsRef',
+    /\[\s*\.\.\.facePolys,\s*\.\.\.gridObjs,\s*\.\.\.obstructionObjs,\s*\.\.\.panelObjs,\s*\.\.\.traceObjects\s*\]/.test(page));
 
   // ── Regression: layoutAndDraw releases Fabric's active object before rebuild ──
   // Bug (fixed): calling c.remove() on Fabric's currently-active object (e.g.
@@ -592,6 +592,32 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     'non-blocking amber advisory when the design mixes panel models');
   assert('distinctSkuCount passed from panelSkusInDesign(state).size',
     /distinctSkuCount=\{panelSkusInDesign\(stateRef\.current\)\.size\}/.test(page));
+
+  // ── Phase 3c — obstruction placement UI ──────────────────────────────
+  assert('imports obstruction helpers (makeObstruction/addObstruction/removeObstruction/OBSTRUCTION_DEFAULTS)',
+    /import\s*\{[\s\S]{0,1500}makeObstruction[\s\S]{0,200}addObstruction[\s\S]{0,200}removeObstruction[\s\S]{0,200}OBSTRUCTION_DEFAULTS[\s\S]{0,1200}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('armedObstructionType state + ref (mouse:down reads ref)',
+    /\[armedObstructionType,\s*setArmedObstructionType\]\s*=\s*useState\(null\)/.test(page)
+      && /armedObstructionTypeRef\s*=\s*useRef\(null\)/.test(page)
+      && /armedObstructionTypeRef\.current\s*=\s*armedObstructionType/.test(page));
+  assert('dropObstructionAt uses OBSTRUCTION_DEFAULTS for radius + note',
+    /dropObstructionAt[\s\S]{0,600}makeObstruction\(\{[\s\S]{0,300}OBSTRUCTION_DEFAULTS\[type\]\.radiusMetres/.test(page));
+  assert('mouse:down: obstruction placement intercepts before other branches',
+    /armedObstructionTypeRef\.current[\s\S]{0,900}faceContainingPoint\(stateRef\.current[\s\S]{0,300}dropObstructionAt/.test(page));
+  assert('Esc un-arms obstruction placement',
+    /armedObstructionType[\s\S]{0,300}Escape[\s\S]{0,100}setArmedObstructionType\(null\)/.test(page));
+  assert('header pill toggles obstruction mode',
+    /faceCount\s*>\s*0[\s\S]{0,600}setArmedObstructionType\(v\s*=>\s*v\s*\?\s*null\s*:\s*['"]chimney['"]\)/.test(page));
+  assert('instruction bar renders 6 type buttons from OBSTRUCTION_DEFAULTS keys',
+    /armedObstructionType[\s\S]{0,600}Object\.keys\(OBSTRUCTION_DEFAULTS\)\.map/.test(page));
+  assert('overlayObstructions helper defined',
+    /function overlayObstructions\(/.test(page));
+  assert('overlayObstructions draws translucent circles + letter badges',
+    /overlayObstructions[\s\S]{0,2000}new fabric\.Circle\([\s\S]{0,600}new fabric\.Text\(OBSTRUCTION_ICON/.test(page));
+  assert('layoutAndDraw stitches obstructions into overlayObjectsRef',
+    /\[\s*\.\.\.facePolys,\s*\.\.\.gridObjs,\s*\.\.\.obstructionObjs,\s*\.\.\.panelObjs,\s*\.\.\.traceObjects\s*\]/.test(page));
+  assert('sidebar renders Obstructions list with per-row delete',
+    /Array\.isArray\(obstructions\)\s*&&\s*obstructions\.length\s*>\s*0[\s\S]{0,300}Obstructions[\s\S]{0,1500}onDeleteObstruction\?\.\(o\.id\)/.test(page));
 
   // ── Phase 3b.9 — delete-face (sidebar list + delete-face mode) ──────
   assert('imports removeFace helper',

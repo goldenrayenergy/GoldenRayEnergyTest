@@ -31,6 +31,7 @@ import { makeLatLngToPixel, makePixelToLatLng } from '../utils/roofOverlay';
 import {
   importGoogleSegments, makeRoofFace, addFace, removeFace,
   makePanel, addPanel, removePanel,
+  makeObstruction, addObstruction, removeObstruction, OBSTRUCTION_DEFAULTS,
   makeArray, addArray, removeArray,
   faceContainingPoint, totalKilowatts, totalAnnualKwh, estimateFaceSunshine,
   snapToFaceGrid, polygonCentroidLL, PANEL_GRID_GAP_MM,
@@ -159,6 +160,49 @@ export default function DesignPage() {
   const [isDeletingFace, setIsDeletingFace] = useState(false);
   const isDeletingFaceRef = useRef(false);
   useEffect(() => { isDeletingFaceRef.current = isDeletingFace; }, [isDeletingFace]);
+
+  // Phase 3c — obstruction placement. armedObstructionType is the type the
+  // next canvas click will drop (chimney/skylight/vent/satellite/hvac/other).
+  // Uses OBSTRUCTION_DEFAULTS from designState for per-type exclusion radius.
+  // Rule engine (checkPanelDropRules from 3b.8) already refuses panel drops
+  // that penetrate an obstruction radius — this UI adds the ability to place
+  // them in the first place.
+  const [armedObstructionType, setArmedObstructionType] = useState(null);
+  const armedObstructionTypeRef = useRef(null);
+  useEffect(() => { armedObstructionTypeRef.current = armedObstructionType; }, [armedObstructionType]);
+  // Esc un-arms obstruction placement so the rep can back out without
+  // clicking anywhere on the aerial.
+  useEffect(() => {
+    if (!armedObstructionType) return;
+    const onKey = (e) => { if (e.key === 'Escape') setArmedObstructionType(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [armedObstructionType]);
+
+  const dropObstructionAt = useCallback((type, latLng) => {
+    if (!OBSTRUCTION_DEFAULTS[type]) return;
+    try {
+      const obst = makeObstruction({
+        type,
+        center: latLng,
+        radiusMetres: OBSTRUCTION_DEFAULTS[type].radiusMetres,
+        note: OBSTRUCTION_DEFAULTS[type].note || '',
+      });
+      stateRef.current = addObstruction(stateRef.current, obst);
+      setDirty(true);
+      layoutAndDrawRef.current?.();
+    } catch (err) {
+      console.warn('[DesignPage] failed to place obstruction:', err?.message || err);
+    }
+  }, []);
+
+  const deleteObstructionById = useCallback((obstId) => {
+    stateRef.current = removeObstruction(stateRef.current, obstId);
+    setDirty(true);
+    layoutAndDrawRef.current?.();
+    // Force re-render — obstructions live on stateRef which React can't see.
+    setSelectedPanelIds(prev => [...prev]);
+  }, []);
 
   // Phase 3b.8 — drop-rule rejection hint. Shows a brief toast when a drop
   // is rejected so the rep sees WHY nothing happened. Auto-dismisses.
@@ -782,6 +826,19 @@ export default function DesignPage() {
         // The grid was visually noisy on real roofs; the ghost shows exactly
         // where the panel WILL land, one shape not dozens of dashed lines.
         const gridObjs = [];
+        // Phase 3c — obstruction exclusion circles (chimney, vent, skylight,
+        // etc). Drawn BEFORE panels so panels visually stack on top of any
+        // overlapping obstruction — helps the rep spot bad placements at a
+        // glance. The rule engine still refuses drops that overlap, so
+        // visible stacking should never actually persist in state.
+        const obstructionObjs = overlayObstructions({
+          canvas: c,
+          obstructions: stateRef.current?.roof?.obstructions || [],
+          roofAnalysis: roofAnalysisRef.current,
+          imgWidth: img.width, imgHeight: img.height,
+          left, top, scale,
+        });
+
         // Phase 3b.4 — dropped panels (rectangles at real-world dimensions).
         // 3b.7/3b.9 — pass selectedPanelIds so ALL selected panels get the
         // highlight stroke/fill treatment (multi-select for array grouping).
@@ -805,7 +862,7 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
-        overlayObjectsRef.current = [...facePolys, ...gridObjs, ...panelObjs, ...traceObjects];
+        overlayObjectsRef.current = [...facePolys, ...gridObjs, ...obstructionObjs, ...panelObjs, ...traceObjects];
 
         // First layout only: auto-zoom so the customer's roof fills the view.
         // Google Solar tile is 100m × 100m — much bigger than a typical NZ
@@ -840,6 +897,29 @@ export default function DesignPage() {
       // silently threw inside Fabric's event dispatch and no vertex was ever
       // added — a real crash swallowed by the framework.
       const pointer = canvas.getScenePoint(opt.e);
+
+      // Phase 3c — obstruction placement intercepts first. When an
+      // obstruction type is armed, any click on a traced face drops that
+      // type's exclusion circle at the click point (no snap — obstructions
+      // aren't grid-aligned). Clicks outside all faces are no-ops that keep
+      // arm mode active (rep can zoom/pan and try again).
+      if (armedObstructionTypeRef.current && !isTracingRef.current && !isDeletingFaceRef.current) {
+        const img  = roofImgRef.current;
+        const roof = roofAnalysisRef.current;
+        if (img && roof) {
+          const latLng = canvasToLatLng(pointer, img, roof);
+          if (latLng) {
+            const face = faceContainingPoint(stateRef.current, latLng.latitude, latLng.longitude);
+            if (face) {
+              dropObstructionAt(armedObstructionTypeRef.current, latLng);
+              // Stay armed so the rep can drop multiple of the same type in
+              // one go (typical: three vents on a roof). Esc or clicking the
+              // 'Cancel' pill un-arms.
+            }
+          }
+        }
+        return;
+      }
 
       // Phase 3b.9 — delete-face mode intercepts before anything else. Any
       // click on a face polygon (via point-in-polygon lookup) removes that
@@ -1541,7 +1621,7 @@ export default function DesignPage() {
             </button>
           )}
           {/* Phase 3b.9 — delete-face mode toggle */}
-          {faceCount > 0 && !isTracing && (
+          {faceCount > 0 && !isTracing && !armedObstructionType && (
             <button
               onClick={() => setIsDeletingFace(v => !v)}
               className={
@@ -1553,6 +1633,23 @@ export default function DesignPage() {
               title={isDeletingFace ? 'Click a face to delete it, or click here to cancel' : 'Enter delete-face mode'}
             >
               🗑️ {isDeletingFace ? 'Cancel delete' : 'Delete face'}
+            </button>
+          )}
+          {/* Phase 3c — obstruction placement toggle */}
+          {faceCount > 0 && !isTracing && !isDeletingFace && (
+            <button
+              onClick={() => setArmedObstructionType(v => v ? null : 'chimney')}
+              className={
+                'inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1 border ' +
+                (armedObstructionType
+                  ? 'text-white bg-amber-600 hover:bg-amber-700 border-amber-700'
+                  : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-300')
+              }
+              title={armedObstructionType
+                ? 'Click a face to drop an obstruction, or click here to cancel'
+                : 'Add roof obstructions (chimney, vent, skylight)'}
+            >
+              🚧 {armedObstructionType ? 'Cancel add' : 'Add obstruction'}
             </button>
           )}
           {refetching && (
@@ -1683,6 +1780,36 @@ export default function DesignPage() {
           </div>
         )}
 
+        {/* Phase 3c — obstruction placement instruction bar with type picker */}
+        {armedObstructionType && !isTracing && !isDeletingFace && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-amber-50 border border-amber-400 text-amber-900 px-4 py-2 rounded-lg text-sm flex items-center gap-3 shadow-md flex-wrap max-w-[90%]">
+            <span className="font-semibold">🚧 Add obstruction</span>
+            <span className="text-amber-700 text-xs">Pick type, then click on a roof face:</span>
+            <div className="flex gap-1">
+              {Object.keys(OBSTRUCTION_DEFAULTS).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setArmedObstructionType(t)}
+                  className={
+                    'px-2 py-1 text-xs font-semibold rounded border transition-colors ' +
+                    (armedObstructionType === t
+                      ? 'bg-amber-600 text-white border-amber-700'
+                      : 'bg-white text-amber-900 hover:bg-amber-100 border-amber-300')
+                  }
+                >
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setArmedObstructionType(null)}
+              className="px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 rounded"
+            >
+              Cancel (Esc)
+            </button>
+          </div>
+        )}
+
         {/* Phase 3b.9 — delete-face mode instruction bar */}
         {isDeletingFace && !isTracing && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-red-50 border border-red-400 text-red-900 px-4 py-2 rounded-lg text-sm flex items-center gap-3 shadow-md">
@@ -1748,6 +1875,8 @@ export default function DesignPage() {
         onAutoFillFace={autoFillFaceHandler}
         armedPanelSku={armedPanelSku}
         distinctSkuCount={panelSkusInDesign(stateRef.current).size}
+        obstructions={stateRef.current?.roof?.obstructions || []}
+        onDeleteObstruction={deleteObstructionById}
       />
       </div>
 
@@ -1992,6 +2121,65 @@ function overlayTraceInProgress({ canvas, traceVertices, roofAnalysis, imgWidth,
     canvas.add(label);
     created.push(label);
   });
+
+  return created;
+}
+
+// Phase 3c — draw obstruction exclusion circles (chimney, skylight, vent,
+// satellite, hvac, other). Each is a translucent amber disc sized to the
+// obstruction's stored radiusMetres, with a single-letter type badge in
+// the centre so the rep can identify what's what at a glance.
+const OBSTRUCTION_ICON = {
+  chimney: 'C', skylight: 'S', vent: 'V', satellite: 'A', hvac: 'H', other: 'O',
+};
+function overlayObstructions({ canvas, obstructions, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
+  const created = [];
+  if (!Array.isArray(obstructions) || obstructions.length === 0) return created;
+
+  const centerLat = Number(roofAnalysis?.latitude);
+  const centerLng = Number(roofAnalysis?.longitude);
+  if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) return created;
+
+  const radiusMeters = Number(roofAnalysis?.tile_radius_m) > 0
+    ? Number(roofAnalysis.tile_radius_m)
+    : ROOF_TILE_RADIUS_METERS_FALLBACK;
+
+  const toPixel = makeLatLngToPixel({ centerLat, centerLng, radiusMeters, imgWidth, imgHeight });
+  const toCanvas = (p) => ({ x: left + p.x * scale, y: top + p.y * scale });
+  // metres → canvas px (same math as overlayPanels)
+  const metresToCanvasPx = (m) => (m / (2 * radiusMeters)) * imgWidth * scale;
+
+  for (const obst of obstructions) {
+    if (!obst?.center || typeof obst.center.latitude !== 'number') continue;
+    const rM = Number(obst.radiusMetres);
+    if (!Number.isFinite(rM) || rM <= 0) continue;
+    const rPx = metresToCanvasPx(rM);
+    const centerCanvas = toCanvas(toPixel(obst.center.latitude, obst.center.longitude));
+
+    const disc = new fabric.Circle({
+      left: centerCanvas.x, top: centerCanvas.y,
+      originX: 'center', originY: 'center',
+      radius: rPx,
+      fill: 'rgba(217, 119, 6, 0.35)',   // amber-600 translucent
+      stroke: '#B45309',                    // amber-700
+      strokeWidth: 1.5,
+      strokeUniform: true,
+      selectable: false, evented: false,
+    });
+    const badge = new fabric.Text(OBSTRUCTION_ICON[obst.type] || 'O', {
+      left: centerCanvas.x, top: centerCanvas.y,
+      originX: 'center', originY: 'center',
+      fontSize: Math.max(9, Math.min(rPx * 0.7, 16)),
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      fontWeight: '800',
+      fill: '#FFFFFF',
+      shadow: new fabric.Shadow({ color: 'rgba(0,0,0,0.85)', blur: 2 }),
+      selectable: false, evented: false,
+    });
+    canvas.add(disc);
+    canvas.add(badge);
+    created.push(disc, badge);
+  }
 
   return created;
 }
@@ -2380,7 +2568,7 @@ function armedPanelLabel(catalogue, sku) {
 // panel. Grouped by brand so the list stays scannable when catalogues get
 // large. Cards show brand, watts, and physical dimensions so the rep can
 // eyeball the fit against the roof before dropping.
-function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, onCopyArrayToFace, faces, allPanels, onDeleteFace, onAutoFillFace, distinctSkuCount }) {
+function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, onCopyArrayToFace, faces, allPanels, onDeleteFace, onAutoFillFace, distinctSkuCount, obstructions, onDeleteObstruction }) {
   const panelsPerFace = useMemo(() => {
     const map = new Map();
     for (const p of allPanels || []) map.set(p.faceId, (map.get(p.faceId) || 0) + 1);
@@ -2515,6 +2703,40 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
                 </li>
               );
             })}
+          </ul>
+        </div>
+      )}
+
+      {/* Phase 3c — obstructions list. Row per obstruction with type badge +
+          delete button. Panels drop-check refuses to overlap these (rule
+          engine from 3b.8), so this list is the ground truth for what real-
+          world hazards the rep has flagged. */}
+      {Array.isArray(obstructions) && obstructions.length > 0 && (
+        <div className="border-b border-slate-200 flex-shrink-0">
+          <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-100">
+            Obstructions ({obstructions.length})
+          </div>
+          <ul className="divide-y divide-slate-100 max-h-40 overflow-y-auto">
+            {obstructions.map((o, i) => (
+              <li key={o.id} className="flex items-center gap-2 px-4 py-2 hover:bg-slate-50 group">
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-slate-800 truncate">
+                    #{i + 1} · {o.type.charAt(0).toUpperCase() + o.type.slice(1)}
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    ⌀ {(o.radiusMetres * 2).toFixed(1)}m exclusion
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onDeleteObstruction?.(o.id)}
+                  className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 transition-opacity"
+                  title="Delete this obstruction"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </li>
+            ))}
           </ul>
         </div>
       )}
