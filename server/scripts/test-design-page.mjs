@@ -433,7 +433,7 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('PanelPalette component defined',
     /function PanelPalette\(/.test(page));
   assert('PanelPalette groups panels by brand',
-    /PanelPalette[\s\S]{0,1200}byBrand\s*=\s*new Map\(\)/.test(page));
+    /PanelPalette[\s\S]{0,4000}byBrand\s*=\s*new Map\(\)/.test(page));
   assert('PanelPalette shows loading + error states',
     /Loading catalogue/.test(page) && /Couldn't load panel catalogue/.test(page));
   assert('armed card gets a visual highlight',
@@ -557,6 +557,25 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /copyingArrayId\s*===\s*a\.id[\s\S]{0,2000}faces\s*\|\|\s*\[\]\)\.filter\(f\s*=>\s*f\.id\s*!==\s*sourceFaceId\)/.test(page));
   assert('picker button invokes onCopyArrayToFace with (arrayId, faceId)',
     /onCopyArrayToFace\?\.\(a\.id,\s*f\.id\)/.test(page));
+
+  // ── Phase 3b.12 — palette search + brand-collapse ────────────────────
+  assert('paletteSearch state + expandedBrands Set + matchesQuery helper',
+    /\[paletteSearch,\s*setPaletteSearch\]\s*=\s*useState\(''\)/.test(page)
+      && /\[expandedBrands,\s*setExpandedBrands\]\s*=\s*useState\(\(\)\s*=>\s*new Set\(\)\)/.test(page)
+      && /matchesQuery\s*=\s*\(p\)\s*=>/.test(page));
+  assert('search matches SKU + brand + label + watts (as string)',
+    /p\.sku[\s\S]{0,300}p\.brand[\s\S]{0,300}p\.label[\s\S]{0,300}String\(p\.watts\)\.includes\(query\)/.test(page));
+  assert('search box rendered with clear-X button',
+    /placeholder="Search SKU, brand, or watts"/.test(page)
+      && /setPaletteSearch\(''\)/.test(page));
+  assert('brand headers are collapsible (chevron toggle) and force-open when armed panel is inside',
+    /toggleBrand[\s\S]{0,300}next\.delete\(brand\)/.test(page)
+      && /brandPanels\.some\(p\s*=>\s*p\.sku\s*===\s*armedPanelSku\)/.test(page));
+  assert('search mode forces all matching brands open + hides brands with 0 matches',
+    /Boolean\(query\)/.test(page)
+      && /matched\.length\s*===\s*0[\s\S]{0,100}return null/.test(page));
+  assert('empty-search-result message rendered when no panels match',
+    /No panels match/.test(page));
 
   // ── Phase 3b.9 — delete-face (sidebar list + delete-face mode) ──────
   assert('imports removeFace helper',

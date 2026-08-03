@@ -24,7 +24,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import * as fabric from 'fabric';
-import { ChevronLeft, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle, X, Trash2, Copy } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, ZoomIn, ZoomOut, Maximize2, Save, Loader2, AlertCircle, X, Trash2, Copy, Search } from 'lucide-react';
 import { pmQuotesAPI, pmContactsAPI } from '../services/pmQuotesApi';
 import { pmDesignsAPI, emptyDesignState, migrateDesignState } from '../services/pmDesignsApi';
 import { makeLatLngToPixel, makePixelToLatLng } from '../utils/roofOverlay';
@@ -2348,6 +2348,35 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
   // Phase 3b.10 — which array (if any) is showing the "copy to face" picker
   // inline. Mutually-exclusive with the delete confirm above.
   const [copyingArrayId, setCopyingArrayId] = useState(null);
+
+  // Phase 3b.12 — palette search + brand-collapse. Scales the palette to
+  // 100+ SKUs without an unreadable scrolling wall. When a search query is
+  // non-empty, the render collapses down to a flat filtered list; when it's
+  // empty, brand headers are collapsed by default and click to expand.
+  // Auto-expand rule: any brand whose SKU is currently armed is force-open
+  // so the rep can see and confirm their selection.
+  const [paletteSearch, setPaletteSearch] = useState('');
+  const [expandedBrands, setExpandedBrands] = useState(() => new Set());
+  const query = paletteSearch.trim().toLowerCase();
+  const matchesQuery = (p) => {
+    if (!query) return true;
+    return (
+      (p.sku    && p.sku.toLowerCase().includes(query))
+      || (p.brand && p.brand.toLowerCase().includes(query))
+      || (p.label && p.label.toLowerCase().includes(query))
+      || (p.watts != null && String(p.watts).includes(query))
+    );
+  };
+  const isBrandOpen = (brand, brandPanels) =>
+    Boolean(query)                                            // search mode = all open
+    || expandedBrands.has(brand)                              // manually expanded
+    || brandPanels.some(p => p.sku === armedPanelSku);        // auto-expand armed brand
+  const toggleBrand = (brand) => setExpandedBrands(prev => {
+    const next = new Set(prev);
+    if (next.has(brand)) next.delete(brand);
+    else next.add(brand);
+    return next;
+  });
   const grouped = useMemo(() => {
     const byBrand = new Map();
     for (const p of panels || []) {
@@ -2553,6 +2582,28 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
             ? `Click a card to arm the next drop · Shift+click panels to group into arrays`
             : 'Click a card to arm, then click the roof to drop'}
         </div>
+        {/* Phase 3b.12 — search box scales the palette to 100+ SKUs. When
+            typing, the render below collapses to a flat filtered list. */}
+        <div className="mt-2 relative">
+          <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
+            value={paletteSearch}
+            onChange={e => setPaletteSearch(e.target.value)}
+            placeholder="Search SKU, brand, or watts"
+            className="w-full pl-7 pr-7 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+          />
+          {paletteSearch && (
+            <button
+              type="button"
+              onClick={() => setPaletteSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+              title="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -2571,47 +2622,84 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
             No panels in the catalogue yet. Ask an admin to add SKUs under Admin → Products.
           </div>
         )}
-
-        {grouped.map(([brand, list]) => (
-          <div key={brand} className="border-b border-slate-100 last:border-b-0">
-            <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50">
-              {brand}
+        {!loading && !error && grouped.length > 0
+          && grouped.every(([, list]) => list.filter(matchesQuery).length === 0) && (
+            <div className="px-4 py-6 text-xs text-slate-500">
+              No panels match <b>"{paletteSearch}"</b>.
+              <button
+                type="button"
+                onClick={() => setPaletteSearch('')}
+                className="ml-1 text-blue-600 hover:underline"
+              >
+                Clear search
+              </button>
             </div>
-            <ul className="divide-y divide-slate-100">
-              {list.map(p => {
-                const armed = p.sku === armedPanelSku;
-                const dims = p.length_mm && p.width_mm
-                  ? `${p.length_mm} × ${p.width_mm} mm`
-                  : 'dims not set';
-                return (
-                  <li key={p.sku}>
-                    <button
-                      type="button"
-                      onClick={() => onArm(armed ? null : p.sku)}
-                      className={
-                        'w-full text-left px-4 py-2.5 text-xs transition-colors ' +
-                        (armed
-                          ? 'bg-blue-50 hover:bg-blue-100 border-l-4 border-blue-500'
-                          : 'hover:bg-slate-50 border-l-4 border-transparent')
-                      }
-                      title={p.label || p.sku}
-                    >
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className={`font-semibold ${armed ? 'text-blue-900' : 'text-slate-800'}`}>
-                          {p.watts ? `${p.watts}W` : '—W'}
-                        </span>
-                        <span className="font-mono text-[10px] text-slate-400 truncate">
-                          {p.sku}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">{dims}</div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
+        )}
+
+        {grouped.map(([brand, list]) => {
+          const matched = list.filter(matchesQuery);
+          if (matched.length === 0) return null;   // hide brands with no matches
+          const open = isBrandOpen(brand, list);
+          return (
+            <div key={brand} className="border-b border-slate-100 last:border-b-0">
+              <button
+                type="button"
+                onClick={() => toggleBrand(brand)}
+                disabled={Boolean(query)}
+                className={
+                  'w-full flex items-center gap-1 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider bg-slate-50 hover:bg-slate-100 transition-colors '
+                  + (query ? 'text-slate-600 cursor-default' : 'text-slate-500')
+                }
+                title={query ? 'Expanded during search' : (open ? 'Collapse this brand' : 'Expand this brand')}
+              >
+                {open
+                  ? <ChevronDown className="w-3 h-3" />
+                  : <ChevronRight className="w-3 h-3" />}
+                <span className="flex-1 text-left">{brand}</span>
+                <span className="text-slate-400 font-normal normal-case">
+                  {query
+                    ? `${matched.length}/${list.length}`
+                    : list.length}
+                </span>
+              </button>
+              {open && (
+                <ul className="divide-y divide-slate-100">
+                  {matched.map(p => {
+                    const armed = p.sku === armedPanelSku;
+                    const dims = p.length_mm && p.width_mm
+                      ? `${p.length_mm} × ${p.width_mm} mm`
+                      : 'dims not set';
+                    return (
+                      <li key={p.sku}>
+                        <button
+                          type="button"
+                          onClick={() => onArm(armed ? null : p.sku)}
+                          className={
+                            'w-full text-left px-4 py-2.5 text-xs transition-colors ' +
+                            (armed
+                              ? 'bg-blue-50 hover:bg-blue-100 border-l-4 border-blue-500'
+                              : 'hover:bg-slate-50 border-l-4 border-transparent')
+                          }
+                          title={p.label || p.sku}
+                        >
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className={`font-semibold ${armed ? 'text-blue-900' : 'text-slate-800'}`}>
+                              {p.watts ? `${p.watts}W` : '—W'}
+                            </span>
+                            <span className="font-mono text-[10px] text-slate-400 truncate">
+                              {p.sku}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5">{dims}</div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          );
+        })}
       </div>
     </aside>
   );
