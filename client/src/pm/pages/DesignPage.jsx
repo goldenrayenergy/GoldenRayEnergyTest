@@ -31,9 +31,10 @@ import { makeLatLngToPixel, makePixelToLatLng } from '../utils/roofOverlay';
 import {
   importGoogleSegments, makeRoofFace, addFace,
   makePanel, addPanel, removePanel,
-  faceContainingPoint, totalKilowatts,
+  faceContainingPoint, totalKilowatts, totalAnnualKwh, estimateFaceSunshine,
   snapToFaceGrid, polygonCentroidLL, PANEL_GRID_GAP_MM,
   inferAzimuthFromPolygon, distanceMetres,
+  checkPanelDropRules, DROP_REASON_HUMAN, DEFAULT_FACE_SETBACK_M,
 } from '../utils/designState';
 import useCatalogueOptions from '../hooks/useCatalogueOptions';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
@@ -137,10 +138,24 @@ export default function DesignPage() {
   const armedPanelSkuRef = useRef(null);                      // stable read for mouse handler
   const [panelCount, setPanelCount] = useState(0);            // reactive mirror of state.panels.length
   const [totalKw, setTotalKw]       = useState(0);            // reactive mirror of totalKilowatts()
+  const [totalKwh, setTotalKwh]     = useState(0);            // reactive mirror of totalAnnualKwh()
 
   // Phase 3b.7 (part) — click-to-select + Delete-key removal
   const [selectedPanelId, setSelectedPanelId] = useState(null);
   const selectedPanelIdRef = useRef(null);
+
+  // Phase 3b.8 — drop-rule rejection hint. Shows a brief toast when a drop
+  // is rejected so the rep sees WHY nothing happened. Auto-dismisses.
+  const [dropRejectReason, setDropRejectReason] = useState(null);
+  const dropRejectTimerRef = useRef(null);
+  const flashDropReject = useCallback((reason) => {
+    setDropRejectReason(reason);
+    if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+    dropRejectTimerRef.current = setTimeout(() => setDropRejectReason(null), 2500);
+  }, []);
+  useEffect(() => () => {
+    if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+  }, []);
   // Panel-catalogue lookup by SKU — Map so palette + drop + overlay all share
   // the same shape. Rebuilt whenever the catalogue reloads.
   const panelCatalogueBySku = useMemo(() => {
@@ -225,6 +240,7 @@ export default function DesignPage() {
         // the design's actual state after loading a previously-saved design.
         setPanelCount(stateRef.current?.panels?.length ?? 0);
         setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+        setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
       } catch (e) {
         if (!cancelled) setLoadError(e.response?.data?.error || e.message);
       } finally {
@@ -346,6 +362,7 @@ export default function DesignPage() {
   useEffect(() => {
     if (loading) return;
     setTotalKw(totalKilowatts(stateRef.current, panelCatalogueBySku));
+    setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueBySku));
   }, [panelCatalogueBySku, loading]);
 
   // Esc un-arms the panel. Separate effect from the tracing Esc handler so
@@ -368,6 +385,7 @@ export default function DesignPage() {
     stateRef.current = removePanel(stateRef.current, id);
     setPanelCount(stateRef.current.panels.length);
     setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+    setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
     setSelectedPanelId(null);
     setDirty(true);
     layoutAndDrawRef.current?.();
@@ -589,13 +607,32 @@ export default function DesignPage() {
                 // Dedup: repeat clicks in the same grid cell would snap to the
                 // exact same centre and silently stack panels. Skip the drop
                 // if there's already a panel on this face within 100mm of the
-                // snapped centre. Full no-overlap enforcement (different SKUs,
-                // partial overlaps, setback checks) lands in Phase 3b.8.
+                // snapped centre. Broader no-overlap enforcement lives in the
+                // rule engine below.
                 const isDupe = stateRef.current.panels.some(p =>
                   p.faceId === face.id
                   && distanceMetres(p.center, snappedCenter) < 0.1
                 );
                 if (isDupe) return;
+
+                // Phase 3b.8 — enforce setback + no-overlap + obstruction rules.
+                // On rejection, flash a hint bar with the specific reason
+                // so the rep doesn't wonder why nothing happened.
+                const ruleCheck = checkPanelDropRules({
+                  state: stateRef.current,
+                  face,
+                  panelCenter: snappedCenter,
+                  panelLengthMm: Number(spec?.length_mm) || DEFAULT_PANEL_LENGTH_MM,
+                  panelWidthMm:  Number(spec?.width_mm)  || DEFAULT_PANEL_WIDTH_MM,
+                  orientation: 'landscape',
+                  setbackMetres: Number.isFinite(face?.setbackMetres) ? face.setbackMetres : DEFAULT_FACE_SETBACK_M,
+                  panelCatalogueBySku: panelCatalogueRef.current,
+                });
+                if (!ruleCheck.ok) {
+                  flashDropReject(ruleCheck.reason);
+                  return;
+                }
+
                 const panel = makePanel({
                   faceId: face.id,
                   sku: armedPanelSkuRef.current,
@@ -606,6 +643,7 @@ export default function DesignPage() {
                 stateRef.current = addPanel(stateRef.current, panel);
                 setPanelCount(stateRef.current.panels.length);
                 setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+                setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
                 setDirty(true);
                 layoutAndDrawRef.current?.();
               } catch (err) {
@@ -1063,6 +1101,14 @@ export default function DesignPage() {
           </div>
         )}
 
+        {/* Phase 3b.8 — drop-rejected toast. Auto-dismisses in ~2.5s. */}
+        {dropRejectReason && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-red-50 border border-red-300 text-red-900 px-4 py-2 rounded-lg shadow-md text-sm flex items-center gap-2 max-w-md">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{DROP_REASON_HUMAN[dropRejectReason] || `Drop rejected (${dropRejectReason})`}</span>
+          </div>
+        )}
+
         {/* Phase 3b.4 — armed panel indicator (bottom-centre overlay) */}
         {armedPanelSku && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 bg-blue-50 border border-blue-300 text-blue-900 px-4 py-2 rounded-lg shadow-md text-sm flex items-center gap-3">
@@ -1096,16 +1142,18 @@ export default function DesignPage() {
         armedPanelSku={armedPanelSku}
         onArm={setArmedPanelSku}
         panelCount={panelCount}
+        totalKw={totalKw}
+        totalKwh={totalKwh}
       />
       </div>
 
       {/* ── Footer status bar ───────────────────────────────────────── */}
       <div className="border-t border-slate-200 bg-white px-4 py-1.5 flex-shrink-0 flex items-center justify-between text-xs text-slate-500">
+        {/* Footer is now purely technical status — live design totals moved
+            to the sidebar (PanelPalette top block) where the rep is working. */}
         <div className="flex gap-4">
           <span>Zoom: <b className="text-slate-800">{Math.round(zoomDisplay * 100)}%</b></span>
           <span>Design version: <b className="text-slate-800">v{versionRef.current}</b></span>
-          <span>Panels: <b className="text-slate-800">{panelCount}</b></span>
-          <span>System: <b className="text-slate-800">{totalKw.toFixed(2)} kW</b></span>
           <span className="text-slate-400">
             Autosave: on ({AUTOSAVE_DEBOUNCE_MS / 1000}s)
           </span>
@@ -1235,12 +1283,19 @@ function overlayRoofFaces({ canvas, faces, roofAnalysis, imgWidth, imgHeight, le
     canvas.add(polygon);
     created.push(polygon);
 
-    // Small label at the polygon centroid with pitch + orientation
+    // Small label at the polygon centroid with pitch + orientation + irradiance
     const centroid = polygonCentroid(points);
     const parts = [`#${i + 1}`];
     if (face.areaMetres2)    parts.push(`${face.areaMetres2.toFixed(1)}m²`);
     if (face.azimuthDegrees != null) parts.push(azimuthToCompass(face.azimuthDegrees));
     if (face.pitchDegrees   != null) parts.push(`${face.pitchDegrees.toFixed(0)}°`);
+    // Phase 3b.8 — per-face solar irradiance (kWh/kW/yr) when we have it.
+    // Google-imported faces get the segment median from Google Solar's
+    // sunshineQuantiles; manual faces stay unlabelled (the footer's total
+    // still estimates them via estimateFaceSunshine).
+    if (typeof face.sunshineKwhPerKwPerYear === 'number' && face.sunshineKwhPerKwPerYear > 0) {
+      parts.push(`${Math.round(face.sunshineKwhPerKwPerYear)} kWh/kW/yr`);
+    }
     const label = new fabric.Text(parts.join(' · '), {
       left: centroid.x, top: centroid.y,
       originX: 'center', originY: 'center',
@@ -1684,7 +1739,7 @@ function armedPanelLabel(catalogue, sku) {
 // panel. Grouped by brand so the list stays scannable when catalogues get
 // large. Cards show brand, watts, and physical dimensions so the rep can
 // eyeball the fit against the roof before dropping.
-function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount }) {
+function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh }) {
   const grouped = useMemo(() => {
     const byBrand = new Map();
     for (const p of panels || []) {
@@ -1697,11 +1752,33 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
 
   return (
     <aside className="w-72 flex-shrink-0 border-l border-slate-200 bg-white flex flex-col overflow-hidden">
+      {/* Live design totals — Phase 3b.8 promoted these out of the footer so
+          they sit prominently next to the palette where the rep is working. */}
+      <div className="px-4 py-3 border-b border-slate-200 flex-shrink-0 bg-slate-50">
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <div className="text-xs text-slate-500">Panels</div>
+            <div className="text-lg font-semibold text-slate-900 tabular-nums">{panelCount ?? 0}</div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-500">System</div>
+            <div className="text-lg font-semibold text-slate-900 tabular-nums">
+              {(totalKw ?? 0).toFixed(2)}<span className="text-xs font-normal text-slate-500 ml-0.5">kW</span>
+            </div>
+          </div>
+          <div title="Estimated annual production (median irradiance × panel wattage)">
+            <div className="text-xs text-slate-500">Est. output</div>
+            <div className="text-lg font-semibold text-emerald-700 tabular-nums">
+              {((totalKwh ?? 0) / 1000).toFixed(1)}<span className="text-xs font-normal text-slate-500 ml-0.5">MWh/yr</span>
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="px-4 py-3 border-b border-slate-200 flex-shrink-0">
         <div className="text-sm font-semibold text-slate-900">Panel palette</div>
         <div className="text-xs text-slate-500 mt-0.5">
           {panelCount > 0
-            ? `${panelCount} panel${panelCount === 1 ? '' : 's'} placed · click a card to arm`
+            ? `Click a card to arm the next drop`
             : 'Click a card to arm, then click the roof to drop'}
         </div>
       </div>

@@ -366,7 +366,7 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /import\s+useCatalogueOptions\s+from\s+['"]\.\.\/hooks\/useCatalogueOptions['"]/.test(page),
     'the hook is a default export — named-import destructure would evaluate to undefined');
   assert('imports makePanel + addPanel + faceContainingPoint + totalKilowatts',
-    /import\s*\{[\s\S]{0,600}makePanel[\s\S]{0,200}addPanel[\s\S]{0,200}faceContainingPoint[\s\S]{0,200}totalKilowatts[\s\S]{0,200}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+    /import\s*\{[\s\S]{0,600}makePanel[\s\S]{0,200}addPanel[\s\S]{0,200}faceContainingPoint[\s\S]{0,200}totalKilowatts[\s\S]{0,800}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
   assert('armedPanelSku state + ref (mouse handler reads ref)',
     /\[armedPanelSku,\s*setArmedPanelSku\]\s*=\s*useState\(null\)/.test(page)
       && /armedPanelSkuRef\s*=\s*useRef\(null\)/.test(page)
@@ -428,21 +428,25 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('Esc un-arms the panel',
     /armedPanelSku[\s\S]{0,600}Escape[\s\S]{0,100}setArmedPanelSku\(null\)/.test(page));
 
-  assert('footer shows Panels count + System kW',
-    /Panels:[\s\S]{0,300}\{panelCount\}[\s\S]{0,300}System:[\s\S]{0,300}\{totalKw\.toFixed/.test(page));
+  assert('sidebar palette shows Panels + System + Est. output stats',
+    /PanelPalette[\s\S]{0,4000}\{panelCount\s*\?\?\s*0\}[\s\S]{0,1000}\(totalKw\s*\?\?\s*0\)\.toFixed[\s\S]{0,1000}totalKwh/.test(page),
+    'live design totals live in the sidebar (next to palette) not the footer');
+  assert('footer no longer duplicates the Panels/System/Est stats (moved to sidebar)',
+    !/<span>Panels:\s*<b/.test(page),
+    'footer should be purely technical status');
 
   // ── Phase 3b.6 — grid snap wired into the drop handler ───────────────
   assert('imports snapToFaceGrid + polygonCentroidLL + PANEL_GRID_GAP_MM',
-    /import\s*\{[\s\S]{0,600}snapToFaceGrid[\s\S]{0,100}polygonCentroidLL[\s\S]{0,100}PANEL_GRID_GAP_MM[\s\S]{0,50}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+    /import\s*\{[\s\S]{0,800}snapToFaceGrid[\s\S]{0,100}polygonCentroidLL[\s\S]{0,100}PANEL_GRID_GAP_MM[\s\S]{0,600}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
   assert('drop handler snaps click to face-aligned grid before makePanel',
-    /snapToFaceGrid\(\{[\s\S]{0,800}faceAzimuthDegrees:\s*face\.azimuthDegrees[\s\S]{0,1600}makePanel\(/.test(page),
+    /snapToFaceGrid\(\{[\s\S]{0,800}faceAzimuthDegrees:\s*face\.azimuthDegrees[\s\S]{0,3000}makePanel\(/.test(page),
     'raw click must be snapped so identical panels on a face tile edge-to-edge');
   assert('snap uses catalogue panel dims (length_mm, width_mm) with default fallback',
     /snapToFaceGrid\([\s\S]{0,900}panelLengthMm:\s*Number\(spec\?\.length_mm\)\s*\|\|\s*DEFAULT_PANEL_LENGTH_MM/.test(page));
   assert('snap uses PANEL_GRID_GAP_MM (not a hard-coded number)',
     /snapToFaceGrid\([\s\S]{0,1000}gapMm:\s*PANEL_GRID_GAP_MM/.test(page));
   assert('panel.center passed to makePanel is the snapped centre',
-    /snappedCenter\s*=\s*snapToFaceGrid\([\s\S]{0,1600}center:\s*snappedCenter/.test(page));
+    /snappedCenter\s*=\s*snapToFaceGrid\([\s\S]{0,3000}center:\s*snappedCenter/.test(page));
   assert('finishTrace infers face azimuth from polygon (manual faces get real azimuth)',
     /finishTrace[\s\S]{0,800}inferAzimuthFromPolygon\(vertices\)[\s\S]{0,300}makeRoofFace\(\{\s*source:\s*['"]manual['"][\s\S]{0,200}azimuthDegrees/.test(page),
     'without inferred azimuth, grid stays north-aligned on rotated roofs');
@@ -478,6 +482,43 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /selectedPanelId\s*&&\s*!isTracing[\s\S]{0,800}Delete\/Backspace[\s\S]{0,500}deleteSelectedPanel/.test(page));
   assert('layoutAndDraw passes selectedPanelId into overlayPanels',
     /overlayPanels\(\{[\s\S]{0,600}selectedPanelId:\s*selectedPanelIdRef\.current/.test(page));
+
+  // ── Phase 3b.8 — drop rules (setback + no-overlap + obstruction) ─────
+  assert('imports checkPanelDropRules + DROP_REASON_HUMAN + DEFAULT_FACE_SETBACK_M',
+    /import\s*\{[\s\S]{0,800}checkPanelDropRules[\s\S]{0,200}DROP_REASON_HUMAN[\s\S]{0,200}DEFAULT_FACE_SETBACK_M[\s\S]{0,100}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('drop handler runs the rule engine before makePanel',
+    /snappedCenter[\s\S]{0,1000}checkPanelDropRules\(\{[\s\S]{0,2000}\}\);[\s\S]{0,600}makePanel\(/.test(page),
+    'setback + overlap + obstruction checks must gate the drop, not run after');
+  assert('drop rule uses face.setbackMetres with DEFAULT fallback',
+    /setbackMetres:\s*Number\.isFinite\(face\?\.setbackMetres\)\s*\?\s*face\.setbackMetres\s*:\s*DEFAULT_FACE_SETBACK_M/.test(page),
+    'engineer overrides on face setback (Phase 3d) must be honoured when present');
+  assert('rejected drop flashes a hint via flashDropReject',
+    /if\s*\(!ruleCheck\.ok\)[\s\S]{0,200}flashDropReject\(ruleCheck\.reason\)/.test(page));
+  assert('dropRejectReason state + auto-dismiss timer',
+    /\[dropRejectReason,\s*setDropRejectReason\]\s*=\s*useState\(null\)/.test(page)
+      && /dropRejectTimerRef\s*=\s*useRef\(null\)/.test(page)
+      && /setTimeout\(\(\)\s*=>\s*setDropRejectReason\(null\),\s*2500\)/.test(page));
+  assert('reject-hint toast rendered when dropRejectReason set (uses human message)',
+    /dropRejectReason\s*&&[\s\S]{0,500}DROP_REASON_HUMAN\[dropRejectReason\]/.test(page));
+  assert('flashDropReject clears any pending timer before starting a new one',
+    /flashDropReject\s*=[\s\S]{0,300}clearTimeout\(dropRejectTimerRef\.current\)/.test(page),
+    'rapid rejects must not stack timers');
+  assert('cleanup effect clears the drop-reject timer on unmount',
+    /useEffect\(\(\)\s*=>\s*\(\)\s*=>\s*\{[\s\S]{0,300}clearTimeout\(dropRejectTimerRef\.current\)/.test(page));
+
+  // ── Phase 3b.8 (irradiance) — surface Google Solar sunshine data ─────
+  assert('imports totalAnnualKwh + estimateFaceSunshine',
+    /import\s*\{[\s\S]{0,800}totalAnnualKwh[\s\S]{0,200}estimateFaceSunshine[\s\S]{0,600}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('totalKwh state + setter',
+    /\[totalKwh,\s*setTotalKwh\]\s*=\s*useState\(0\)/.test(page));
+  assert('load effect + catalogue-refresh effect + drop + delete all recompute totalKwh',
+    (page.match(/setTotalKwh\(totalAnnualKwh\(/g) || []).length >= 4,
+    'totalKwh must re-mirror at every state mutation site: load, catalogue arrival, drop, delete');
+  assert('sidebar shows estimated annual output in MWh/yr',
+    /Est\.\s*output[\s\S]{0,600}\(\(totalKwh\s*\?\?\s*0\)\s*\/\s*1000\)\.toFixed\(1\)[\s\S]{0,100}MWh\/yr/.test(page),
+    'sidebar stat block converts totalKwh to MWh for readability at typical residential sizes');
+  assert('overlayRoofFaces label includes per-face irradiance when known',
+    /face\.sunshineKwhPerKwPerYear[\s\S]{0,300}kWh\/kW\/yr/.test(page));
 
   // ── Regression: captureCanvasState must preserve roof/panels/arrays ──
   // Bug: the Phase 3a helper returned only { view, canvas } and was never

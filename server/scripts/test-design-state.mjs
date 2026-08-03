@@ -26,6 +26,10 @@ const {
   pointInPolygon, faceContainingPoint,
   polygonCentroidLL, snapToFaceGrid, PANEL_GRID_GAP_MM,
   distanceMetres, edgeBearingDegrees, inferAzimuthFromPolygon,
+  latLngToFaceLocal, pointInPolygonUV, pointToPolygonMinDist,
+  panelAABBFaceLocal, aabbsOverlap,
+  checkPanelDropRules, DROP_REASON_HUMAN,
+  estimateFaceSunshine, totalAnnualKwh, NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR,
 } = await import(url);
 
 let pass = 0, fail = 0;
@@ -804,6 +808,342 @@ console.log('test-design-state\n');
   });
   assert('degenerate polygon → azimuth stays null (no crash)',
     degenerate.roof.faces[0].azimuthDegrees == null);
+}
+
+// ── latLngToFaceLocal (Phase 3b.8 rule-engine primitive) ─────────────────
+{
+  console.log('\n▸ latLngToFaceLocal');
+  const centroid = { latitude: -36.9098, longitude: 174.6948 };
+  const mPerDegLng = 111320 * Math.cos(centroid.latitude * Math.PI / 180);
+
+  // az=0: 1m east → u=1, v=0
+  const oneMEast = {
+    latitude: centroid.latitude,
+    longitude: centroid.longitude + 1 / mPerDegLng,
+  };
+  {
+    const r = latLngToFaceLocal({ faceAzimuthDegrees: 0, faceCentroid: centroid, target: oneMEast });
+    assert('az=0, 1m east → u≈1, v≈0',
+      Math.abs(r.u - 1) < 0.001 && Math.abs(r.v) < 0.001);
+  }
+
+  // az=90: 1m north → u=-1, v=0 (u-axis rotated 90° = south direction; north maps to -u)
+  {
+    const oneMNorth = { latitude: centroid.latitude + 1 / 111320, longitude: centroid.longitude };
+    const r = latLngToFaceLocal({ faceAzimuthDegrees: 90, faceCentroid: centroid, target: oneMNorth });
+    assert('az=90, 1m north → u≈-1, v≈0',
+      Math.abs(r.u + 1) < 0.001 && Math.abs(r.v) < 0.001, `got u=${r.u}, v=${r.v}`);
+  }
+
+  assert('null centroid → null', latLngToFaceLocal({ faceAzimuthDegrees: 0, faceCentroid: null, target: oneMEast }) === null);
+}
+
+// ── pointInPolygonUV + pointToPolygonMinDist ──────────────────────────────
+{
+  console.log('\n▸ pointInPolygonUV + pointToPolygonMinDist');
+  // Unit square in (u, v) coords
+  const square = [
+    { u: 0, v: 0 },
+    { u: 1, v: 0 },
+    { u: 1, v: 1 },
+    { u: 0, v: 1 },
+  ];
+  assert('centre point inside',           pointInPolygonUV(square, 0.5, 0.5) === true);
+  assert('point outside east',            pointInPolygonUV(square, 1.5, 0.5) === false);
+  assert('degenerate polygon → false',    pointInPolygonUV([], 0, 0) === false);
+
+  // Distance from (0.5, 0.5) to nearest edge should be 0.5
+  assert('centre → min edge dist = 0.5',
+    Math.abs(pointToPolygonMinDist(square, 0.5, 0.5) - 0.5) < 1e-9);
+  // Distance from (0.5, 0.1) to nearest edge (south edge) should be 0.1
+  assert('near south edge → dist = 0.1',
+    Math.abs(pointToPolygonMinDist(square, 0.5, 0.1) - 0.1) < 1e-9);
+  // Distance from corner-adjacent (0.05, 0.05) to nearest edge should be 0.05
+  assert('near corner → dist = 0.05',
+    Math.abs(pointToPolygonMinDist(square, 0.05, 0.05) - 0.05) < 1e-9);
+}
+
+// ── panelAABBFaceLocal + aabbsOverlap ────────────────────────────────────
+{
+  console.log('\n▸ panelAABBFaceLocal + aabbsOverlap');
+  const centroid = { latitude: -36.9098, longitude: 174.6948 };
+  // Panel dropped exactly at centroid, landscape 1800×1100 → AABB (-0.9, -0.55) → (0.9, 0.55)
+  const aabb = panelAABBFaceLocal({
+    panelCenter: centroid,
+    faceAzimuthDegrees: 0,
+    faceCentroid: centroid,
+    panelLengthMm: 1800, panelWidthMm: 1100,
+    orientation: 'landscape',
+  });
+  assert('landscape 1800x1100 at centroid → AABB (-0.9,-0.55)→(0.9,0.55)',
+    Math.abs(aabb.uMin + 0.9)  < 0.001
+    && Math.abs(aabb.uMax - 0.9) < 0.001
+    && Math.abs(aabb.vMin + 0.55) < 0.001
+    && Math.abs(aabb.vMax - 0.55) < 0.001,
+    `got uMin=${aabb.uMin}, uMax=${aabb.uMax}, vMin=${aabb.vMin}, vMax=${aabb.vMax}`);
+
+  // Portrait swaps
+  const portraitAABB = panelAABBFaceLocal({
+    panelCenter: centroid,
+    faceAzimuthDegrees: 0, faceCentroid: centroid,
+    panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'portrait',
+  });
+  assert('portrait: width becomes height and vice-versa',
+    Math.abs(portraitAABB.uMax - 0.55) < 0.001 && Math.abs(portraitAABB.vMax - 0.9) < 0.001);
+
+  // AABBs overlap
+  const a = { uMin: 0, uMax: 2, vMin: 0, vMax: 2 };
+  const b = { uMin: 1, uMax: 3, vMin: 1, vMax: 3 };
+  const c = { uMin: 3, uMax: 5, vMin: 0, vMax: 2 };
+  assert('AABB overlap when partial intersection',       aabbsOverlap(a, b) === true);
+  assert('AABB no overlap when only touching at edge',   aabbsOverlap(a, c) === false);
+  assert('AABB no overlap when separated',               aabbsOverlap(a, { uMin: 10, uMax: 11, vMin: 10, vMax: 11 }) === false);
+  assert('AABB null args → no overlap (defensive)',      aabbsOverlap(null, a) === false);
+}
+
+// ── checkPanelDropRules (Phase 3b.8 end-to-end) ──────────────────────────
+{
+  console.log('\n▸ checkPanelDropRules');
+
+  // Build a state with a 10m × 6m north-facing face (az=0), centred on Auckland.
+  const centre = { latitude: -36.9098, longitude: 174.6948 };
+  const mPerDegLng = 111320 * Math.cos(centre.latitude * Math.PI / 180);
+  const face = makeRoofFace({
+    source: 'manual',
+    polygon: [
+      { latitude: centre.latitude - 3 / 111320, longitude: centre.longitude - 5 / mPerDegLng },
+      { latitude: centre.latitude - 3 / 111320, longitude: centre.longitude + 5 / mPerDegLng },
+      { latitude: centre.latitude + 3 / 111320, longitude: centre.longitude + 5 / mPerDegLng },
+      { latitude: centre.latitude + 3 / 111320, longitude: centre.longitude - 5 / mPerDegLng },
+    ],
+    azimuthDegrees: 0,
+    setbackMetres: 0.3,
+  });
+  let state = addFace(emptyDesignState(), face);
+  const spec = { length_mm: 1800, width_mm: 1100 };
+  const catalogue = new Map([['PANEL-A', spec]]);
+
+  // Drop at centre → should pass
+  {
+    const r = checkPanelDropRules({
+      state, face, panelCenter: centre,
+      panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+      setbackMetres: 0.3, panelCatalogueBySku: catalogue,
+    });
+    assert('drop at centre of 10x6m face: ok', r.ok === true);
+  }
+
+  // Drop 5m east (right at east edge, panel extends past edge) → outside-face
+  {
+    const east5 = { latitude: centre.latitude, longitude: centre.longitude + 5 / mPerDegLng };
+    const r = checkPanelDropRules({
+      state, face, panelCenter: east5,
+      panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+      setbackMetres: 0.3, panelCatalogueBySku: catalogue,
+    });
+    assert('drop past east edge: outside-face', r.ok === false && r.reason === 'outside-face');
+  }
+
+  // Drop 4.5m east — panel fits inside but is within setback of east edge
+  // (east corner at u = 4.5 + 0.9 = 5.4 outside actually; try 4.0)
+  // 4m east: panel east corner at u=4.9, face east edge at u=5.0, dist=0.1 < setback=0.3
+  {
+    const east4 = { latitude: centre.latitude, longitude: centre.longitude + 4.0 / mPerDegLng };
+    const r = checkPanelDropRules({
+      state, face, panelCenter: east4,
+      panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+      setbackMetres: 0.3, panelCatalogueBySku: catalogue,
+    });
+    assert('drop 4m east: setback violation (0.1m to edge)',
+      r.ok === false && r.reason === 'setback',
+      `got ${JSON.stringify(r)}`);
+  }
+
+  // Setback disabled → same drop passes
+  {
+    const east4 = { latitude: centre.latitude, longitude: centre.longitude + 4.0 / mPerDegLng };
+    const r = checkPanelDropRules({
+      state, face, panelCenter: east4,
+      panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+      setbackMetres: 0, panelCatalogueBySku: catalogue,
+    });
+    assert('drop 4m east with setback=0: passes', r.ok === true);
+  }
+
+  // Add a panel at centre, then try to drop another at 0.5m east → overlap
+  {
+    const panel1 = makePanel({
+      faceId: face.id, sku: 'PANEL-A', center: centre,
+      rotationDegrees: 0, orientation: 'landscape',
+    });
+    const stateWithPanel = addPanel(state, panel1);
+    const near = { latitude: centre.latitude, longitude: centre.longitude + 0.5 / mPerDegLng };
+    const r = checkPanelDropRules({
+      state: stateWithPanel, face, panelCenter: near,
+      panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+      setbackMetres: 0.3, panelCatalogueBySku: catalogue,
+    });
+    assert('drop overlapping existing panel: overlap-panel',
+      r.ok === false && r.reason === 'overlap-panel');
+  }
+
+  // Add panel at centre; drop 2m east — no overlap (panel widths 1.8 + gap = ~2m)
+  {
+    const panel1 = makePanel({
+      faceId: face.id, sku: 'PANEL-A', center: centre,
+      rotationDegrees: 0, orientation: 'landscape',
+    });
+    const stateWithPanel = addPanel(state, panel1);
+    const east2 = { latitude: centre.latitude, longitude: centre.longitude + 2.0 / mPerDegLng };
+    const r = checkPanelDropRules({
+      state: stateWithPanel, face, panelCenter: east2,
+      panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+      setbackMetres: 0.3, panelCatalogueBySku: catalogue,
+    });
+    assert('drop 2m east of existing panel (no overlap, past setback): ok',
+      r.ok === true, `got ${JSON.stringify(r)}`);
+  }
+
+  // Obstruction at (1, 0) with radius 0.5m — drop at centre should still pass
+  // (panel east edge at u=0.9, obstruction west edge at u=0.5 → touching but our overlap check
+  // uses < r so touching passes)
+  // Better: obstruction at (0.5, 0) radius 0.6 — panel east edge = 0.9, distance = 0.5-0.9=−0.4 clamped to 0
+  // dy=0 → d=0. r=0.6 → d < r → obstruction.
+  {
+    const obst = makeObstruction({
+      type: 'chimney',
+      center: { latitude: centre.latitude, longitude: centre.longitude + 0.5 / mPerDegLng },
+      radiusMetres: 0.6,
+    });
+    const stateWithObst = addObstruction(state, obst);
+    const r = checkPanelDropRules({
+      state: stateWithObst, face, panelCenter: centre,
+      panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+      setbackMetres: 0.3, panelCatalogueBySku: catalogue,
+    });
+    assert('panel overlaps obstruction: obstruction',
+      r.ok === false && r.reason === 'obstruction');
+  }
+
+  // Invalid face
+  {
+    const r = checkPanelDropRules({
+      state, face: { id: 'x', polygon: null },
+      panelCenter: centre,
+      panelLengthMm: 1800, panelWidthMm: 1100, orientation: 'landscape',
+      setbackMetres: 0.3, panelCatalogueBySku: catalogue,
+    });
+    assert('invalid face (null polygon): invalid-face', r.ok === false && r.reason === 'invalid-face');
+  }
+
+  // Invalid panel dims
+  {
+    const r = checkPanelDropRules({
+      state, face, panelCenter: centre,
+      panelLengthMm: 0, panelWidthMm: 0, orientation: 'landscape',
+      setbackMetres: 0.3, panelCatalogueBySku: catalogue,
+    });
+    assert('invalid panel dims (0): invalid-panel', r.ok === false && r.reason === 'invalid-panel');
+  }
+
+  // DROP_REASON_HUMAN provides messages for all reason codes
+  const reasons = ['outside-face', 'setback', 'overlap-panel', 'obstruction', 'invalid-face', 'invalid-panel'];
+  const humanOK = reasons.every(r => typeof DROP_REASON_HUMAN[r] === 'string' && DROP_REASON_HUMAN[r].length > 0);
+  assert('DROP_REASON_HUMAN has a message for every reason code', humanOK);
+}
+
+// ── Irradiance helpers (Phase 3b.8 irradiance surfacing) ────────────────
+{
+  console.log('\n▸ googleSegmentToRoofFace extracts median sunshine');
+  const seg = {
+    boundingBox: {
+      ne: { latitude: -36.9, longitude: 174.7 },
+      sw: { latitude: -36.91, longitude: 174.69 },
+    },
+    pitchDegrees: 20, azimuthDegrees: 5,
+    stats: {
+      areaMeters2: 42,
+      sunshineQuantiles: [700, 800, 900, 1000, 1100, 1250, 1400, 1500, 1600, 1700, 1800],
+    },
+  };
+  const face = googleSegmentToRoofFace(seg);
+  assert('face carries the segment median (index 5) sunshine',
+    face.sunshineKwhPerKwPerYear === 1250);
+
+  // Segment without sunshineQuantiles → null on the face
+  const bareSeg = { ...seg, stats: { areaMeters2: 30 } };
+  const bareFace = googleSegmentToRoofFace(bareSeg);
+  assert('missing sunshineQuantiles → null on face', bareFace.sunshineKwhPerKwPerYear === null);
+}
+
+{
+  console.log('\n▸ estimateFaceSunshine precedence');
+  assert('NZ default constant defined', NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR === 1350);
+
+  // 1. Face has its own value — returns it
+  const faceOwn = { id: 'a', sunshineKwhPerKwPerYear: 1500 };
+  assert('face own value wins over everything',
+    estimateFaceSunshine({ roof: { faces: [] } }, faceOwn) === 1500);
+
+  // 2. Face is null-valued, other Google faces have values → returns median of others
+  const google1 = { id: 'g1', source: 'google_solar', sunshineKwhPerKwPerYear: 1200 };
+  const google2 = { id: 'g2', source: 'google_solar', sunshineKwhPerKwPerYear: 1400 };
+  const google3 = { id: 'g3', source: 'google_solar', sunshineKwhPerKwPerYear: 1600 };
+  const manual  = { id: 'm', source: 'manual', sunshineKwhPerKwPerYear: null };
+  const stateMulti = { roof: { faces: [google1, google2, google3, manual] } };
+  assert('manual face inherits median of Google faces (1400)',
+    estimateFaceSunshine(stateMulti, manual) === 1400);
+
+  // 3. No known values → fallback (NZ default)
+  const emptyState = { roof: { faces: [{ id: 'x', sunshineKwhPerKwPerYear: null }] } };
+  assert('no known values → NZ default fallback (1350)',
+    estimateFaceSunshine(emptyState, { id: 'x', sunshineKwhPerKwPerYear: null })
+      === NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR);
+
+  // 4. Fallback override
+  assert('caller-supplied fallback wins over the default',
+    estimateFaceSunshine(emptyState, { id: 'x' }, 999) === 999);
+}
+
+{
+  console.log('\n▸ totalAnnualKwh');
+  // Empty state → 0
+  assert('no panels → 0 kWh',
+    totalAnnualKwh(emptyDesignState(), new Map()) === 0);
+
+  // Simple: 1 face with sunshine=1500, 2 panels of 500W → 2 * 0.5 * 1500 = 1500 kWh
+  const centre = { latitude: -36.9098, longitude: 174.6948 };
+  const face = makeRoofFace({
+    source: 'google_solar',
+    polygon: [
+      { latitude: centre.latitude - 0.0001, longitude: centre.longitude - 0.0001 },
+      { latitude: centre.latitude - 0.0001, longitude: centre.longitude + 0.0001 },
+      { latitude: centre.latitude + 0.0001, longitude: centre.longitude + 0.0001 },
+    ],
+    sunshineKwhPerKwPerYear: 1500,
+  });
+  let s = addFace(emptyDesignState(), face);
+  s = addPanel(s, makePanel({ faceId: face.id, sku: 'A', center: centre }));
+  s = addPanel(s, makePanel({ faceId: face.id, sku: 'A', center: centre }));
+  const cat = new Map([['A', { watts: 500 }]]);
+  assert('2 × 500W on face with 1500 kWh/kW/yr → 1500 kWh',
+    totalAnnualKwh(s, cat) === 1500);
+
+  // Panel on face without sunshine → inherits (via estimateFaceSunshine)
+  const bareFace = makeRoofFace({
+    source: 'manual',
+    polygon: [
+      { latitude: 1, longitude: 1 },
+      { latitude: 1, longitude: 1.001 },
+      { latitude: 1.001, longitude: 1.001 },
+    ],
+  });
+  let s2 = addFace(s, bareFace);
+  s2 = addPanel(s2, makePanel({ faceId: bareFace.id, sku: 'A', center: { latitude: 1, longitude: 1 } }));
+  // 3 panels now: 2 × 500W × 1500 = 1500, 1 × 500W × 1500 (median of known = 1500) = 750
+  // Total = 2250
+  assert('manual face panel inherits median from Google faces (1500)',
+    totalAnnualKwh(s2, cat) === 2250);
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

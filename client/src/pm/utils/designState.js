@@ -149,6 +149,12 @@ export const obstId  = () => newId('obst');
 export const panelId = () => newId('panel');
 export const arrayId = () => newId('arr');
 
+// NZ default solar irradiance (Auckland median) when a face has no Google
+// Solar per-segment sunshine value AND no other Google faces exist to average
+// against. Used as a last-resort fallback so the footer kWh/yr estimate is
+// non-zero for a manual-only design.
+export const NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR = 1350;
+
 // ── Roof face helpers ─────────────────────────────────────────────────────
 export function makeRoofFace({
   source,
@@ -159,6 +165,7 @@ export function makeRoofFace({
   material = null,
   setbackMetres = DEFAULT_FACE_SETBACK_M,
   notes = '',
+  sunshineKwhPerKwPerYear = null,
 } = {}) {
   if (source !== 'google_solar' && source !== 'manual') {
     throw new Error(`[designState] makeRoofFace: source must be 'google_solar' or 'manual', got ${source}`);
@@ -181,6 +188,10 @@ export function makeRoofFace({
     material,
     setbackMetres,
     notes,
+    // Google-imported faces get their per-segment median sunshine at import
+    // time; manual traces leave this null and inherit from other Google faces
+    // (or the NZ default) via estimateFaceSunshine.
+    sunshineKwhPerKwPerYear,
   };
 }
 
@@ -305,12 +316,22 @@ export function googleSegmentToRoofFace(seg) {
     { latitude: bbox.sw.latitude, longitude: bbox.sw.longitude },  // SW
   ];
 
+  // Google Solar returns `stats.sunshineQuantiles` as an 11-element array of
+  // kWh/kW/year percentiles from worst-shaded (index 0) to best-lit (index 10)
+  // pixel on the segment. We use the MEDIAN (index 5) as a representative
+  // per-face irradiance for kWh/year estimates.
+  const quantiles = Array.isArray(seg?.stats?.sunshineQuantiles) ? seg.stats.sunshineQuantiles : null;
+  const medianSunshine = quantiles && quantiles.length >= 6 && typeof quantiles[5] === 'number'
+    ? quantiles[5]
+    : null;
+
   return makeRoofFace({
     source: 'google_solar',
     polygon,
     pitchDegrees:   typeof seg.pitchDegrees   === 'number' ? seg.pitchDegrees   : null,
     azimuthDegrees: typeof seg.azimuthDegrees === 'number' ? seg.azimuthDegrees : null,
     areaMetres2:    typeof seg?.stats?.areaMeters2 === 'number' ? seg.stats.areaMeters2 : 0,
+    sunshineKwhPerKwPerYear: medianSunshine,
   });
 }
 
@@ -375,6 +396,47 @@ export function totalKilowatts(state, catalogueBySku) {
     if (spec && typeof spec.watts === 'number') totalWatts += spec.watts;
   }
   return +(totalWatts / 1000).toFixed(3);   // kW to 3dp
+}
+
+// Estimate a face's sunshine (kWh/kW/year) using this precedence:
+//   1. Face's own sunshineKwhPerKwPerYear (set at Google-import time)
+//   2. Median of every OTHER Google face's sunshine on the same design
+//   3. NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR (Auckland default, ~1350)
+// The middle step lets a manually-traced face inherit realistic irradiance
+// from the Google segments that ARE known for the same property.
+export function estimateFaceSunshine(state, face, fallback = NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR) {
+  if (typeof face?.sunshineKwhPerKwPerYear === 'number' && face.sunshineKwhPerKwPerYear > 0) {
+    return face.sunshineKwhPerKwPerYear;
+  }
+  const known = (state?.roof?.faces || [])
+    .filter(f => f.id !== face?.id
+      && typeof f.sunshineKwhPerKwPerYear === 'number'
+      && f.sunshineKwhPerKwPerYear > 0)
+    .map(f => f.sunshineKwhPerKwPerYear);
+  if (known.length > 0) {
+    const sorted = [...known].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];   // median
+  }
+  return fallback;
+}
+
+// Total annual production estimate in kWh/year. Sums (panel wattage ×
+// per-face sunshine / 1000) across every placed panel. Uses the same
+// per-face estimator so manual and Google faces are treated consistently.
+export function totalAnnualKwh(state, catalogueBySku, fallback = NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR) {
+  if (!Array.isArray(state?.panels) || state.panels.length === 0) return 0;
+  const facesById = new Map();
+  for (const f of state.roof?.faces || []) facesById.set(f.id, f);
+  let totalKwh = 0;
+  for (const p of state.panels) {
+    const spec = catalogueBySku?.get?.(p.sku);
+    const watts = Number(spec?.watts);
+    if (!Number.isFinite(watts) || watts <= 0) continue;
+    const face = facesById.get(p.faceId);
+    const sunshine = estimateFaceSunshine(state, face, fallback);
+    totalKwh += (watts / 1000) * sunshine;
+  }
+  return Math.round(totalKwh);
 }
 
 // ── Geometry helpers ──────────────────────────────────────────────────────
@@ -487,6 +549,199 @@ export function polygonCentroidLL(polygon) {
     latitude:  latSum / polygon.length,
     longitude: lngSum / polygon.length,
   };
+}
+
+// ── Face-local coordinate helpers (Phase 3b.8 rules) ─────────────────────
+// Convert a lat/lng target to face-local (u, v) metres. Same rotation as
+// snapToFaceGrid — the grid, the panels, and the rule checks all live in
+// the same rotated frame so cross-checks (overlap, setback) become simple
+// axis-aligned math instead of full-blown SAT.
+export function latLngToFaceLocal({ faceAzimuthDegrees, faceCentroid, target }) {
+  if (!faceCentroid || !target) return null;
+  const az = Number(faceAzimuthDegrees) || 0;
+  const azRad = az * Math.PI / 180;
+  const cosA = Math.cos(azRad), sinA = Math.sin(azRad);
+  const centreLatRad = faceCentroid.latitude * Math.PI / 180;
+  const metresPerDegLng = METRES_PER_DEG_LAT_GRID * Math.cos(centreLatRad);
+  const dEast  = (target.longitude - faceCentroid.longitude) * metresPerDegLng;
+  const dNorth = (target.latitude  - faceCentroid.latitude)  * METRES_PER_DEG_LAT_GRID;
+  return {
+    u: dEast * cosA - dNorth * sinA,
+    v: dEast * sinA + dNorth * cosA,
+  };
+}
+
+// Point-in-polygon for face-local (u, v) coords — same even-odd raycast as
+// pointInPolygon, just on (u, v) instead of (lng, lat). Duplicated rather
+// than parameterized because JS's cost of a wrapper is real and the drop
+// check runs per corner per existing panel per drop.
+export function pointInPolygonUV(polygonUV, u, v) {
+  if (!Array.isArray(polygonUV) || polygonUV.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygonUV.length - 1; i < polygonUV.length; j = i++) {
+    const xi = polygonUV[i].u, yi = polygonUV[i].v;
+    const xj = polygonUV[j].u, yj = polygonUV[j].v;
+    const intersects = (yi > v) !== (yj > v)
+      && u < ((xj - xi) * (v - yi) / (yj - yi)) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+// Distance from a point (u, v) to the nearest edge of a polygon in face-local
+// coords. Returns Infinity for a degenerate polygon.
+export function pointToPolygonMinDist(polygonUV, u, v) {
+  if (!Array.isArray(polygonUV) || polygonUV.length < 2) return Infinity;
+  let min = Infinity;
+  for (let i = 0; i < polygonUV.length; i++) {
+    const a = polygonUV[i];
+    const b = polygonUV[(i + 1) % polygonUV.length];
+    const d = _pointToSegmentDist(u, v, a.u, a.v, b.u, b.v);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+function _pointToSegmentDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+  const t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy);
+  const tc = Math.max(0, Math.min(1, t));
+  const cx = ax + tc * dx, cy = ay + tc * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
+// Panel axis-aligned bounding box in face-local coords. All panels on the
+// same face share the same rotation, so in face-local they're all axis-
+// aligned — overlap tests are then simple AABB checks, not SAT.
+export function panelAABBFaceLocal({
+  panelCenter, faceAzimuthDegrees, faceCentroid,
+  panelLengthMm, panelWidthMm, orientation = 'landscape',
+}) {
+  const local = latLngToFaceLocal({ faceAzimuthDegrees, faceCentroid, target: panelCenter });
+  if (!local) return null;
+  const lenM = Number(panelLengthMm) / 1000;
+  const widM = Number(panelWidthMm)  / 1000;
+  if (!Number.isFinite(lenM) || !Number.isFinite(widM) || lenM <= 0 || widM <= 0) return null;
+  const w = orientation === 'landscape' ? lenM : widM;
+  const h = orientation === 'landscape' ? widM : lenM;
+  return {
+    uMin: local.u - w / 2,
+    uMax: local.u + w / 2,
+    vMin: local.v - h / 2,
+    vMax: local.v + h / 2,
+  };
+}
+
+// AABB overlap check (touching but not intersecting = false).
+export function aabbsOverlap(a, b) {
+  if (!a || !b) return false;
+  return !(a.uMax <= b.uMin || b.uMax <= a.uMin || a.vMax <= b.vMin || b.vMax <= a.vMin);
+}
+
+// ── Panel drop rule engine (Phase 3b.8) ──────────────────────────────────
+// Returns { ok: true } for a valid drop, or { ok: false, reason: '...' }
+// with a machine-readable reason so the UI can show a specific hint.
+//
+// Rules enforced (each in the order listed — first failure short-circuits):
+//   1. 'outside-face'   — any of the 4 panel corners lies outside the face polygon
+//   2. 'setback'        — any panel corner is closer than `setbackMetres` to any face edge
+//   3. 'overlap-panel'  — panel AABB overlaps an existing panel on the same face
+//   4. 'obstruction'    — panel AABB penetrates an obstruction exclusion circle
+//
+// Reasons are stable strings — the UI hint bar keys off them for the
+// human-readable message.
+export const DROP_REASON_HUMAN = {
+  'outside-face':  'That spot is outside the roof face — click inside the outlined area.',
+  'setback':       'Too close to the roof edge — panels need at least 300mm clearance for wind load and access.',
+  'overlap-panel': 'Another panel is already here — click on an empty spot on the grid.',
+  'obstruction':   'A chimney, vent, or skylight is here — pick a clear spot.',
+  'invalid-face':  'This face has no traced boundary — trace it before dropping panels.',
+  'invalid-panel': 'The armed panel has no dimensions on file — check the catalogue row.',
+};
+
+export function checkPanelDropRules({
+  state,
+  face,
+  panelCenter,
+  panelLengthMm,
+  panelWidthMm,
+  orientation = 'landscape',
+  setbackMetres = DEFAULT_FACE_SETBACK_M,
+  panelCatalogueBySku,
+}) {
+  const centroid = polygonCentroidLL(face?.polygon);
+  if (!centroid) return { ok: false, reason: 'invalid-face' };
+
+  const polygonUV = face.polygon
+    .map(v => latLngToFaceLocal({
+      faceAzimuthDegrees: face.azimuthDegrees, faceCentroid: centroid, target: v,
+    }))
+    .filter(Boolean);
+  if (polygonUV.length < 3) return { ok: false, reason: 'invalid-face' };
+
+  const newAABB = panelAABBFaceLocal({
+    panelCenter, faceAzimuthDegrees: face.azimuthDegrees, faceCentroid: centroid,
+    panelLengthMm, panelWidthMm, orientation,
+  });
+  if (!newAABB) return { ok: false, reason: 'invalid-panel' };
+
+  const corners = [
+    { u: newAABB.uMin, v: newAABB.vMin },
+    { u: newAABB.uMax, v: newAABB.vMin },
+    { u: newAABB.uMax, v: newAABB.vMax },
+    { u: newAABB.uMin, v: newAABB.vMax },
+  ];
+
+  // Rule 1 — all corners inside face polygon
+  for (const c of corners) {
+    if (!pointInPolygonUV(polygonUV, c.u, c.v)) {
+      return { ok: false, reason: 'outside-face' };
+    }
+  }
+
+  // Rule 2 — corners at least setbackMetres from any edge (only if setback > 0)
+  if (setbackMetres > 0) {
+    for (const c of corners) {
+      if (pointToPolygonMinDist(polygonUV, c.u, c.v) < setbackMetres) {
+        return { ok: false, reason: 'setback' };
+      }
+    }
+  }
+
+  // Rule 3 — no overlap with existing panels on the same face
+  const existing = (state?.panels || []).filter(p => p.faceId === face.id);
+  for (const p of existing) {
+    const spec = panelCatalogueBySku?.get?.(p.sku);
+    const lenMm = Number(spec?.length_mm) > 0 ? Number(spec.length_mm) : Number(panelLengthMm);
+    const widMm = Number(spec?.width_mm)  > 0 ? Number(spec.width_mm)  : Number(panelWidthMm);
+    const eAABB = panelAABBFaceLocal({
+      panelCenter: p.center,
+      faceAzimuthDegrees: face.azimuthDegrees,
+      faceCentroid: centroid,
+      panelLengthMm: lenMm, panelWidthMm: widMm,
+      orientation: p.orientation || 'landscape',
+    });
+    if (aabbsOverlap(newAABB, eAABB)) {
+      return { ok: false, reason: 'overlap-panel' };
+    }
+  }
+
+  // Rule 4 — no overlap with obstructions (rectangle-circle test in face-local coords)
+  const obstructions = state?.roof?.obstructions || [];
+  for (const obst of obstructions) {
+    const obstUV = latLngToFaceLocal({
+      faceAzimuthDegrees: face.azimuthDegrees, faceCentroid: centroid, target: obst.center,
+    });
+    if (!obstUV) continue;
+    const dx = Math.max(newAABB.uMin - obstUV.u, 0, obstUV.u - newAABB.uMax);
+    const dy = Math.max(newAABB.vMin - obstUV.v, 0, obstUV.v - newAABB.vMax);
+    const d = Math.hypot(dx, dy);
+    const r = Number(obst.radiusMetres) || 0;
+    if (d < r) return { ok: false, reason: 'obstruction' };
+  }
+
+  return { ok: true };
 }
 
 // Snap a raw drop location to the nearest cell in a face-aligned grid.
