@@ -391,9 +391,10 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /function overlayPanels\(/.test(page));
   assert('overlayPanels sizes rectangle by catalogue length_mm × width_mm',
     /overlayPanels[\s\S]{0,2500}length_mm[\s\S]{0,500}width_mm/.test(page));
-  assert('overlayPanels renders a Fabric.Group (body Rect + centre busbar Line) with rotation',
-    /overlayPanels[\s\S]{0,4000}new fabric\.Group\(\[body,\s*busbar\][\s\S]{0,800}angle:\s*Number\(panel\.rotationDegrees\)/.test(page),
-    'realistic panel = darker fill Rect + silver frame + centre busbar line, grouped so the rotation applies to both');
+  assert('overlayPanels renders a Fabric.Group (body Rect + centre busbar Line + optional label) with rotation',
+    /overlayPanels[\s\S]{0,6000}new fabric\.Group\(children,[\s\S]{0,800}angle:\s*Number\(panel\.rotationDegrees\)/.test(page)
+      && /children\s*=\s*\[body,\s*busbar\]/.test(page),
+    'realistic panel = darker fill Rect + silver frame + centre busbar line + auto-number label (if in array), grouped so rotation applies to all');
   assert('panels are drag-only: selectable=true, hasControls=false, all locks set',
     /overlayPanels[\s\S]{0,4000}selectable:\s*true[\s\S]{0,200}hasControls:\s*false[\s\S]{0,200}lockScalingX:\s*true[\s\S]{0,200}lockRotation:\s*true/.test(page),
     'panels must be draggable but not scalable or free-rotatable');
@@ -475,7 +476,7 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
 
   // ── Phase 3b.7 (part) — click-to-select + Delete-key removal ─────────
   assert('imports removePanel',
-    /import\s*\{[\s\S]{0,600}removePanel[\s\S]{0,300}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+    /import\s*\{[\s\S]{0,800}removePanel[\s\S]{0,800}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
   assert('selectedPanelIds state + ref (multi-select for array grouping)',
     /\[selectedPanelIds,\s*setSelectedPanelIds\]\s*=\s*useState\(\[\]\)/.test(page)
       && /selectedPanelIdsRef\s*=\s*useRef\(\[\]\)/.test(page)
@@ -503,6 +504,18 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /selectedPanelIds\.length\s*>\s*0[\s\S]{0,3000}deleteSelectedPanel/.test(page));
   assert('layoutAndDraw passes selectedPanelIds into overlayPanels',
     /overlayPanels\(\{[\s\S]{0,600}selectedPanelIds:\s*selectedPanelIdsRef\.current/.test(page));
+
+  // ── Phase 3b.11 — panel auto-numbering render ────────────────────────
+  assert('imports buildPanelLabelMap',
+    /import\s*\{[\s\S]{0,900}buildPanelLabelMap[\s\S]{0,200}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('layoutAndDraw passes buildPanelLabelMap(state) into overlayPanels',
+    /overlayPanels\(\{[\s\S]{0,900}panelLabels:\s*buildPanelLabelMap\(stateRef\.current\)/.test(page));
+  assert('overlayPanels wraps panelLabels in a Map + only renders label when present',
+    /const labels\s*=\s*panelLabels instanceof Map\s*\?\s*panelLabels\s*:\s*new Map\(\)/.test(page)
+      && /const labelText\s*=\s*labels\.get\(panel\.id\)[\s\S]{0,200}if \(labelText\)/.test(page),
+    'un-arrayed panels stay un-labelled');
+  assert('label is a Fabric.Text pushed into the Group children',
+    /new fabric\.Text\(labelText[\s\S]{0,600}children\.push\(label\)/.test(page));
 
   // ── Phase 3b.9 — array grouping + naming ─────────────────────────────
   assert('imports makeArray + addArray + removeArray',

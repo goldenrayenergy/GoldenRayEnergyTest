@@ -402,6 +402,44 @@ export function panelsByFace(state, faceId) {
   return state.panels.filter(p => p.faceId === faceId);
 }
 
+// ── Panel auto-numbering (Phase 3b.11) ────────────────────────────────────
+// Assign each panel a display label based on its array membership. Format
+// is `S{arrayNumber}P{panelPosition}` — e.g. "S1P3" means the 3rd panel in
+// the 1st array (arrays are electrical strings for now; wiring order
+// within an array is the engineer's call and reflects state.arrays[i]
+// .panelIds ORDER, which is set at array creation and can be reshuffled
+// later once we have an array-editor UI).
+//
+// Panels not in any array return null — we don't number rogue panels
+// because their position in the string diagram is undefined until the rep
+// groups them.
+export function panelDisplayLabel(state, panelId) {
+  if (!state?.arrays || !panelId) return null;
+  for (let i = 0; i < state.arrays.length; i++) {
+    const arr = state.arrays[i];
+    if (!Array.isArray(arr?.panelIds)) continue;
+    const idx = arr.panelIds.indexOf(panelId);
+    if (idx >= 0) return `S${i + 1}P${idx + 1}`;
+  }
+  return null;
+}
+
+// Build a Map<panelId, label> for every panel in an array. Cheaper than
+// calling panelDisplayLabel per panel during a canvas render since arrays
+// are iterated once instead of per-panel.
+export function buildPanelLabelMap(state) {
+  const map = new Map();
+  const arrays = state?.arrays || [];
+  for (let i = 0; i < arrays.length; i++) {
+    const arr = arrays[i];
+    if (!Array.isArray(arr?.panelIds)) continue;
+    for (let j = 0; j < arr.panelIds.length; j++) {
+      map.set(arr.panelIds[j], `S${i + 1}P${j + 1}`);
+    }
+  }
+  return map;
+}
+
 // Total kW installed. Requires a catalogue lookup for panel wattage — passed
 // in so this module stays dependency-free. `catalogueByFksu` is a Map<sku, {watts}>.
 export function totalKilowatts(state, catalogueBySku) {

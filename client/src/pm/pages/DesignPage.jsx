@@ -36,6 +36,7 @@ import {
   snapToFaceGrid, polygonCentroidLL, PANEL_GRID_GAP_MM,
   inferAzimuthFromPolygon, distanceMetres,
   checkPanelDropRules, DROP_REASON_HUMAN, DEFAULT_FACE_SETBACK_M,
+  buildPanelLabelMap,
 } from '../utils/designState';
 import useCatalogueOptions from '../hooks/useCatalogueOptions';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
@@ -698,6 +699,8 @@ export default function DesignPage() {
         // Phase 3b.4 — dropped panels (rectangles at real-world dimensions).
         // 3b.7/3b.9 — pass selectedPanelIds so ALL selected panels get the
         // highlight stroke/fill treatment (multi-select for array grouping).
+        // 3b.11 — pass buildPanelLabelMap so each panel that belongs to an
+        // array renders its "S1P3" auto-number label centred on top.
         const panelObjs = overlayPanels({
           canvas: c,
           panels: stateRef.current?.panels || [],
@@ -706,6 +709,7 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
           selectedPanelIds: selectedPanelIdsRef.current,
+          panelLabels: buildPanelLabelMap(stateRef.current),
         });
         // Phase 3b.3 — in-progress trace on top of everything.
         const traceObjects = overlayTraceInProgress({
@@ -1914,10 +1918,11 @@ function overlayTraceInProgress({ canvas, traceVertices, roofAnalysis, imgWidth,
 // implement single-select ourselves (Fabric's built-in selection would let
 // users drag/scale/rotate panels, which we want to control explicitly in
 // later phases; drag = 3b.7b, rotate = 3b.7c).
-function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgWidth, imgHeight, left, top, scale, selectedPanelIds }) {
+function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgWidth, imgHeight, left, top, scale, selectedPanelIds, panelLabels }) {
   const selectedSet = selectedPanelIds instanceof Set
     ? selectedPanelIds
     : new Set(Array.isArray(selectedPanelIds) ? selectedPanelIds : []);
+  const labels = panelLabels instanceof Map ? panelLabels : new Map();
   const created = [];
   if (!Array.isArray(panels) || panels.length === 0) return created;
 
@@ -1974,7 +1979,29 @@ function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgW
       strokeWidth: 0.6,
       strokeUniform: true,
     });
-    const group = new fabric.Group([body, busbar], {
+    // Phase 3b.11 — auto-number label (S1P3, S2P1, …) centred on the panel.
+    // Only added for panels that belong to an array; rogue panels stay
+    // un-labelled since their string position is undefined until grouped.
+    // Font size scales with panel size so the label reads at any zoom, and
+    // clamps to a legible min/max so a tiny thumbnail doesn't fold to 3px
+    // or a huge panel doesn't shout at 40px.
+    const children = [body, busbar];
+    const labelText = labels.get(panel.id);
+    if (labelText) {
+      const fontPx = Math.max(9, Math.min(hPx * 0.28, 16));
+      const label = new fabric.Text(labelText, {
+        left: 0, top: 0,
+        originX: 'center', originY: 'center',
+        fontSize: fontPx,
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+        fontWeight: '700',
+        fill: '#FFFFFF',
+        shadow: new fabric.Shadow({ color: 'rgba(0, 0, 0, 0.85)', blur: 3, offsetX: 0, offsetY: 0 }),
+      });
+      children.push(label);
+    }
+
+    const group = new fabric.Group(children, {
       left: centerCanvas.x, top: centerCanvas.y,
       originX: 'center', originY: 'center',
       angle:  Number(panel.rotationDegrees) || 0,

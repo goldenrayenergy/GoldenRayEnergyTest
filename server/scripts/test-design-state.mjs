@@ -30,6 +30,7 @@ const {
   panelAABBFaceLocal, aabbsOverlap,
   checkPanelDropRules, DROP_REASON_HUMAN,
   estimateFaceSunshine, totalAnnualKwh, NZ_DEFAULT_SUNSHINE_KWH_PER_KW_YEAR,
+  panelDisplayLabel, buildPanelLabelMap,
 } = await import(url);
 
 let pass = 0, fail = 0;
@@ -1191,6 +1192,35 @@ console.log('test-design-state\n');
   // Total = 2250
   assert('manual face panel inherits median from Google faces (1500)',
     totalAnnualKwh(s2, cat) === 2250);
+}
+
+// ── Panel auto-numbering (Phase 3b.11) ───────────────────────────────────
+{
+  console.log('\n▸ panelDisplayLabel + buildPanelLabelMap');
+  const state = {
+    schemaVersion: 2,
+    view: { zoom: 1, panX: 0, panY: 0 }, canvas: { serialized: null },
+    roof: { faces: [], obstructions: [] },
+    panels: [],   // panel entities not needed for label lookup
+    arrays: [
+      { id: 'arr-1', name: 'North array', panelIds: ['p-a', 'p-b', 'p-c'] },
+      { id: 'arr-2', name: 'SW array',    panelIds: ['p-x', 'p-y'] },
+    ],
+  };
+
+  assert('S1P1 = 1st panel in 1st array',   panelDisplayLabel(state, 'p-a') === 'S1P1');
+  assert('S1P3 = 3rd panel in 1st array',   panelDisplayLabel(state, 'p-c') === 'S1P3');
+  assert('S2P1 = 1st panel in 2nd array',   panelDisplayLabel(state, 'p-x') === 'S2P1');
+  assert('S2P2 = 2nd panel in 2nd array',   panelDisplayLabel(state, 'p-y') === 'S2P2');
+  assert('un-arrayed panel → null',         panelDisplayLabel(state, 'p-nowhere') === null);
+  assert('null state → null (defensive)',   panelDisplayLabel(null, 'p-a') === null);
+  assert('null panel id → null (defensive)', panelDisplayLabel(state, null) === null);
+
+  const map = buildPanelLabelMap(state);
+  assert('label map size = total panelIds across arrays', map.size === 5);
+  assert('label map: p-a → S1P1',            map.get('p-a') === 'S1P1');
+  assert('label map: p-y → S2P2',            map.get('p-y') === 'S2P2');
+  assert('label map has no entry for un-arrayed panels', !map.has('p-nowhere'));
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
