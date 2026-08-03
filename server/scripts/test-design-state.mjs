@@ -810,6 +810,53 @@ console.log('test-design-state\n');
     degenerate.roof.faces[0].azimuthDegrees == null);
 }
 
+// ── migrateDesignState drops orphan panels + cleans arrays (Phase 3b.9) ─
+{
+  console.log('\n▸ migrateDesignState orphan cleanup');
+  const state = {
+    schemaVersion: 2,
+    view: { zoom: 1, panX: 0, panY: 0 },
+    canvas: { serialized: null },
+    roof: {
+      faces: [{ id: 'face-alive', source: 'manual', azimuthDegrees: 0, polygon: [
+        { latitude: 0, longitude: 0 }, { latitude: 1, longitude: 0 }, { latitude: 1, longitude: 1 },
+      ] }],
+      obstructions: [],
+    },
+    panels: [
+      { id: 'p-1', faceId: 'face-alive',   sku: 'A', center: { latitude: 0.5, longitude: 0.5 }, rotationDegrees: 0, orientation: 'landscape' },
+      { id: 'p-2', faceId: 'face-DELETED', sku: 'A', center: { latitude: 0.4, longitude: 0.4 }, rotationDegrees: 0, orientation: 'landscape' },
+      { id: 'p-3', faceId: 'face-alive',   sku: 'A', center: { latitude: 0.6, longitude: 0.6 }, rotationDegrees: 0, orientation: 'landscape' },
+    ],
+    arrays: [
+      { id: 'arr-1', name: 'Mixed array', panelIds: ['p-1', 'p-2', 'p-3'] },
+      { id: 'arr-2', name: 'All-orphan',  panelIds: ['p-2'] },
+    ],
+  };
+  const m = migrateDesignState(state);
+  assert('orphan panel (face-DELETED) is dropped', m.panels.length === 2);
+  assert('surviving panels are the two on face-alive',
+    m.panels.every(p => p.faceId === 'face-alive'));
+  assert('arrays purge dead panelIds — mixed array keeps p-1 + p-3',
+    m.arrays.find(a => a.id === 'arr-1')?.panelIds.length === 2);
+  assert('all-orphan array is dropped entirely',
+    !m.arrays.some(a => a.id === 'arr-2'));
+
+  // Correctly-maintained state passes through untouched
+  const cleanState = {
+    schemaVersion: 2,
+    view: { zoom: 1, panX: 0, panY: 0 }, canvas: { serialized: null },
+    roof: { faces: [{ id: 'f-1', source: 'manual', azimuthDegrees: 0, polygon: [
+      { latitude: 0, longitude: 0 }, { latitude: 1, longitude: 0 }, { latitude: 1, longitude: 1 },
+    ] }], obstructions: [] },
+    panels: [{ id: 'p-1', faceId: 'f-1', sku: 'A', center: { latitude: 0.5, longitude: 0.5 }, rotationDegrees: 0, orientation: 'landscape' }],
+    arrays: [{ id: 'arr-1', name: 'A', panelIds: ['p-1'] }],
+  };
+  const clean = migrateDesignState(cleanState);
+  assert('clean state passes through untouched',
+    clean.panels.length === 1 && clean.arrays.length === 1);
+}
+
 // ── latLngToFaceLocal (Phase 3b.8 rule-engine primitive) ─────────────────
 {
   console.log('\n▸ latLngToFaceLocal');

@@ -118,6 +118,21 @@ export function migrateDesignState(state) {
     }
     return f;
   });
+  // Phase 3b.9 fix — drop orphan panels whose faceId points at a face that
+  // no longer exists (usually from delete-face edge cases predating today's
+  // cascade fix, OR from any state-editing bug that skipped removePanel's
+  // cascade). Purge dead panelIds from arrays and drop arrays that end up
+  // empty. Purely defensive: correctly-maintained state passes through
+  // untouched.
+  const validFaceIds = new Set(facesWithAzimuth.map(f => f.id));
+  const rawPanels = Array.isArray(state.panels) ? state.panels : [];
+  const cleanPanels = rawPanels.filter(p => p && validFaceIds.has(p.faceId));
+  const survivingPanelIds = new Set(cleanPanels.map(p => p.id));
+  const rawArrays = Array.isArray(state.arrays) ? state.arrays : [];
+  const cleanArrays = rawArrays
+    .map(a => ({ ...a, panelIds: (a.panelIds || []).filter(pid => survivingPanelIds.has(pid)) }))
+    .filter(a => Array.isArray(a.panelIds) && a.panelIds.length > 0);
+
   const migrated = {
     ...state,
     schemaVersion: SCHEMA_VERSION,
@@ -127,8 +142,8 @@ export function migrateDesignState(state) {
       faces:        facesWithAzimuth,
       obstructions: Array.isArray(state.roof?.obstructions) ? state.roof.obstructions : [],
     },
-    panels: Array.isArray(state.panels) ? state.panels : [],
-    arrays: Array.isArray(state.arrays) ? state.arrays : [],
+    panels: cleanPanels,
+    arrays: cleanArrays,
   };
   return migrated;
 }

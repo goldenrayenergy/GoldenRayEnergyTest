@@ -29,8 +29,9 @@ import { pmQuotesAPI, pmContactsAPI } from '../services/pmQuotesApi';
 import { pmDesignsAPI, emptyDesignState, migrateDesignState } from '../services/pmDesignsApi';
 import { makeLatLngToPixel, makePixelToLatLng } from '../utils/roofOverlay';
 import {
-  importGoogleSegments, makeRoofFace, addFace,
+  importGoogleSegments, makeRoofFace, addFace, removeFace,
   makePanel, addPanel, removePanel,
+  makeArray, addArray, removeArray,
   faceContainingPoint, totalKilowatts, totalAnnualKwh, estimateFaceSunshine,
   snapToFaceGrid, polygonCentroidLL, PANEL_GRID_GAP_MM,
   inferAzimuthFromPolygon, distanceMetres,
@@ -107,6 +108,8 @@ export default function DesignPage() {
   const versionRef = useRef(0);            // latest saved version (for optimistic concurrency)
   const roofImgRef = useRef(null);         // fabric.Image of the roof (kept across resizes)
   const overlayObjectsRef = useRef([]);    // segment polygons + labels + crosshair
+  const ghostPanelRef = useRef(null);      // Phase 3b.9 — live snap-preview panel while armed
+  const hideGhostPanelRef = useRef(null);  // exposed so armed-off / drop paths can dismiss it
   const roofAnalysisRef = useRef(null);    // stable roof analysis for re-layout
   const hasAutoZoomedRef = useRef(false);  // only auto-zoom to roof on first layout
   const layoutAndDrawRef = useRef(null);   // callable from the image-load effect
@@ -140,9 +143,20 @@ export default function DesignPage() {
   const [totalKw, setTotalKw]       = useState(0);            // reactive mirror of totalKilowatts()
   const [totalKwh, setTotalKwh]     = useState(0);            // reactive mirror of totalAnnualKwh()
 
-  // Phase 3b.7 (part) — click-to-select + Delete-key removal
-  const [selectedPanelId, setSelectedPanelId] = useState(null);
-  const selectedPanelIdRef = useRef(null);
+  // Phase 3b.7 (part) + 3b.9 — panel selection is now a multi-set to support
+  // array creation (Shift+click adds/removes). Single-panel actions (drag, R,
+  // delete-one) still work when exactly one panel is selected; multi-panel
+  // actions (create array, delete-all) work with any non-empty selection.
+  const [selectedPanelIds, setSelectedPanelIds] = useState([]);
+  const selectedPanelIdsRef = useRef([]);
+
+  // Phase 3b.9 — delete-face mode. When active, the next click on a face
+  // polygon deletes that face (with confirm). Sidebar face list also has
+  // per-row delete buttons. Both paths run removeFace() which cascades
+  // panel + array removal via designState's helper.
+  const [isDeletingFace, setIsDeletingFace] = useState(false);
+  const isDeletingFaceRef = useRef(false);
+  useEffect(() => { isDeletingFaceRef.current = isDeletingFace; }, [isDeletingFace]);
 
   // Phase 3b.8 — drop-rule rejection hint. Shows a brief toast when a drop
   // is rejected so the rep sees WHY nothing happened. Auto-dismisses.
@@ -340,21 +354,52 @@ export default function DesignPage() {
   useEffect(() => { isTracingRef.current = isTracing; }, [isTracing]);
 
   // Sync armedPanelSku → ref so the stable mouse:down closure can read it
-  // without needing to re-bind on every arm/unarm. Also triggers a redraw
-  // so the snap-grid preview appears/disappears immediately when the rep
-  // arms or un-arms a panel (Phase 3b.6 viz).
+  // without needing to re-bind on every arm/unarm. On un-arm, dismiss any
+  // ghost-panel preview that was following the mouse.
   useEffect(() => {
     armedPanelSkuRef.current = armedPanelSku;
-    layoutAndDrawRef.current?.();
+    if (!armedPanelSku) hideGhostPanelRef.current?.();
   }, [armedPanelSku]);
 
-  // Sync selectedPanelId → ref (same reason: keydown handler needs the
-  // latest value without re-binding the listener on every selection change)
-  // AND trigger a redraw so the selected panel's highlight updates.
+  // Sync selectedPanelIds → ref (same reason: keydown/mouse handlers need
+  // the latest value without re-binding the listener on every selection
+  // change) AND update the panels' fill/stroke IN PLACE so highlights
+  // update without a full layoutAndDraw pass.
+  //
+  // BUG (fixed): calling layoutAndDraw here destroyed and recreated every
+  // panel Fabric object on click. Fabric's built-in drag started on
+  // mouse:down but its _currentTransform ended up pointing at a removed
+  // object once our sync effect fired, so mouse:move produced no visible
+  // motion. In-place restyle keeps the same Fabric object identity so the
+  // native drag survives every selection tick.
   useEffect(() => {
-    selectedPanelIdRef.current = selectedPanelId;
-    layoutAndDrawRef.current?.();
-  }, [selectedPanelId]);
+    selectedPanelIdsRef.current = selectedPanelIds;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const selectedSet = new Set(selectedPanelIds);
+    let touched = false;
+    for (const obj of overlayObjectsRef.current) {
+      const panelId = obj?.data?.panelId;
+      if (!panelId) continue;
+      const shouldBeSelected = selectedSet.has(panelId);
+      const alreadySelected = obj.data.isSelectedVisual === true;
+      if (shouldBeSelected === alreadySelected) continue;
+      // Fabric.Group children[0] is the panel body Rect; children[1] is the busbar Line.
+      const body = obj._objects?.[0];
+      if (body) {
+        body.set({
+          fill:   shouldBeSelected ? 'rgba(56, 189, 248, 0.75)' : 'rgba(15, 29, 58, 0.90)',
+          stroke: shouldBeSelected ? '#38BDF8' : '#C4C9D4',
+          strokeWidth: shouldBeSelected ? 2.5 : 1.2,
+        });
+      }
+      obj.set('hoverCursor', shouldBeSelected ? 'move' : 'pointer');
+      obj.data.isSelectedVisual = shouldBeSelected;
+      obj.setCoords();
+      touched = true;
+    }
+    if (touched) canvas.requestRenderAll();
+  }, [selectedPanelIds]);
 
   // Recompute total kW when the catalogue arrives after the design has loaded.
   // Wattage lives in the catalogue (not the panel entity), so a design that
@@ -379,14 +424,19 @@ export default function DesignPage() {
   // Delete + Backspace both work (macOS reps use Backspace, Windows uses Delete).
   // Esc deselects without deleting. Guarded against typing in text inputs
   // (search boxes, notes) so we don't nuke a panel while the rep is typing.
+  // Deletes ALL currently-selected panels (Phase 3b.9 multi-select). Runs
+  // removePanel per id — the helper already cascades panelIds through
+  // state.arrays[] and drops arrays that end up empty.
   const deleteSelectedPanel = useCallback(() => {
-    const id = selectedPanelIdRef.current;
-    if (!id) return;
-    stateRef.current = removePanel(stateRef.current, id);
-    setPanelCount(stateRef.current.panels.length);
-    setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
-    setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
-    setSelectedPanelId(null);
+    const ids = selectedPanelIdsRef.current || [];
+    if (ids.length === 0) return;
+    let next = stateRef.current;
+    for (const id of ids) next = removePanel(next, id);
+    stateRef.current = next;
+    setPanelCount(next.panels.length);
+    setTotalKw(totalKilowatts(next, panelCatalogueRef.current));
+    setTotalKwh(totalAnnualKwh(next, panelCatalogueRef.current));
+    setSelectedPanelIds([]);
     setDirty(true);
     layoutAndDrawRef.current?.();
   }, []);
@@ -396,8 +446,11 @@ export default function DesignPage() {
   // panel over a face edge or into an existing panel, we revert with a
   // reject-toast instead of leaving the design in an invalid state.
   const toggleSelectedPanelOrientation = useCallback(() => {
-    const id = selectedPanelIdRef.current;
-    if (!id) return;
+    const ids = selectedPanelIdsRef.current || [];
+    // Only meaningful for a single-panel selection; multi-select users can
+    // deselect all but one and try again.
+    if (ids.length !== 1) return;
+    const id = ids[0];
     const st = stateRef.current;
     const panel = st?.panels?.find(p => p.id === id);
     if (!panel) return;
@@ -429,7 +482,7 @@ export default function DesignPage() {
   }, [flashDropReject]);
 
   useEffect(() => {
-    if (!selectedPanelId) return;
+    if (selectedPanelIds.length === 0) return;
     const onKey = (e) => {
       // Ignore key events fired while the rep is typing in a text field.
       const tag = e.target?.tagName;
@@ -438,7 +491,7 @@ export default function DesignPage() {
         e.preventDefault();
         deleteSelectedPanel();
       } else if (e.key === 'Escape') {
-        setSelectedPanelId(null);
+        setSelectedPanelIds([]);
       } else if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
         toggleSelectedPanelOrientation();
@@ -446,7 +499,116 @@ export default function DesignPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedPanelId, deleteSelectedPanel, toggleSelectedPanelOrientation]);
+  }, [selectedPanelIds, deleteSelectedPanel, toggleSelectedPanelOrientation]);
+
+  // ── Phase 3b.9 — array creation + management ───────────────────────────
+  // Suggest a default array name based on the face's compass direction so the
+  // rep doesn't have to think about naming ("North array", "SW array"). Falls
+  // back to a running index when the panels span multiple faces.
+  const suggestArrayName = useCallback((panelIds) => {
+    const st = stateRef.current;
+    if (!st) return `Array ${((st?.arrays?.length ?? 0) + 1)}`;
+    const facesTouched = new Set();
+    for (const pid of panelIds) {
+      const panel = st.panels.find(p => p.id === pid);
+      if (panel) facesTouched.add(panel.faceId);
+    }
+    if (facesTouched.size === 1) {
+      const face = st.roof.faces.find(f => f.id === [...facesTouched][0]);
+      const compass = azimuthToCompass(face?.azimuthDegrees);
+      if (compass) return `${compass} array`;
+    }
+    return `Array ${(st.arrays?.length ?? 0) + 1}`;
+  }, []);
+
+  const createArrayFromSelection = useCallback(() => {
+    const ids = selectedPanelIdsRef.current || [];
+    if (ids.length === 0) return;
+    const defaultName = suggestArrayName(ids);
+    // eslint-disable-next-line no-alert
+    const name = typeof window !== 'undefined'
+      ? window.prompt('Name this array', defaultName)
+      : defaultName;
+    if (name == null) return;   // rep cancelled
+    const trimmed = name.trim() || defaultName;
+    try {
+      const arr = makeArray({ name: trimmed, panelIds: [...ids] });
+      stateRef.current = addArray(stateRef.current, arr);
+      setDirty(true);
+      setSelectedPanelIds([]);   // selection consumed by the new array
+      layoutAndDrawRef.current?.();
+    } catch (err) {
+      console.warn('[DesignPage] failed to create array:', err?.message || err);
+    }
+  }, [suggestArrayName]);
+
+  const selectArrayPanels = useCallback((arrayId) => {
+    const st = stateRef.current;
+    const arr = st?.arrays?.find(a => a.id === arrayId);
+    if (!arr) return;
+    setSelectedPanelIds([...arr.panelIds]);
+  }, []);
+
+  const deleteArrayKeepPanels = useCallback((arrayId) => {
+    stateRef.current = removeArray(stateRef.current, arrayId);
+    setDirty(true);
+    layoutAndDrawRef.current?.();
+    // Force re-render of the arrays list — arrays live in stateRef so React
+    // needs a nudge. A no-op set on selectedPanelIds fires the sync effect.
+    setSelectedPanelIds(prev => [...prev]);
+  }, []);
+
+  // Phase 3b.9 — destructive counterpart: remove every panel in the array
+  // (each removePanel call cascades through remaining arrays too). Used by
+  // the "Delete panels" branch of the array-row confirm dialog.
+  const deleteArrayAndPanels = useCallback((arrayId) => {
+    const st = stateRef.current;
+    const arr = st?.arrays?.find(a => a.id === arrayId);
+    if (!arr) return;
+    let next = st;
+    for (const pid of arr.panelIds) next = removePanel(next, pid);
+    next = removeArray(next, arrayId);
+    stateRef.current = next;
+    setPanelCount(next.panels.length);
+    setTotalKw(totalKilowatts(next, panelCatalogueRef.current));
+    setTotalKwh(totalAnnualKwh(next, panelCatalogueRef.current));
+    setDirty(true);
+    setSelectedPanelIds([]);
+    layoutAndDrawRef.current?.();
+  }, []);
+
+  // Phase 3b.9 — remove a face by id. Cascades panels + arrays via designState.
+  // Confirms with the rep because a mis-click here nukes real work.
+  const deleteFaceById = useCallback((faceId, opts = {}) => {
+    const st = stateRef.current;
+    const face = st?.roof?.faces?.find(f => f.id === faceId);
+    if (!face) return;
+    const panelsOnFace = (st.panels || []).filter(p => p.faceId === faceId).length;
+    if (opts.confirm !== false) {
+      const msg = panelsOnFace > 0
+        ? `Delete this roof face and its ${panelsOnFace} panel${panelsOnFace === 1 ? '' : 's'}? This can't be undone.`
+        : `Delete this roof face? This can't be undone.`;
+      // eslint-disable-next-line no-alert
+      const yes = typeof window !== 'undefined' ? window.confirm(msg) : true;
+      if (!yes) return;
+    }
+    stateRef.current = removeFace(st, faceId);
+    setFaceCount(stateRef.current.roof.faces.length);
+    setPanelCount(stateRef.current.panels.length);
+    setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+    setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
+    setDirty(true);
+    setSelectedPanelIds([]);
+    layoutAndDrawRef.current?.();
+  }, []);
+
+  // Esc exits delete-face mode (before it hits the selection-Esc handler).
+  useEffect(() => {
+    if (!isDeletingFace) return;
+    const onKey = (e) => { if (e.key === 'Escape') setIsDeletingFace(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isDeletingFace]);
 
   // ── Initialize Fabric once the DOM canvas + container are ready ────────
   useEffect(() => {
@@ -496,6 +658,16 @@ export default function DesignPage() {
         c.setDimensions({ width: w, height: h });
       }
 
+      // Phase 3b.9 fix: release Fabric's internal grip on any active object
+      // BEFORE we remove-and-recreate the overlay set. Without this, calling
+      // c.remove() on the currently-active object (e.g. a panel the rep just
+      // finished dragging) leaves it as a phantom on the canvas — Fabric
+      // still tracks it via _activeObject/_currentTransform, so the "removed"
+      // Group renders alongside the fresh replacement, producing visible
+      // duplicates in different shades of blue (dragged copies stacking up
+      // after every drag). Discarding first drops both trackers cleanly.
+      if (c.getActiveObject && c.getActiveObject()) c.discardActiveObject();
+
       const img = roofImgRef.current;
       if (img) {
         const scale = Math.min(w / img.width, h / img.height);
@@ -518,20 +690,14 @@ export default function DesignPage() {
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
         });
-        // Phase 3b.6 (viz) — dashed grid preview on each face while a panel
-        // is armed, so the rep can see where the next drop will land.
-        const gridObjs = overlayFaceGrid({
-          canvas: c,
-          faces: stateRef.current?.roof?.faces || [],
-          panelCatalogueBySku: panelCatalogueRef.current,
-          armedSku: armedPanelSkuRef.current,
-          roofAnalysis: roofAnalysisRef.current,
-          imgWidth: img.width, imgHeight: img.height,
-          left, top, scale,
-        });
+        // Phase 3b.9 — snap-grid overlay REPLACED by a live "ghost panel"
+        // preview that follows the mouse (see mouse:move handler below).
+        // The grid was visually noisy on real roofs; the ghost shows exactly
+        // where the panel WILL land, one shape not dozens of dashed lines.
+        const gridObjs = [];
         // Phase 3b.4 — dropped panels (rectangles at real-world dimensions).
-        // 3b.7 (part) — pass selectedPanelId so the selected panel gets the
-        // highlight stroke/fill treatment.
+        // 3b.7/3b.9 — pass selectedPanelIds so ALL selected panels get the
+        // highlight stroke/fill treatment (multi-select for array grouping).
         const panelObjs = overlayPanels({
           canvas: c,
           panels: stateRef.current?.panels || [],
@@ -539,7 +705,7 @@ export default function DesignPage() {
           roofAnalysis: roofAnalysisRef.current,
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
-          selectedPanelId: selectedPanelIdRef.current,
+          selectedPanelIds: selectedPanelIdsRef.current,
         });
         // Phase 3b.3 — in-progress trace on top of everything.
         const traceObjects = overlayTraceInProgress({
@@ -585,20 +751,52 @@ export default function DesignPage() {
       // added — a real crash swallowed by the framework.
       const pointer = canvas.getScenePoint(opt.e);
 
-      // Phase 3b.7 (part) — click on a panel selects it (highest priority so
-      // it wins over tracing/dropping/panning). Clicked panel is identified
-      // via the custom `data.panelId` we attach in overlayPanels. Clicking
-      // empty area deselects. We skip this while tracing so vertex placement
-      // inside a face's overlay isn't hijacked by a stray panel.
+      // Phase 3b.9 — delete-face mode intercepts before anything else. Any
+      // click on a face polygon (via point-in-polygon lookup) removes that
+      // face after a confirm. Clicks outside all faces are no-ops that keep
+      // delete mode active (rep can try again). We DON'T deselect the panel
+      // set here — that's a UX bonus if the rep armed something first.
+      if (isDeletingFaceRef.current && !isTracingRef.current) {
+        const img  = roofImgRef.current;
+        const roof = roofAnalysisRef.current;
+        if (img && roof) {
+          const latLng = canvasToLatLng(pointer, img, roof);
+          if (latLng) {
+            const face = faceContainingPoint(stateRef.current, latLng.latitude, latLng.longitude);
+            if (face) {
+              deleteFaceById(face.id);
+              setIsDeletingFace(false);   // one-shot; rep re-arms if they want another
+            }
+          }
+        }
+        return;
+      }
+
+      // Phase 3b.7 + 3b.9 — click on a panel selects it (or toggles it in the
+      // multi-selection with Shift/Ctrl held). Highest priority so it wins
+      // over tracing/dropping/panning. Skipped while tracing so vertex
+      // placement inside a face's overlay isn't hijacked by a stray panel.
       const clickedPanelId = opt.target?.data?.panelId;
+      const nativeEvt = opt.e;
+      const additive = nativeEvt && (nativeEvt.shiftKey || nativeEvt.ctrlKey || nativeEvt.metaKey);
       if (!isTracingRef.current && clickedPanelId) {
-        setSelectedPanelId(clickedPanelId);
+        const current = selectedPanelIdsRef.current || [];
+        if (additive) {
+          // Toggle this panel's membership in the selection.
+          const next = current.includes(clickedPanelId)
+            ? current.filter(id => id !== clickedPanelId)
+            : [...current, clickedPanelId];
+          setSelectedPanelIds(next);
+        } else {
+          // Replace the selection with just this panel.
+          setSelectedPanelIds([clickedPanelId]);
+        }
         return;
       }
       // Any click NOT on a panel deselects. Cheap way to give the rep
       // "click somewhere blank to deselect" behaviour without a modifier key.
-      if (selectedPanelIdRef.current && !clickedPanelId) {
-        setSelectedPanelId(null);
+      if ((selectedPanelIdsRef.current?.length ?? 0) > 0 && !clickedPanelId) {
+        setSelectedPanelIds([]);
         // continue to the tracing/drop/pan branches — a click on empty roof
         // should also allow the next action (e.g. drop the armed panel).
       }
@@ -644,16 +842,12 @@ export default function DesignPage() {
                   orientation: 'landscape',
                   gapMm: PANEL_GRID_GAP_MM,
                 });
-                // Dedup: repeat clicks in the same grid cell would snap to the
-                // exact same centre and silently stack panels. Skip the drop
-                // if there's already a panel on this face within 100mm of the
-                // snapped centre. Broader no-overlap enforcement lives in the
-                // rule engine below.
-                const isDupe = stateRef.current.panels.some(p =>
-                  p.faceId === face.id
-                  && distanceMetres(p.center, snappedCenter) < 0.1
-                );
-                if (isDupe) return;
+                // Phase 3b.9 — removed the silent-dedup pre-check. It made
+                // dropped-on-same-cell attempts vanish with no feedback (rep
+                // clicks 3 spots, only 2 land, no toast explaining why). The
+                // full rule engine below catches the identical case via
+                // overlap-panel AND flashes a plain-English reason, which is
+                // what the rep actually needs.
 
                 // Phase 3b.8 — enforce setback + no-overlap + obstruction rules.
                 // On rejection, flash a hint bar with the specific reason
@@ -685,6 +879,10 @@ export default function DesignPage() {
                 setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
                 setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
                 setDirty(true);
+                // Dismiss the ghost so we don't render both the ghost and the
+                // freshly-dropped panel at the same spot (mouse:move will
+                // re-render the ghost at the next cell as the pointer moves).
+                hideGhostPanelRef.current?.();
                 layoutAndDrawRef.current?.();
               } catch (err) {
                 console.warn('[DesignPage] failed to drop panel:', err?.message || err);
@@ -717,6 +915,14 @@ export default function DesignPage() {
     });
 
     canvas.on('mouse:move', (opt) => {
+      // Phase 3b.9 — ghost panel preview. When a panel is armed and the
+      // mouse is over a traced face, show a translucent panel at the exact
+      // grid cell the click would drop into. Rep sees exactly where the
+      // panel will land BEFORE they commit.
+      if (armedPanelSkuRef.current && !isTracingRef.current && !isPanning) {
+        maybeUpdateGhostPanel(opt);
+      }
+
       if (!isPanning) return;
       const evt = opt.e;
       const vpt = canvas.viewportTransform;
@@ -725,6 +931,14 @@ export default function DesignPage() {
       canvas.requestRenderAll();
       lastPosX = evt.clientX;
       lastPosY = evt.clientY;
+    });
+
+    // Hide the ghost when the pointer leaves the canvas (rep moved to sidebar
+    // to change SKU, etc.) so it doesn't get stuck at the last hover point.
+    canvas.on('mouse:out', (opt) => {
+      // Fabric fires mouse:out for both canvas-leave AND object hover-out.
+      // We only care about the canvas-level event (opt.target is null).
+      if (opt.target == null) hideGhostPanel();
     });
 
     canvas.on('mouse:up', () => {
@@ -743,6 +957,119 @@ export default function DesignPage() {
     // drop-rule check used for fresh drops. If it fails, we flash the reason
     // and redraw to revert the visual (state.panels still has the ORIGINAL
     // centre because we only wrote after passing validation).
+    // Phase 3b.9 — ghost panel helpers. Ghost is a single Fabric.Rect that
+    // follows the mouse when a panel is armed, positioned at the SNAPPED
+    // grid cell so the rep previews the exact drop before clicking. Rendered
+    // green when the snap position passes rules, red when it would be
+    // rejected (setback / overlap / outside-face). Hidden when armed but the
+    // pointer is over empty area (no face under cursor).
+    const hideGhostPanel = () => {
+      if (ghostPanelRef.current) {
+        canvas.remove(ghostPanelRef.current);
+        ghostPanelRef.current = null;
+        canvas.requestRenderAll();
+      }
+    };
+    hideGhostPanelRef.current = hideGhostPanel;
+    const maybeUpdateGhostPanel = (opt) => {
+      const img  = roofImgRef.current;
+      const roof = roofAnalysisRef.current;
+      if (!img || !roof) { hideGhostPanel(); return; }
+      const pointer = canvas.getScenePoint(opt.e);
+      const latLng = canvasToLatLng(pointer, img, roof);
+      if (!latLng) { hideGhostPanel(); return; }
+      const face = faceContainingPoint(stateRef.current, latLng.latitude, latLng.longitude);
+      if (!face) { hideGhostPanel(); return; }
+      const sku = armedPanelSkuRef.current;
+      const spec = panelCatalogueRef.current?.get?.(sku);
+      const lenMm = Number(spec?.length_mm) || DEFAULT_PANEL_LENGTH_MM;
+      const widMm = Number(spec?.width_mm)  || DEFAULT_PANEL_WIDTH_MM;
+      const snappedCenter = snapToFaceGrid({
+        faceAzimuthDegrees: face.azimuthDegrees,
+        faceCentroid: polygonCentroidLL(face.polygon),
+        target: latLng,
+        panelLengthMm: lenMm, panelWidthMm: widMm,
+        orientation: 'landscape',
+        gapMm: PANEL_GRID_GAP_MM,
+      });
+      // Ask the rule engine if this snap would be valid — colours the ghost.
+      const ruleCheck = checkPanelDropRules({
+        state: stateRef.current, face,
+        panelCenter: snappedCenter,
+        panelLengthMm: lenMm, panelWidthMm: widMm,
+        orientation: 'landscape',
+        setbackMetres: Number.isFinite(face?.setbackMetres) ? face.setbackMetres : DEFAULT_FACE_SETBACK_M,
+        panelCatalogueBySku: panelCatalogueRef.current,
+      });
+      const valid = ruleCheck.ok;
+
+      // Convert snapped centre to canvas px + compute panel size in canvas px.
+      const scale = img.scaleX || 1;
+      const centerLatDeg = Number(roof?.latitude);
+      const centerLngDeg = Number(roof?.longitude);
+      const radiusMeters = radiusForAnalysis(roof);
+      const toPixel = makeLatLngToPixel({
+        centerLat: centerLatDeg, centerLng: centerLngDeg,
+        radiusMeters, imgWidth: img.width, imgHeight: img.height,
+      });
+      const px = toPixel(snappedCenter.latitude, snappedCenter.longitude);
+      const canvasX = (img.left || 0) + px.x * scale;
+      const canvasY = (img.top  || 0) + px.y * scale;
+      const metresToCanvasPx = (m) => (m / (2 * radiusMeters)) * img.width * scale;
+      const wPx = metresToCanvasPx(lenMm / 1000);
+      const hPx = metresToCanvasPx(widMm / 1000);
+      const angle = typeof face.azimuthDegrees === 'number' ? face.azimuthDegrees : 0;
+
+      // Create the ghost once, then update in place on subsequent moves.
+      if (!ghostPanelRef.current) {
+        const ghost = new fabric.Rect({
+          left: canvasX, top: canvasY,
+          originX: 'center', originY: 'center',
+          width: wPx, height: hPx,
+          angle,
+          fill:   valid ? 'rgba(34, 197, 94, 0.35)'  : 'rgba(239, 68, 68, 0.35)',
+          stroke: valid ? '#16A34A' : '#DC2626',
+          strokeWidth: 2, strokeDashArray: [4, 4], strokeUniform: true,
+          selectable: false, evented: false, excludeFromExport: true,
+        });
+        ghostPanelRef.current = ghost;
+        canvas.add(ghost);
+      } else {
+        ghostPanelRef.current.set({
+          left: canvasX, top: canvasY,
+          width: wPx, height: hPx,
+          angle,
+          fill:   valid ? 'rgba(34, 197, 94, 0.35)'  : 'rgba(239, 68, 68, 0.35)',
+          stroke: valid ? '#16A34A' : '#DC2626',
+        });
+        ghostPanelRef.current.setCoords();
+        // Keep the ghost on top so it always shows through panels.
+        canvas.bringObjectToFront?.(ghostPanelRef.current);
+      }
+      canvas.requestRenderAll();
+    };
+
+    // Helper: convert a panel's lat/lng centre to its canvas-space (x, y)
+    // using the CURRENT image transform. Used by the drag handler to
+    // reposition the same Fabric object in place (instead of destroying and
+    // recreating via layoutAndDraw, which broke Fabric's transform lifecycle
+    // mid-event — panel would stay attached to the mouse after "release").
+    const panelCenterToCanvasPx = (centerLatLng, img, roof) => {
+      const scale = img.scaleX || 1;
+      const centerLat = Number(roof?.latitude);
+      const centerLng = Number(roof?.longitude);
+      const radiusMeters = radiusForAnalysis(roof);
+      const toPixel = makeLatLngToPixel({
+        centerLat, centerLng, radiusMeters,
+        imgWidth: img.width, imgHeight: img.height,
+      });
+      const px = toPixel(centerLatLng.latitude, centerLatLng.longitude);
+      return {
+        x: (img.left || 0) + px.x * scale,
+        y: (img.top  || 0) + px.y * scale,
+      };
+    };
+
     canvas.on('object:modified', (opt) => {
       const obj = opt.target;
       const panelId = obj?.data?.panelId;
@@ -753,10 +1080,21 @@ export default function DesignPage() {
       const face = st?.roof?.faces?.find(f => f.id === panel.faceId);
       const img  = roofImgRef.current;
       const roof = roofAnalysisRef.current;
-      if (!face || !img || !roof) { layoutAndDrawRef.current?.(); return; }
+
+      // Revert-in-place helper: snap this Fabric object back to whatever
+      // `panel.center` says. Avoids full layoutAndDraw which would kill
+      // Fabric's transform lifecycle before it finished cleaning up.
+      const revert = () => {
+        if (!img || !roof || !panel?.center) return;
+        const px = panelCenterToCanvasPx(panel.center, img, roof);
+        obj.set({ left: px.x, top: px.y });
+        obj.setCoords();
+        canvas.requestRenderAll();
+      };
+      if (!face || !img || !roof) { revert(); return; }
 
       const newLatLng = canvasToLatLng({ x: obj.left, y: obj.top }, img, roof);
-      if (!newLatLng) { layoutAndDrawRef.current?.(); return; }
+      if (!newLatLng) { revert(); return; }
 
       const spec = panelCatalogueRef.current?.get?.(panel.sku);
       const snappedCenter = snapToFaceGrid({
@@ -784,11 +1122,13 @@ export default function DesignPage() {
       });
       if (!check.ok) {
         flashDropReject(check.reason);
-        layoutAndDrawRef.current?.();   // revert visual to the un-moved position
+        revert();
         return;
       }
 
-      // Commit the move.
+      // Commit: update state AND snap the same Fabric object to the target
+      // canvas position. No layoutAndDraw call — the object identity stays
+      // stable so Fabric's transform can finish resetting cleanly.
       stateRef.current = {
         ...st,
         panels: st.panels.map(p => p.id === panelId ? { ...p, center: snappedCenter } : p),
@@ -796,7 +1136,11 @@ export default function DesignPage() {
       setDirty(true);
       setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
       setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
-      layoutAndDrawRef.current?.();
+
+      const snappedPx = panelCenterToCanvasPx(snappedCenter, img, roof);
+      obj.set({ left: snappedPx.x, top: snappedPx.y });
+      obj.setCoords();
+      canvas.requestRenderAll();
     });
 
     // ── Zoom (mouse wheel) ─────────────────────────────────────────────
@@ -828,6 +1172,8 @@ export default function DesignPage() {
       layoutAndDrawRef.current = null;
       roofImgRef.current = null;
       overlayObjectsRef.current = [];
+      ghostPanelRef.current = null;
+      hideGhostPanelRef.current = null;
     };
   }, [loading]);
 
@@ -1095,13 +1441,28 @@ export default function DesignPage() {
             </span>
           )}
           {/* Phase 3b.3 — manual roof-face tracing (always available once image loaded) */}
-          {roofAnalysis?.roof_image_signed_url && !isTracing && (
+          {roofAnalysis?.roof_image_signed_url && !isTracing && !isDeletingFace && (
             <button
               onClick={startTrace}
               className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-full px-3 py-1"
               title="Manually trace a roof face by clicking each corner on the image"
             >
               ✏️ Trace face
+            </button>
+          )}
+          {/* Phase 3b.9 — delete-face mode toggle */}
+          {faceCount > 0 && !isTracing && (
+            <button
+              onClick={() => setIsDeletingFace(v => !v)}
+              className={
+                'inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1 border ' +
+                (isDeletingFace
+                  ? 'text-white bg-red-600 hover:bg-red-700 border-red-700'
+                  : 'text-red-800 bg-red-50 hover:bg-red-100 border-red-300')
+              }
+              title={isDeletingFace ? 'Click a face to delete it, or click here to cancel' : 'Enter delete-face mode'}
+            >
+              🗑️ {isDeletingFace ? 'Cancel delete' : 'Delete face'}
             </button>
           )}
           {refetching && (
@@ -1188,25 +1549,55 @@ export default function DesignPage() {
           <canvas ref={canvasElRef} />
         </div>
 
-        {/* Phase 3b.7 — selected-panel hint bar (top-centre overlay) */}
-        {selectedPanelId && !isTracing && (
+        {/* Phase 3b.7 + 3b.9 — selection hint bar. Single-select shows the
+            drag/rotate/delete actions; multi-select shows Create-array +
+            Delete-many. Shift/Ctrl-click to add or remove panels from the set. */}
+        {selectedPanelIds.length > 0 && !isTracing && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-sky-50 border border-sky-300 text-sky-900 px-4 py-2 rounded-lg shadow-md text-sm flex items-center gap-3">
-            <span className="font-semibold">🔷 Panel selected</span>
-            <span className="text-sky-700">Drag to move · R to rotate P↔L · Delete to remove · Esc to deselect</span>
-            <button
-              onClick={toggleSelectedPanelOrientation}
-              className="ml-1 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100 border border-sky-300 rounded"
-              title="Toggle portrait ↔ landscape (R)"
-            >
-              ⟳ P↔L
-            </button>
+            {selectedPanelIds.length === 1 ? (
+              <>
+                <span className="font-semibold">🔷 Panel selected</span>
+                <span className="text-sky-700">
+                  Drag to move · R to rotate P↔L · Shift+click another panel to group · Esc to deselect
+                </span>
+                <button
+                  onClick={toggleSelectedPanelOrientation}
+                  className="ml-1 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100 border border-sky-300 rounded"
+                  title="Toggle portrait ↔ landscape (R)"
+                >
+                  ⟳ P↔L
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="font-semibold">🔷 {selectedPanelIds.length} panels selected</span>
+                <span className="text-sky-700">
+                  Group them into a named array for string design + easier PDF export.
+                </span>
+                <button
+                  onClick={createArrayFromSelection}
+                  className="ml-1 px-3 py-1 text-xs font-semibold bg-sky-600 hover:bg-sky-700 text-white rounded"
+                  title="Group these panels into a named array"
+                >
+                  + Create array
+                </button>
+              </>
+            )}
             <button
               onClick={deleteSelectedPanel}
               className="px-2 py-1 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded inline-flex items-center gap-1"
-              title="Delete this panel"
+              title={selectedPanelIds.length === 1 ? 'Delete this panel' : `Delete ${selectedPanelIds.length} panels`}
             >
               <Trash2 className="w-3.5 h-3.5" /> Delete
             </button>
+          </div>
+        )}
+
+        {/* Phase 3b.9 — delete-face mode instruction bar */}
+        {isDeletingFace && !isTracing && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-red-50 border border-red-400 text-red-900 px-4 py-2 rounded-lg text-sm flex items-center gap-3 shadow-md">
+            <span className="font-semibold">🗑️ Delete a roof face</span>
+            <span className="text-red-700">Click a face to delete it (with all panels on it) · Esc to cancel</span>
           </div>
         )}
 
@@ -1243,7 +1634,7 @@ export default function DesignPage() {
         </div>
       </div>
 
-      {/* ── Right sidebar: panel palette (Phase 3b.4) ─────────────────── */}
+      {/* ── Right sidebar: palette + arrays + faces (Phase 3b.4 + 3b.9) ── */}
       <PanelPalette
         panels={catalogue?.panels || []}
         loading={catalogueLoading}
@@ -1253,6 +1644,13 @@ export default function DesignPage() {
         panelCount={panelCount}
         totalKw={totalKw}
         totalKwh={totalKwh}
+        arrays={stateRef.current?.arrays || []}
+        onSelectArray={selectArrayPanels}
+        onUngroupArray={deleteArrayKeepPanels}
+        onDeleteArrayAndPanels={deleteArrayAndPanels}
+        faces={stateRef.current?.roof?.faces || []}
+        allPanels={stateRef.current?.panels || []}
+        onDeleteFace={(faceId) => deleteFaceById(faceId)}
       />
       </div>
 
@@ -1516,7 +1914,10 @@ function overlayTraceInProgress({ canvas, traceVertices, roofAnalysis, imgWidth,
 // implement single-select ourselves (Fabric's built-in selection would let
 // users drag/scale/rotate panels, which we want to control explicitly in
 // later phases; drag = 3b.7b, rotate = 3b.7c).
-function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgWidth, imgHeight, left, top, scale, selectedPanelId }) {
+function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgWidth, imgHeight, left, top, scale, selectedPanelIds }) {
+  const selectedSet = selectedPanelIds instanceof Set
+    ? selectedPanelIds
+    : new Set(Array.isArray(selectedPanelIds) ? selectedPanelIds : []);
   const created = [];
   if (!Array.isArray(panels) || panels.length === 0) return created;
 
@@ -1551,7 +1952,7 @@ function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgW
 
     const centerCanvas = toCanvas(toPixel(panel.center.latitude, panel.center.longitude));
 
-    const isSelected = panel.id === selectedPanelId;
+    const isSelected = selectedSet.has(panel.id);
     const wPx = metresToCanvasPx(widthMetres);
     const hPx = metresToCanvasPx(heightMetres);
     // Panel body — dark navy near-opaque with a silver frame. Selected state
@@ -1587,7 +1988,11 @@ function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgW
       lockScalingX: true, lockScalingY: true, lockRotation: true,
       hoverCursor: isSelected ? 'move' : 'pointer',
     });
-    group.data = { panelId: panel.id };     // stash id so mouse:down + object:modified can look it up
+    // Stash the id + current visual-selection state on the Fabric object.
+    // isSelectedVisual lets the sync effect (which restyles in place on
+    // selection change) skip the redraw when the state hasn't actually
+    // flipped for this panel.
+    group.data = { panelId: panel.id, isSelectedVisual: isSelected };
     canvas.add(group);
     created.push(group);
   }
@@ -1855,7 +2260,16 @@ function armedPanelLabel(catalogue, sku) {
 // panel. Grouped by brand so the list stays scannable when catalogues get
 // large. Cards show brand, watts, and physical dimensions so the rep can
 // eyeball the fit against the roof before dropping.
-function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh }) {
+function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, faces, allPanels, onDeleteFace }) {
+  const panelsPerFace = useMemo(() => {
+    const map = new Map();
+    for (const p of allPanels || []) map.set(p.faceId, (map.get(p.faceId) || 0) + 1);
+    return map;
+  }, [allPanels]);
+  // Phase 3b.9 — which array (if any) is showing the un-group / delete
+  // confirm prompt inline in its row. null = no confirm open. Only one row
+  // can be confirming at a time.
+  const [confirmingArrayId, setConfirmingArrayId] = useState(null);
   const grouped = useMemo(() => {
     const byBrand = new Map();
     for (const p of panels || []) {
@@ -1890,11 +2304,123 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
           </div>
         </div>
       </div>
+      {/* Phase 3b.9 — roof faces list. Delete-face row + panel count. Collapsed
+          when zero faces so a fresh design isn't crowded. */}
+      {Array.isArray(faces) && faces.length > 0 && (
+        <div className="border-b border-slate-200 flex-shrink-0">
+          <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-100">
+            Roof faces ({faces.length})
+          </div>
+          <ul className="divide-y divide-slate-100 max-h-40 overflow-y-auto">
+            {faces.map((f, i) => {
+              const panelsOnFace = panelsPerFace.get(f.id) || 0;
+              const source = f.source === 'google_solar' ? 'Google' : 'Traced';
+              return (
+                <li key={f.id} className="flex items-center gap-2 px-4 py-2 hover:bg-slate-50 group">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold text-slate-800 truncate">
+                      #{i + 1}
+                      {f.azimuthDegrees != null && <span className="text-slate-500 font-normal"> · {azimuthToCompass(f.azimuthDegrees)}</span>}
+                      {f.areaMetres2 > 0 && <span className="text-slate-500 font-normal"> · {f.areaMetres2.toFixed(1)}m²</span>}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      {source} · {panelsOnFace} panel{panelsOnFace === 1 ? '' : 's'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteFace?.(f.id)}
+                    className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 transition-opacity"
+                    title="Delete this face (and any panels on it)"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Phase 3b.9 — arrays list. Collapsed when empty so palette isn't
+          crowded on a fresh design; populates as the rep groups panels. */}
+      {Array.isArray(arrays) && arrays.length > 0 && (
+        <div className="border-b border-slate-200 flex-shrink-0">
+          <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-100">
+            Arrays ({arrays.length})
+          </div>
+          <ul className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
+            {arrays.map(a => {
+              const isConfirming = confirmingArrayId === a.id;
+              if (isConfirming) {
+                // Inline confirm — three explicit choices so a mis-click can't
+                // accidentally destroy panels.
+                return (
+                  <li key={a.id} className="px-4 py-3 bg-red-50 border-l-4 border-red-400">
+                    <div className="text-xs text-slate-800 mb-2">
+                      Delete <b>{a.name}</b> ({a.panelIds.length} panel{a.panelIds.length === 1 ? '' : 's'})?
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => { onUngroupArray?.(a.id); setConfirmingArrayId(null); }}
+                        className="px-2 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded"
+                        title="Delete the group but keep the panels on the roof"
+                      >
+                        Un-group only
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { onDeleteArrayAndPanels?.(a.id); setConfirmingArrayId(null); }}
+                        className="px-2 py-1 text-[11px] font-semibold text-white bg-red-600 hover:bg-red-700 rounded"
+                        title="Delete the group AND the panels in it"
+                      >
+                        Delete panels
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingArrayId(null)}
+                        className="px-2 py-1 text-[11px] font-semibold text-slate-500 hover:text-slate-800 rounded"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </li>
+                );
+              }
+              return (
+                <li key={a.id} className="flex items-center gap-2 px-4 py-2 hover:bg-slate-50 group">
+                  <button
+                    type="button"
+                    onClick={() => onSelectArray?.(a.id)}
+                    className="flex-1 text-left min-w-0"
+                    title={`Select the ${a.panelIds.length} panel${a.panelIds.length === 1 ? '' : 's'} in ${a.name}`}
+                  >
+                    <div className="text-xs font-semibold text-slate-800 truncate">{a.name}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {a.panelIds.length} panel{a.panelIds.length === 1 ? '' : 's'}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingArrayId(a.id)}
+                    className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 transition-opacity"
+                    title="Delete this array (choose to keep or remove panels)"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       <div className="px-4 py-3 border-b border-slate-200 flex-shrink-0">
         <div className="text-sm font-semibold text-slate-900">Panel palette</div>
         <div className="text-xs text-slate-500 mt-0.5">
           {panelCount > 0
-            ? `Click a card to arm the next drop`
+            ? `Click a card to arm the next drop · Shift+click panels to group into arrays`
             : 'Click a card to arm, then click the roof to drop'}
         </div>
       </div>

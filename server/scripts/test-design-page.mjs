@@ -333,7 +333,7 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /finishTrace[\s\S]{0,1000}setDirty\(true\)/.test(page));
 
   assert('mouse:down adds vertex when tracing (not pan)',
-    /mouse:down[\s\S]{0,1500}isTracingRef\.current[\s\S]{0,1500}traceVerticesRef\.current\.push/.test(page),
+    /mouse:down[\s\S]{0,3000}isTracingRef\.current[\s\S]{0,1500}traceVerticesRef\.current\.push/.test(page),
     'clicks in trace mode add vertices instead of starting a pan');
   assert('mouse:dblclick finishes the trace',
     /mouse:dblclick[\s\S]{0,400}finishTraceRef\.current/.test(page));
@@ -403,24 +403,36 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('layoutAndDraw stitches face grid + panels + trace into overlayObjectsRef',
     /\[\s*\.\.\.facePolys,\s*\.\.\.gridObjs,\s*\.\.\.panelObjs,\s*\.\.\.traceObjects\s*\]/.test(page));
 
-  // ── Phase 3b.6 (viz) — snap grid preview when a panel is armed ───────
-  assert('overlayFaceGrid helper defined',
-    /function overlayFaceGrid\(/.test(page));
-  assert('overlayFaceGrid uses armed panel dims + PANEL_GRID_GAP_MM for cell size',
-    /overlayFaceGrid[\s\S]{0,600}cellUm\s*=[\s\S]{0,200}length_mm[\s\S]{0,150}PANEL_GRID_GAP_MM/.test(page));
-  assert('overlayFaceGrid clips grid to face polygon bounds (face-local u,v extents)',
-    /overlayFaceGrid[\s\S]{0,2000}uMin\s*=[\s\S]{0,300}uMax\s*=[\s\S]{0,300}vMin\s*=[\s\S]{0,300}vMax\s*=/.test(page));
-  assert('overlayFaceGrid draws dashed lines (visual: subtle grid preview)',
-    /overlayFaceGrid[\s\S]{0,3000}strokeDashArray:\s*\[3,\s*3\]/.test(page));
-  assert('layoutAndDraw calls overlayFaceGrid with armed SKU',
-    /overlayFaceGrid\(\{[\s\S]{0,600}armedSku:\s*armedPanelSkuRef\.current/.test(page));
-  assert('armed sync effect triggers redraw so grid appears/disappears immediately',
-    /armedPanelSkuRef\.current\s*=\s*armedPanelSku[\s\S]{0,200}layoutAndDrawRef\.current\?\.\(\)/.test(page));
+  // ── Regression: layoutAndDraw releases Fabric's active object before rebuild ──
+  // Bug (fixed): calling c.remove() on Fabric's currently-active object (e.g.
+  // a panel the rep just finished dragging) left it as a phantom on the
+  // canvas — Fabric still tracked it via _activeObject/_currentTransform, so
+  // the "removed" group rendered alongside the fresh replacement, producing
+  // visible duplicates in different shades of blue after every drag.
+  assert('regression: layoutAndDraw discards the active object before rebuilding overlays',
+    /const layoutAndDraw[\s\S]{0,3000}discardActiveObject\(\)[\s\S]{0,1500}for\s*\(const obj of overlayObjectsRef\.current\)\s*c\.remove\(obj\)/.test(page),
+    'without discardActiveObject, dragged panels stack as phantoms on the canvas');
+
+  // ── Phase 3b.9 — ghost panel preview replaces static grid overlay ───
+  assert('ghost-panel preview: maybeUpdateGhostPanel + hideGhostPanel helpers',
+    /const hideGhostPanel\s*=\s*\(\)\s*=>/.test(page)
+      && /const maybeUpdateGhostPanel\s*=\s*\(opt\)\s*=>/.test(page));
+  assert('ghost preview reuses the drop-rule engine to colour valid vs invalid drops',
+    /maybeUpdateGhostPanel[\s\S]{0,3000}checkPanelDropRules\([\s\S]{0,600}valid\s*=\s*ruleCheck\.ok/.test(page),
+    'ghost turns red when the snap position would be rejected by rules; green when it would drop cleanly');
+  assert('mouse:move updates the ghost when armed + not tracing + not panning',
+    /mouse:move[\s\S]{0,600}armedPanelSkuRef\.current[\s\S]{0,300}maybeUpdateGhostPanel/.test(page));
+  assert('mouse:out hides the ghost when the pointer leaves the canvas',
+    /canvas\.on\(['"]mouse:out['"][\s\S]{0,300}hideGhostPanel\(\)/.test(page));
+  assert('un-arming the palette dismisses the ghost',
+    /!armedPanelSku[\s\S]{0,100}hideGhostPanelRef\.current\?\.\(\)/.test(page));
+  assert('successful drop dismisses the ghost so it doesn\'t overlap the new panel',
+    /addPanel\(stateRef\.current[\s\S]{0,600}hideGhostPanelRef\.current\?\.\(\)/.test(page));
 
   assert('PanelPalette component defined',
     /function PanelPalette\(/.test(page));
   assert('PanelPalette groups panels by brand',
-    /PanelPalette[\s\S]{0,600}byBrand\s*=\s*new Map\(\)/.test(page));
+    /PanelPalette[\s\S]{0,1200}byBrand\s*=\s*new Map\(\)/.test(page));
   assert('PanelPalette shows loading + error states',
     /Loading catalogue/.test(page) && /Couldn't load panel catalogue/.test(page));
   assert('armed card gets a visual highlight',
@@ -453,44 +465,95 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('finishTrace infers face azimuth from polygon (manual faces get real azimuth)',
     /finishTrace[\s\S]{0,800}inferAzimuthFromPolygon\(vertices\)[\s\S]{0,300}makeRoofFace\(\{\s*source:\s*['"]manual['"][\s\S]{0,200}azimuthDegrees/.test(page),
     'without inferred azimuth, grid stays north-aligned on rotated roofs');
-  assert('drop dedupes: skip if a panel already sits within 100mm on same face',
-    /distanceMetres\(p\.center,\s*snappedCenter\)\s*<\s*0\.1[\s\S]{0,100}isDupe/.test(page)
-      || /isDupe\s*=[\s\S]{0,300}distanceMetres\(p\.center,\s*snappedCenter\)\s*<\s*0\.1/.test(page),
-    'repeat clicks in the same grid cell must not stack panels');
+  // Phase 3b.9 — dedup silent-skip removed. Same-cell repeats are now
+  // caught by checkPanelDropRules (overlap-panel reason) which flashes a
+  // human-readable toast, so the rep sees WHY nothing dropped. Assert the
+  // silent skip is gone.
+  assert('regression: no silent dedup skip in drop handler (rule engine covers it with a toast)',
+    !/const isDupe\s*=\s*stateRef\.current\.panels\.some/.test(page),
+    'silent dedup made drops vanish with no feedback; must be gone in favour of rule-engine reject-toast');
 
   // ── Phase 3b.7 (part) — click-to-select + Delete-key removal ─────────
   assert('imports removePanel',
     /import\s*\{[\s\S]{0,600}removePanel[\s\S]{0,300}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
-  assert('selectedPanelId state + ref (keydown handler reads ref)',
-    /\[selectedPanelId,\s*setSelectedPanelId\]\s*=\s*useState\(null\)/.test(page)
-      && /selectedPanelIdRef\s*=\s*useRef\(null\)/.test(page)
-      && /selectedPanelIdRef\.current\s*=\s*selectedPanelId/.test(page));
+  assert('selectedPanelIds state + ref (multi-select for array grouping)',
+    /\[selectedPanelIds,\s*setSelectedPanelIds\]\s*=\s*useState\(\[\]\)/.test(page)
+      && /selectedPanelIdsRef\s*=\s*useRef\(\[\]\)/.test(page)
+      && /selectedPanelIdsRef\.current\s*=\s*selectedPanelIds/.test(page),
+    'Phase 3b.9 upgraded single-panel selection to a multi-set so panels can be shift-clicked into an array group');
   assert('overlayPanels stashes panelId on each rendered panel object',
-    /overlayPanels[\s\S]{0,4000}(rect|group)\.data\s*=\s*\{\s*panelId:\s*panel\.id\s*\}/.test(page),
+    /overlayPanels[\s\S]{0,4000}(rect|group)\.data\s*=\s*\{\s*panelId:\s*panel\.id/.test(page),
     'mouse:down needs data.panelId to identify which panel was clicked (whether we store the id on a plain Rect or a Group wrapping the panel visual)');
-  assert('overlayPanels renders selected panel with highlight stroke',
-    /overlayPanels[\s\S]{0,3000}isSelected\s*=\s*panel\.id\s*===\s*selectedPanelId/.test(page)
+  assert('overlayPanels renders selected panels with highlight stroke (multi-select via selectedSet)',
+    /overlayPanels[\s\S]{0,3000}isSelected\s*=\s*selectedSet\.has\(panel\.id\)/.test(page)
       && /overlayPanels[\s\S]{0,3000}isSelected\s*\?[\s\S]{0,300}strokeWidth/.test(page));
-  assert('mouse:down: click on a panel selects it and returns (no drop/pan)',
-    /clickedPanelId\s*=\s*opt\.target\?\.data\?\.panelId[\s\S]{0,300}setSelectedPanelId\(clickedPanelId\)/.test(page));
-  assert('mouse:down: click on empty area deselects a selected panel',
-    /selectedPanelIdRef\.current\s*&&\s*!clickedPanelId[\s\S]{0,300}setSelectedPanelId\(null\)/.test(page));
-  assert('deleteSelectedPanel handler removes panel + updates count/kW/dirty',
-    /deleteSelectedPanel\s*=\s*useCallback\([\s\S]{0,600}removePanel\(stateRef\.current[\s\S]{0,300}setPanelCount[\s\S]{0,300}setTotalKw[\s\S]{0,300}setSelectedPanelId\(null\)/.test(page));
+  assert('mouse:down: click on a panel selects it (with Shift/Ctrl additive)',
+    /clickedPanelId\s*=\s*opt\.target\?\.data\?\.panelId[\s\S]{0,500}additive\s*=[\s\S]{0,200}shiftKey[\s\S]{0,600}setSelectedPanelIds/.test(page),
+    'Shift+click or Ctrl+click toggles panel membership in the selection (needed for array creation)');
+  assert('mouse:down: click on empty area clears selection',
+    /selectedPanelIdsRef\.current\?\.length[\s\S]{0,300}setSelectedPanelIds\(\[\]\)/.test(page));
+  assert('deleteSelectedPanel handler removes ALL selected panels + updates count/kW/dirty',
+    /deleteSelectedPanel\s*=\s*useCallback\([\s\S]{0,800}for \(const id of ids\)\s*next\s*=\s*removePanel\(next,\s*id\)[\s\S]{0,600}setSelectedPanelIds\(\[\]\)/.test(page),
+    'multi-select delete iterates removePanel across every selected id');
   assert('Delete + Backspace keys trigger deleteSelectedPanel',
     /['"]Delete['"][\s\S]{0,50}['"]Backspace['"][\s\S]{0,200}deleteSelectedPanel\(\)/.test(page));
   assert('keydown handler ignores INPUT/TEXTAREA (rep is typing)',
     /INPUT[\s\S]{0,80}TEXTAREA[\s\S]{0,80}isContentEditable/.test(page));
-  assert('selected-panel hint bar rendered with Delete button',
-    /selectedPanelId\s*&&\s*!isTracing[\s\S]{0,1200}Delete\s+to\s+remove[\s\S]{0,1000}deleteSelectedPanel/.test(page));
-  assert('layoutAndDraw passes selectedPanelId into overlayPanels',
-    /overlayPanels\(\{[\s\S]{0,600}selectedPanelId:\s*selectedPanelIdRef\.current/.test(page));
+  assert('selection hint bar rendered with Delete button (single OR multi)',
+    /selectedPanelIds\.length\s*>\s*0[\s\S]{0,3000}deleteSelectedPanel/.test(page));
+  assert('layoutAndDraw passes selectedPanelIds into overlayPanels',
+    /overlayPanels\(\{[\s\S]{0,600}selectedPanelIds:\s*selectedPanelIdsRef\.current/.test(page));
+
+  // ── Phase 3b.9 — array grouping + naming ─────────────────────────────
+  assert('imports makeArray + addArray + removeArray',
+    /import\s*\{[\s\S]{0,600}makeArray[\s\S]{0,200}addArray[\s\S]{0,200}removeArray[\s\S]{0,600}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('createArrayFromSelection handler defined',
+    /createArrayFromSelection\s*=\s*useCallback\([\s\S]{0,600}makeArray\(\{\s*name:\s*trimmed,\s*panelIds/.test(page));
+  assert('suggestArrayName uses face azimuth compass when panels sit on one face',
+    /suggestArrayName[\s\S]{0,600}azimuthToCompass\(face\?\.azimuthDegrees\)/.test(page),
+    'default name is North array / SW array etc so rep doesn\'t have to think');
+  assert('multi-select hint bar shows Create-array button when >1 panels selected',
+    /selectedPanelIds\.length\s*!==\s*1[\s\S]{0,1200}Create array/.test(page)
+      || /selectedPanelIds\.length\s*===\s*1[\s\S]{0,1500}Create array/.test(page));
+  assert('sidebar renders arrays list when arrays > 0',
+    /Array\.isArray\(arrays\)\s*&&\s*arrays\.length\s*>\s*0[\s\S]{0,600}Arrays\s*\(\{arrays\.length\}/.test(page));
+  assert('array row click selects all its panels',
+    /onSelectArray\?\.\(a\.id\)/.test(page));
+  assert('array row delete button offers un-group vs delete-panels confirm',
+    /deleteArrayKeepPanels[\s\S]{0,300}removeArray\(stateRef\.current,\s*arrayId\)/.test(page)
+      && /deleteArrayAndPanels\s*=\s*useCallback\([\s\S]{0,600}for \(const pid of arr\.panelIds\)\s*next\s*=\s*removePanel\(next,\s*pid\)/.test(page),
+    'un-group keeps panels; delete-panels iterates removePanel across every panelId (which cascades arrays too)');
+  assert('array row shows inline confirm with 3 choices',
+    /confirmingArrayId\s*===\s*a\.id[\s\S]{0,2000}Un-group only[\s\S]{0,600}Delete panels[\s\S]{0,600}Cancel/.test(page));
+
+  // ── Phase 3b.9 — delete-face (sidebar list + delete-face mode) ──────
+  assert('imports removeFace helper',
+    /import\s*\{[\s\S]{0,600}removeFace[\s\S]{0,600}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('isDeletingFace state + ref (mouse:down reads ref)',
+    /\[isDeletingFace,\s*setIsDeletingFace\]\s*=\s*useState\(false\)/.test(page)
+      && /isDeletingFaceRef\s*=\s*useRef\(false\)/.test(page)
+      && /isDeletingFaceRef\.current\s*=\s*isDeletingFace/.test(page));
+  assert('deleteFaceById handler cascades panels + arrays via removeFace',
+    /deleteFaceById\s*=\s*useCallback\([\s\S]{0,900}removeFace\(st,\s*faceId\)[\s\S]{0,300}setFaceCount[\s\S]{0,300}setPanelCount/.test(page),
+    'must update panelCount + kW + kWh totals because removeFace cascades panels');
+  assert('deleteFaceById confirms with the rep (unless skipped)',
+    /deleteFaceById[\s\S]{0,900}window\.confirm/.test(page));
+  assert('mouse:down: delete-face mode intercepts before drop/select',
+    /isDeletingFaceRef\.current[\s\S]{0,600}faceContainingPoint\(stateRef\.current[\s\S]{0,300}deleteFaceById\(face\.id\)/.test(page));
+  assert('Esc exits delete-face mode',
+    /isDeletingFace[\s\S]{0,300}Escape[\s\S]{0,100}setIsDeletingFace\(false\)/.test(page));
+  assert('header renders Delete-face toggle button (visible when faceCount > 0)',
+    /faceCount\s*>\s*0[\s\S]{0,600}setIsDeletingFace\(v\s*=>\s*!v\)/.test(page));
+  assert('delete-face instruction bar rendered when mode active',
+    /isDeletingFace\s*&&\s*!isTracing[\s\S]{0,600}Delete a roof face/.test(page));
+  assert('sidebar renders Roof faces list with per-row delete',
+    /Array\.isArray\(faces\)\s*&&\s*faces\.length\s*>\s*0[\s\S]{0,600}Roof faces[\s\S]{0,3000}onDeleteFace\?\.\(f\.id\)/.test(page));
 
   // ── Phase 3b.8 — drop rules (setback + no-overlap + obstruction) ─────
   assert('imports checkPanelDropRules + DROP_REASON_HUMAN + DEFAULT_FACE_SETBACK_M',
     /import\s*\{[\s\S]{0,800}checkPanelDropRules[\s\S]{0,200}DROP_REASON_HUMAN[\s\S]{0,200}DEFAULT_FACE_SETBACK_M[\s\S]{0,100}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
   assert('drop handler runs the rule engine before makePanel',
-    /snappedCenter[\s\S]{0,1000}checkPanelDropRules\(\{[\s\S]{0,2000}\}\);[\s\S]{0,600}makePanel\(/.test(page),
+    /snappedCenter[\s\S]{0,2000}checkPanelDropRules\(\{[\s\S]{0,2000}\}\);[\s\S]{0,800}makePanel\(/.test(page),
     'setback + overlap + obstruction checks must gate the drop, not run after');
   assert('drop rule uses face.setbackMetres with DEFAULT fallback',
     /setbackMetres:\s*Number\.isFinite\(face\?\.setbackMetres\)\s*\?\s*face\.setbackMetres\s*:\s*DEFAULT_FACE_SETBACK_M/.test(page),
@@ -537,8 +600,8 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /toggleSelectedPanelOrientation[\s\S]{0,800}nextOrientation[\s\S]{0,600}checkPanelDropRules\([\s\S]{0,600}!check\.ok[\s\S]{0,200}flashDropReject/.test(page));
   assert('R key triggers the orientation toggle',
     /['"]r['"][\s\S]{0,60}['"]R['"][\s\S]{0,200}toggleSelectedPanelOrientation\(\)/.test(page));
-  assert('selected-panel hint bar mentions drag + R + P↔L button',
-    /selectedPanelId\s*&&\s*!isTracing[\s\S]{0,800}Drag to move[\s\S]{0,200}R to rotate[\s\S]{0,400}toggleSelectedPanelOrientation/.test(page));
+  assert('single-select hint bar mentions drag + R + P↔L button',
+    /selectedPanelIds\.length\s*===\s*1[\s\S]{0,1200}Drag to move[\s\S]{0,300}R to rotate[\s\S]{0,500}toggleSelectedPanelOrientation/.test(page));
   assert('overlayRoofFaces label includes per-face irradiance when known',
     /face\.sunshineKwhPerKwPerYear[\s\S]{0,300}kWh\/kW\/yr/.test(page));
 
