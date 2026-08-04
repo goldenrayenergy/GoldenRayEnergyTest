@@ -51,6 +51,7 @@ export default function QuotePage() {
   const [analysisError, setAnalysisError] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const [confirmedPlace, setConfirmedPlace] = useState(null); // { place_id, formattedAddress }
+  const [material, setMaterial] = useState(null);              // 'metal' | 'tile' | 'unsure'
 
   const handleFile = async (file) => {
     if (!file) return;
@@ -100,6 +101,7 @@ export default function QuotePage() {
     setBill(null);
     setAnalysis(null);
     setConfirmedPlace(null);
+    setMaterial(null);
     setUploadError(null);
     setAnalysisError(null);
     setStage('upload');
@@ -150,7 +152,16 @@ export default function QuotePage() {
           <AddressStage
             analysis={analysis}
             onBack={() => setStage('extract')}
-            onConfirm={() => alert('Slice 3 not built yet — that\'s the Streetview + roof material picker. Coming next.')}
+            onConfirm={() => setStage('material')}
+          />
+        )}
+        {stage === 'material' && analysis && (
+          <MaterialStage
+            analysis={analysis}
+            material={material}
+            onPick={setMaterial}
+            onBack={() => setStage('address')}
+            onConfirm={() => alert(`Slice 4 not built yet — engine + 3-tier proposal will use material=${material}.`)}
           />
         )}
       </main>
@@ -755,6 +766,152 @@ function GoogleAerial({ aerial, coords }) {
       {/* Attribution */}
       <div className="absolute bottom-2 right-2 text-[10px] font-mono bg-black/50 text-white px-2 py-0.5 rounded pointer-events-none">
         Google Maps · z{aerial.zoom}
+      </div>
+    </div>
+  );
+}
+
+// ── Stage 3: Roof material picker (Streetview visual aid + 3-card) ──────────
+
+const MATERIAL_OPTIONS = [
+  {
+    id: 'metal',
+    title: 'Metal roof',
+    sub: 'Corrugated iron, Colorsteel, tray decking',
+    swatch: 'repeating-linear-gradient(90deg, #4B5A66 0 4px, #6B7A85 4px 8px)',
+  },
+  {
+    id: 'tile',
+    title: 'Tile roof',
+    sub: 'Concrete, clay, terracotta tiles',
+    swatch: 'repeating-linear-gradient(45deg, #B8574A 0 6px, #A34738 6px 12px)',
+  },
+  {
+    id: 'unsure',
+    title: "I'm not sure",
+    sub: "We'll confirm at the site survey — quote covers both",
+    swatch: 'linear-gradient(135deg, #EBE2CE, #DDCFAE)',
+  },
+];
+
+function MaterialStage({ analysis, material, onPick, onBack, onConfirm }) {
+  const { coords, formattedAddress } = analysis;
+  const [svError, setSvError] = useState(null);
+
+  const svUrl = `/api/poc/aerial/streetview?lat=${coords.latitude}&lng=${coords.longitude}&size=640x480&pitch=15`;
+
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-widest text-[#D9531E] font-semibold">Step 3 &middot; Roof material</div>
+      <h2 className="font-serif text-3xl md:text-4xl mt-3 tracking-tight">
+        What&apos;s your roof made of?
+      </h2>
+      <p className="mt-2 text-[#55504A] max-w-2xl">
+        Here&apos;s a street-level view of your house — corrugated ridges usually mean metal, curved rows mean tile.
+        This affects mounting hardware, not panel choice.
+      </p>
+
+      <div className="mt-8 grid lg:grid-cols-2 gap-8 items-start">
+        {/* Streetview */}
+        <div>
+          <div
+            className="relative rounded-2xl overflow-hidden shadow-2xl border border-[#E3D9C4] bg-[#B5C4A5]"
+            style={{ aspectRatio: '640 / 480' }}
+          >
+            {svError ? (
+              <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-red-800 bg-red-50">
+                <div>
+                  <div className="font-semibold mb-2">Streetview unavailable for this address</div>
+                  <div className="font-mono text-xs mb-3">{svError}</div>
+                  <div className="text-xs text-red-700">
+                    Either no Streetview coverage here (rural / new subdivision) OR "Street View Static API" isn&apos;t enabled in Google Cloud Console for your key.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <img
+                src={svUrl}
+                alt="Streetview of the property"
+                className="absolute inset-0 w-full h-full object-cover"
+                onError={async () => {
+                  try {
+                    const r = await fetch(svUrl);
+                    if (!r.ok) {
+                      const body = await r.text();
+                      setSvError(body.slice(0, 300));
+                    } else {
+                      setSvError('image did not render (unexpected)');
+                    }
+                  } catch (e) {
+                    setSvError(`fetch threw: ${e.message}`);
+                  }
+                }}
+                draggable={false}
+              />
+            )}
+            <div className="absolute bottom-2 right-2 text-[10px] font-mono bg-black/50 text-white px-2 py-0.5 rounded pointer-events-none">
+              Google Streetview
+            </div>
+          </div>
+          <div className="mt-3 text-xs text-[#8F887E] font-mono">{formattedAddress}</div>
+        </div>
+
+        {/* Picker */}
+        <div>
+          <h3 className="font-serif text-lg mb-3">Pick one:</h3>
+          <div className="space-y-3">
+            {MATERIAL_OPTIONS.map(opt => {
+              const isSel = material === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => onPick(opt.id)}
+                  className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 text-left transition
+                    ${isSel
+                      ? 'border-[#D9531E] bg-[#D9531E]/5'
+                      : 'border-[#E3D9C4] bg-white hover:border-[#8F887E] hover:bg-[#F4EEE1]'}
+                  `}
+                >
+                  <div
+                    className="w-14 h-14 rounded-xl flex-shrink-0"
+                    style={{ background: opt.swatch, boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.05)' }}
+                  />
+                  <div className="flex-1">
+                    <div className="font-semibold text-[#1A1614]">{opt.title}</div>
+                    <div className="text-xs text-[#55504A] mt-0.5">{opt.sub}</div>
+                  </div>
+                  <div
+                    className={`w-5 h-5 rounded-full border-2 grid place-items-center
+                      ${isSel ? 'border-[#D9531E]' : 'border-[#E3D9C4]'}
+                    `}
+                  >
+                    {isSel && <div className="w-2.5 h-2.5 rounded-full bg-[#D9531E]" />}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-4 text-xs text-[#8F887E]">
+            Roof material changes mounting hardware price by ~5-8%. If you pick &quot;not sure&quot; we&apos;ll quote assuming metal and adjust after the site survey.
+          </p>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="mt-10 pt-6 border-t border-[#E3D9C4] flex flex-wrap items-center gap-3">
+        <button onClick={onBack} className="inline-flex items-center gap-2 px-5 py-3 rounded-full border border-[#E3D9C4] hover:bg-[#F4EEE1] text-sm">
+          <ArrowLeft className="w-4 h-4" /> Back
+        </button>
+        <div className="flex-1" />
+        <button
+          onClick={onConfirm}
+          disabled={!material}
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[#D9531E] text-white text-sm font-semibold hover:bg-[#B84418] transition shadow-lg shadow-orange-500/20 disabled:opacity-60 disabled:cursor-not-allowed"
+          title={!material ? 'Pick a roof material first' : ''}
+        >
+          <Sparkles className="w-4 h-4" />
+          Design my system
+        </button>
       </div>
     </div>
   );

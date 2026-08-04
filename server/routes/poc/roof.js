@@ -214,6 +214,58 @@ aerialRouter.get('/google', async (req, res) => {
   }
 });
 
+// GET /api/poc/aerial/streetview?lat=&lng=&size=&pitch=&heading=&fov=
+// Proxies Google Streetview Static API. Used on the roof-material picker
+// to give the customer a ground-level view of their roof (top-down aerials
+// hide corrugation lines / tile ridges that make Metal-vs-Tile obvious).
+// No AI — just a visual aid; picker below is the source of truth.
+aerialRouter.get('/streetview', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  const size    = /^[0-9]{2,4}x[0-9]{2,4}$/.test(req.query.size || '') ? req.query.size : '640x480';
+  const fov     = clamp(parseInt(req.query.fov, 10)     || 90, 10, 120);
+  const heading = req.query.heading != null ? clamp(parseInt(req.query.heading, 10), 0, 359) : null;
+  const pitch   = clamp(parseInt(req.query.pitch, 10)   || 10, -90, 90);
+  if (Number.isNaN(lat) || lat < -90 || lat > 90 || Number.isNaN(lng) || lng < -180 || lng > 180) {
+    return res.status(400).json({ error: `Bad lat/lng: ${req.query.lat}, ${req.query.lng}` });
+  }
+
+  const key = env.googleSolar.apiKey;
+  if (!key) {
+    return res.status(503).json({
+      error: 'GOOGLE_SOLAR_API_KEY not set — cannot fetch Streetview. Reuses the Solar key; enable "Street View Static API" for it in the Google Cloud Console.',
+    });
+  }
+
+  const params = new URLSearchParams({
+    location: `${lat},${lng}`,
+    size,
+    fov:   String(fov),
+    pitch: String(pitch),
+    key,
+    return_error_code: 'true',   // return 404 on no-imagery instead of a "not available" placeholder image
+  });
+  if (heading != null) params.set('heading', String(heading));
+  const url = `https://maps.googleapis.com/maps/api/streetview?${params.toString()}`;
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      return res.status(resp.status).json({
+        error: `Google Streetview returned ${resp.status}: ${body.slice(0, 300)}`,
+      });
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    res.setHeader('Content-Type',  resp.headers.get('content-type') || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.end(buf);
+  } catch (e) {
+    return res.status(500).json({ error: `Streetview proxy threw: ${e.message}` });
+  }
+});
+function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
+
 aerialRouter.get('/tile', async (req, res) => {
   const z = parseInt(req.query.z, 10);
   const x = parseInt(req.query.x, 10);
