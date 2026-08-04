@@ -7,11 +7,16 @@
 
 import { Router } from 'express';
 import billRoutes from './bill.js';
+import roofRoutes, { aerialRouter } from './roof.js';
+import placesRoutes from './places.js';
 
 const router = Router();
 
 router.get('/health', (_req, res) => res.json({ ok: true, scope: 'poc' }));
 
-router.use('/bill', billRoutes);
+router.use('/bill',   billRoutes);
+router.use('/roof',   roofRoutes);
+router.use('/aerial', aerialRouter);  // Google Static Maps + LINZ tiles
+router.use('/places', placesRoutes);  // Places API (New) autocomplete + details
 
 export default router;
