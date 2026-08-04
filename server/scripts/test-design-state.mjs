@@ -33,6 +33,7 @@ const {
   panelDisplayLabel, buildPanelLabelMap,
   copyArrayToFace,
   autoLayoutFace, panelSkusInDesign,
+  importGooglePanels,
 } = await import(url);
 
 let pass = 0, fail = 0;
@@ -1416,6 +1417,68 @@ console.log('test-design-state\n');
   const skus = panelSkusInDesign(s);
   assert('3 panels of 2 SKUs → set size 2', skus.size === 2);
   assert('set contains A + B', skus.has('A') && skus.has('B'));
+}
+
+// ── importGooglePanels (Phase 3e) ────────────────────────────────────────
+{
+  console.log('\n▸ importGooglePanels');
+
+  // Two Google-sourced faces, segmentIndex 0 and 1.
+  const segs = [
+    { boundingBox: { ne: { latitude: 0.0002, longitude: 0.0002 }, sw: { latitude: 0, longitude: 0 } },
+      pitchDegrees: 20, azimuthDegrees: 0, stats: { areaMeters2: 40 } },
+    { boundingBox: { ne: { latitude: 0.0002, longitude: 0.001 }, sw: { latitude: 0, longitude: 0.0008 } },
+      pitchDegrees: 22, azimuthDegrees: 90, stats: { areaMeters2: 35 } },
+  ];
+  let s = importGoogleSegments(emptyDesignState(), segs);
+  const face0 = s.roof.faces.find(f => f.googleSegmentIndex === 0);
+  const face1 = s.roof.faces.find(f => f.googleSegmentIndex === 1);
+  assert('googleSegmentIndex preserved on imported faces',
+    face0 != null && face1 != null);
+
+  // Google-style solarPanels[] — three panels: two on seg 0 (one high-shade,
+  // one low), one on seg 1. Include one panel referencing a segment that
+  // doesn't exist to check the skip path.
+  const gPanels = [
+    { center: { latitude: 0.0001, longitude: 0.0001 }, orientation: 'PORTRAIT',
+      segmentIndex: 0, yearlyEnergyDcKwh: 600 },   // seg 0, high energy
+    { center: { latitude: 0.00015, longitude: 0.00015 }, orientation: 'LANDSCAPE',
+      segmentIndex: 0, yearlyEnergyDcKwh: 200 },   // seg 0, low energy
+    { center: { latitude: 0.0001, longitude: 0.0009 }, orientation: 'LANDSCAPE',
+      segmentIndex: 1, yearlyEnergyDcKwh: 550 },   // seg 1
+    { center: { latitude: 0, longitude: 0 }, orientation: 'PORTRAIT',
+      segmentIndex: 99, yearlyEnergyDcKwh: 100 },  // orphan segment → skipped
+  ];
+  const r = importGooglePanels({ state: s, googlePanels: gPanels, sku: 'A' });
+
+  assert('imported 3 valid panels',                  r.imported === 3);
+  assert('skipped 1 (orphan segmentIndex)',           r.skipped === 1);
+  assert('arraysCreated = 2 (one per face touched)',  r.arraysCreated === 2);
+  assert('new state has 3 panels total',              r.state.panels.length === 3);
+  assert('new state has 2 arrays total',              r.state.arrays.length === 2);
+  assert('all panels have the requested SKU',
+    r.state.panels.every(p => p.sku === 'A'));
+
+  // Sort-by-energy check: within seg 0, the 600-kWh panel should be S1P1,
+  // the 200-kWh panel should be S1P2.
+  const seg0Array = r.state.arrays.find(a => a.name === 'Segment 1 array');
+  assert('best-shaded panel on seg 0 is first in the array',
+    seg0Array?.panelIds.length === 2
+      && r.state.panels.find(p => p.id === seg0Array.panelIds[0]).center.longitude === 0.0001);
+
+  // Portrait orientation preserved
+  const p1 = r.state.panels.find(p => p.center.longitude === 0.0001);
+  assert('PORTRAIT orientation preserved from Google', p1?.orientation === 'portrait');
+
+  // Empty / bogus inputs → no crash, empty result
+  assert('no SKU → empty result',
+    importGooglePanels({ state: s, googlePanels: gPanels }).imported === 0);
+  assert('null state → empty result',
+    importGooglePanels({ state: null, googlePanels: gPanels, sku: 'A' }).imported === 0);
+  assert('empty google panels → empty result',
+    importGooglePanels({ state: s, googlePanels: [], sku: 'A' }).imported === 0);
+  assert('state with no google faces → empty result (nothing to match onto)',
+    importGooglePanels({ state: emptyDesignState(), googlePanels: gPanels, sku: 'A' }).imported === 0);
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

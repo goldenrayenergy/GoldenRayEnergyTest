@@ -528,8 +528,8 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
   assert('multi-select hint bar shows Create-array button when >1 panels selected',
     /selectedPanelIds\.length\s*!==\s*1[\s\S]{0,1200}Create array/.test(page)
       || /selectedPanelIds\.length\s*===\s*1[\s\S]{0,1500}Create array/.test(page));
-  assert('sidebar renders arrays list when arrays > 0',
-    /Array\.isArray\(arrays\)\s*&&\s*arrays\.length\s*>\s*0[\s\S]{0,600}Arrays\s*\(\{arrays\.length\}/.test(page));
+  assert('sidebar renders arrays list when arrays > 0 (collapsible via accordion)',
+    /Array\.isArray\(arrays\)\s*&&\s*arrays\.length\s*>\s*0[\s\S]{0,1200}text-left['"]?>Arrays[\s\S]{0,300}\{arrays\.length\}/.test(page));
   assert('array row click selects all its panels',
     /onSelectArray\?\.\(a\.id\)/.test(page));
   assert('array row delete button offers un-group vs delete-panels confirm',
@@ -616,8 +616,41 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /overlayObstructions[\s\S]{0,2000}new fabric\.Circle\([\s\S]{0,600}new fabric\.Text\(OBSTRUCTION_ICON/.test(page));
   assert('layoutAndDraw stitches obstructions into overlayObjectsRef',
     /\[\s*\.\.\.facePolys,\s*\.\.\.gridObjs,\s*\.\.\.obstructionObjs,\s*\.\.\.panelObjs,\s*\.\.\.traceObjects\s*\]/.test(page));
-  assert('sidebar renders Obstructions list with per-row delete',
-    /Array\.isArray\(obstructions\)\s*&&\s*obstructions\.length\s*>\s*0[\s\S]{0,300}Obstructions[\s\S]{0,1500}onDeleteObstruction\?\.\(o\.id\)/.test(page));
+  assert('sidebar renders Obstructions list with per-row delete (collapsible)',
+    /Array\.isArray\(obstructions\)\s*&&\s*obstructions\.length\s*>\s*0[\s\S]{0,1200}Obstructions[\s\S]{0,1500}onDeleteObstruction\?\.\(o\.id\)/.test(page));
+
+  // ── Phase 3e — Google 'suggest a layout' import ──────────────────────
+  assert('imports importGooglePanels helper',
+    /import\s*\{[\s\S]{0,1500}importGooglePanels[\s\S]{0,200}\}\s*from\s*['"]\.\.\/utils\/designState['"]/.test(page));
+  assert('importGoogleLayoutHandler defined + guards on armed SKU + Google panels',
+    /importGoogleLayoutHandler\s*=\s*useCallback\([\s\S]{0,900}armedPanelSkuRef\.current[\s\S]{0,300}Arm a panel[\s\S]{0,600}roofAnalysisRef\.current\?\.solar_panels/.test(page));
+  assert('handler confirms when adding to existing panels (non-destructive)',
+    /existingPanels\s*=\s*stateRef\.current\?\.panels\?\.length[\s\S]{0,500}window\.confirm/.test(page));
+  assert('header renders Use-Google-layout pill when solar_panels present (faces auto-imported by handler)',
+    /roofAnalysis\?\.solar_panels[\s\S]{0,600}Use Google's layout/.test(page));
+  assert('handler auto-imports Google segments as faces only when the design has zero faces',
+    /allFaceCount\s*=[\s\S]{0,600}allFaceCount\s*===\s*0[\s\S]{0,400}importGoogleSegments\(stateRef\.current,\s*segments\)/.test(page),
+    'auto-import only fires on a fresh design so we don\'t stack Google faces on top of manual traces');
+  assert('handler summary flashes through the shared toast slot',
+    /importGoogleLayoutHandler[\s\S]{0,6000}setDropRejectReason\(summary\)/.test(page));
+  assert('handler forwards panelCatalogueBySku so importGooglePanels can rule-check with actual SKU dims',
+    /importGooglePanels\(\{[\s\S]{0,300}panelCatalogueBySku:\s*panelCatalogueRef\.current/.test(page),
+    'without SKU dims the rule check falls back to defaults and lets bigger panels overlap Google\'s tight positions');
+
+  const contactsRoutes = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/contacts.js'), 'utf8');
+  assert('server /latest-roof-analysis exposes solar_panels from raw_response',
+    /solar_panels:raw_response->solarPotential->solarPanels/.test(contactsRoutes),
+    'JSON-path selector avoids shipping the whole raw_response (which has PII)');
+
+  // ── Phase 3e (cleanup) — sidebar accordion ────────────────────────────
+  assert('sectionOpen state + toggleSection helper',
+    /\[sectionOpen,\s*setSectionOpen\]\s*=\s*useState\(\{\s*faces:\s*false,\s*arrays:\s*false,\s*obstructions:\s*false/.test(page)
+      && /toggleSection\s*=\s*useCallback\(\(k\)\s*=>\s*\{[\s\S]{0,200}setSectionOpen/.test(page),
+    'lists start collapsed so the palette gets the room; rep opens what they need');
+  assert('all three list sections have collapsible headers keyed off sectionOpen',
+    (page.match(/onToggleSection\?\.\(['"](?:faces|arrays|obstructions)['"]\)/g) || []).length >= 3);
+  assert('sectionOpen + onToggleSection wired from DesignPage into PanelPalette',
+    /sectionOpen=\{sectionOpen\}[\s\S]{0,200}onToggleSection=\{toggleSection\}/.test(page));
 
   // ── Phase 3b.9 — delete-face (sidebar list + delete-face mode) ──────
   assert('imports removeFace helper',
@@ -639,8 +672,8 @@ const routesFile = fs.readFileSync(path.join(REPO_ROOT, 'server/routes/pm/design
     /faceCount\s*>\s*0[\s\S]{0,600}setIsDeletingFace\(v\s*=>\s*!v\)/.test(page));
   assert('delete-face instruction bar rendered when mode active',
     /isDeletingFace\s*&&\s*!isTracing[\s\S]{0,600}Delete a roof face/.test(page));
-  assert('sidebar renders Roof faces list with per-row delete',
-    /Array\.isArray\(faces\)\s*&&\s*faces\.length\s*>\s*0[\s\S]{0,600}Roof faces[\s\S]{0,3000}onDeleteFace\?\.\(f\.id\)/.test(page));
+  assert('sidebar renders Roof faces list with per-row delete (collapsible)',
+    /Array\.isArray\(faces\)\s*&&\s*faces\.length\s*>\s*0[\s\S]{0,1200}Roof faces[\s\S]{0,3000}onDeleteFace\?\.\(f\.id\)/.test(page));
 
   // ── Phase 3b.8 — drop rules (setback + no-overlap + obstruction) ─────
   assert('imports checkPanelDropRules + DROP_REASON_HUMAN + DEFAULT_FACE_SETBACK_M',

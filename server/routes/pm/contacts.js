@@ -197,7 +197,8 @@ router.get('/:id/latest-roof-analysis', async (req, res) => {
         roof_segments, error_message, created_at,
         roof_image_storage_bucket, roof_image_storage_path,
         roof_image_fetched_at, roof_image_error_message,
-        tile_radius_m, imagery_source
+        tile_radius_m, imagery_source,
+        solar_panels:raw_response->solarPotential->solarPanels
       `)
       .eq('contact_id', req.params.id)
       .order('created_at', { ascending: false })

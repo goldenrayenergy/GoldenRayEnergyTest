@@ -39,6 +39,7 @@ import {
   checkPanelDropRules, DROP_REASON_HUMAN, DEFAULT_FACE_SETBACK_M,
   buildPanelLabelMap, copyArrayToFace,
   autoLayoutFace, panelSkusInDesign,
+  importGooglePanels,
 } from '../utils/designState';
 import useCatalogueOptions from '../hooks/useCatalogueOptions';
 // segmentBboxToPolygon + segmentLabel remain exported from roofOverlay.js —
@@ -215,6 +216,17 @@ export default function DesignPage() {
   }, []);
   useEffect(() => () => {
     if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+  }, []);
+
+  // Phase 3e (cleanup) — accordion collapse state for the three sidebar list
+  // sections (Roof faces, Arrays, Obstructions). Palette stays always
+  // expanded (primary tool). Defaults to COLLAPSED even when populated so
+  // the palette gets the room by default; rep clicks a chevron to peek.
+  const [sectionOpen, setSectionOpen] = useState({
+    faces: false, arrays: false, obstructions: false,
+  });
+  const toggleSection = useCallback((k) => {
+    setSectionOpen(prev => ({ ...prev, [k]: !prev[k] }));
   }, []);
   // Panel-catalogue lookup by SKU — Map so palette + drop + overlay all share
   // the same shape. Rebuilt whenever the catalogue reloads.
@@ -607,6 +619,101 @@ export default function DesignPage() {
   // Phase 3b.9 — destructive counterpart: remove every panel in the array
   // (each removePanel call cascades through remaining arrays too). Used by
   // the "Delete panels" branch of the array-row confirm dialog.
+  // Phase 3e — one-click import of Google's suggested panel layout.
+  // Google returns solarPotential.solarPanels[] with every position their
+  // shading model considers usable. We drop them all as design panels
+  // grouped into per-face arrays (Segment 1 array, Segment 2 array, ...).
+  // Rep then trims to hit target kW — the trailing panels are the worst-
+  // shaded because Google pre-sorts by yearlyEnergyDcKwh DESC.
+  //
+  // TRUE one-click: if Google's segments haven't been imported as faces
+  // yet, we import them first (via importGoogleSegments, same call the
+  // separate "📐 Trace from Google" button uses). Rep doesn't have to
+  // remember two buttons in the right order.
+  const importGoogleLayoutHandler = useCallback(() => {
+    const sku = armedPanelSkuRef.current;
+    if (!sku) {
+      setDropRejectReason('Arm a panel from the palette first, then click Use Google\'s layout.');
+      if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+      dropRejectTimerRef.current = setTimeout(() => setDropRejectReason(null), 3500);
+      return;
+    }
+    const googlePanels = roofAnalysisRef.current?.solar_panels;
+    if (!Array.isArray(googlePanels) || googlePanels.length === 0) {
+      setDropRejectReason('Google didn\'t return a panel layout for this property.');
+      if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+      dropRejectTimerRef.current = setTimeout(() => setDropRejectReason(null), 3500);
+      return;
+    }
+    // Confirm if design already has panels — this is additive, not replacing.
+    const existingPanels = stateRef.current?.panels?.length || 0;
+    if (existingPanels > 0) {
+      // eslint-disable-next-line no-alert
+      const yes = typeof window !== 'undefined' && window.confirm(
+        `You already have ${existingPanels} panel${existingPanels === 1 ? '' : 's'} placed. Adding ${googlePanels.length} more from Google's suggested layout. Continue?`
+      );
+      if (!yes) return;
+    }
+
+    // Auto-import Google's segments as faces ONLY when the design has zero
+    // faces. If the rep already has manual traces, importing Google's faces
+    // on top produces visually-stacked outlines (their manual polygon + our
+    // Google bbox polygon over the same roof). If they want Google's shape
+    // instead, they should delete their manual faces first.
+    const allFaceCount = (stateRef.current?.roof?.faces || []).length;
+    let facesAutoImported = 0;
+    if (allFaceCount === 0) {
+      const segments = roofAnalysisRef.current?.roof_segments;
+      if (Array.isArray(segments) && segments.length > 0) {
+        stateRef.current = importGoogleSegments(stateRef.current, segments);
+        facesAutoImported = (stateRef.current?.roof?.faces || [])
+          .filter(f => f?.source === 'google_solar').length;
+        setFaceCount(stateRef.current.roof.faces.length);
+      }
+    }
+
+    const result = importGooglePanels({
+      state: stateRef.current,
+      googlePanels,
+      sku,
+      panelCatalogueBySku: panelCatalogueRef.current,
+    });
+    stateRef.current = result.state;
+    setPanelCount(stateRef.current.panels.length);
+    setTotalKw(totalKilowatts(stateRef.current, panelCatalogueRef.current));
+    setTotalKwh(totalAnnualKwh(stateRef.current, panelCatalogueRef.current));
+    setDirty(true);
+    setSelectedPanelIds([]);
+    layoutAndDrawRef.current?.();
+    let summary;
+    if (result.imported === 0) {
+      summary = allFaceCount > 0 && facesAutoImported === 0
+        ? `Google's panels reference segments we didn't auto-import (you already have manual faces). Delete manual faces + retry, or use 📐 Trace from Google to import Google's own faces first.`
+        : `Couldn't import any panels — try tracing faces first.`;
+    } else {
+      const parts = [`Imported ${result.imported} panel${result.imported === 1 ? '' : 's'}`];
+      if (facesAutoImported > 0) parts.push(`across ${facesAutoImported} auto-imported face${facesAutoImported === 1 ? '' : 's'}`);
+      parts.push(`into ${result.arraysCreated} array${result.arraysCreated === 1 ? '' : 's'}`);
+      if (result.skipped > 0) {
+        // Break the skipped count down by reason so the rep knows if their
+        // SKU is too big vs the layout being unlucky.
+        const reasonBits = [];
+        for (const [reason, count] of result.skippedReasons || []) {
+          reasonBits.push(`${count} ${reason}`);
+        }
+        const detail = reasonBits.length ? ` — ${reasonBits.join(', ')}` : '';
+        parts.push(`(${result.skipped} skipped${detail})`);
+        if ((result.skippedReasons?.get('overlap-panel') || 0) > 0) {
+          parts.push(`— your armed SKU may be bigger than Google's assumed panel; try a smaller SKU for a denser layout`);
+        }
+      }
+      summary = parts.join(' ') + '.';
+    }
+    setDropRejectReason(summary);
+    if (dropRejectTimerRef.current) clearTimeout(dropRejectTimerRef.current);
+    dropRejectTimerRef.current = setTimeout(() => setDropRejectReason(null), 5000);
+  }, []);
+
   // Phase 3b.13 — auto-fill a face with the currently-armed panel SKU.
   // One click drops every panel that fits (respecting setback, overlap,
   // obstruction) and groups them into a new array named after the face
@@ -814,9 +921,12 @@ export default function DesignPage() {
         // sat right on top of the roof the rep is trying to trace.
         for (const obj of overlayObjectsRef.current) c.remove(obj);
         // Phase 3b.2 — imported/manual roof faces (sage/amber outlines).
+        // allPanels passed so overlayRoofFaces can fade the guide-outline
+        // on faces that already have panels on them (Phase 3e cleanup).
         const facePolys = overlayRoofFaces({
           canvas: c,
           faces: stateRef.current?.roof?.faces || [],
+          allPanels: stateRef.current?.panels || [],
           roofAnalysis: roofAnalysisRef.current,
           imgWidth: img.width, imgHeight: img.height,
           left, top, scale,
@@ -1611,7 +1721,7 @@ export default function DesignPage() {
             </span>
           )}
           {/* Phase 3b.3 — manual roof-face tracing (always available once image loaded) */}
-          {roofAnalysis?.roof_image_signed_url && !isTracing && !isDeletingFace && (
+          {roofAnalysis?.roof_image_signed_url && !isTracing && !isDeletingFace && !armedObstructionType && (
             <button
               onClick={startTrace}
               className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-full px-3 py-1"
@@ -1619,6 +1729,21 @@ export default function DesignPage() {
             >
               ✏️ Trace face
             </button>
+          )}
+          {/* Phase 3e — Use Google's suggested panel layout. Visible whenever
+              Google returned a solarPanels[] for the property. Handler auto-
+              imports Google's segments as faces if none exist yet, so this
+              is a true one-click. */}
+          {Array.isArray(roofAnalysis?.solar_panels)
+            && roofAnalysis.solar_panels.length > 0
+            && !isTracing && !isDeletingFace && !armedObstructionType && (
+              <button
+                onClick={importGoogleLayoutHandler}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-800 bg-purple-50 hover:bg-purple-100 border border-purple-300 rounded-full px-3 py-1"
+                title={`Import Google's ${roofAnalysis.solar_panels.length} suggested panel positions (best-shaded first)`}
+              >
+                🌟 Use Google's layout ({roofAnalysis.solar_panels.length})
+              </button>
           )}
           {/* Phase 3b.9 — delete-face mode toggle */}
           {faceCount > 0 && !isTracing && !armedObstructionType && (
@@ -1877,6 +2002,8 @@ export default function DesignPage() {
         distinctSkuCount={panelSkusInDesign(stateRef.current).size}
         obstructions={stateRef.current?.roof?.obstructions || []}
         onDeleteObstruction={deleteObstructionById}
+        sectionOpen={sectionOpen}
+        onToggleSection={toggleSection}
       />
       </div>
 
@@ -1979,7 +2106,7 @@ function autoZoomToRoof(canvas, roofAnalysis, imgWidth, imgHeight, left, top, sc
 //   • google_solar-sourced faces → amber fill/outline (matches our brand)
 //   • manual faces               → sage fill/outline (visually distinct so
 //     rep can tell what they traced vs what came from Google)
-function overlayRoofFaces({ canvas, faces, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
+function overlayRoofFaces({ canvas, faces, allPanels, roofAnalysis, imgWidth, imgHeight, left, top, scale }) {
   const created = [];
   if (!Array.isArray(faces) || faces.length === 0) return created;
 
@@ -1997,18 +2124,37 @@ function overlayRoofFaces({ canvas, faces, roofAnalysis, imgWidth, imgHeight, le
   });
   const toCanvas = (p) => ({ x: left + p.x * scale, y: top + p.y * scale });
 
+  // Which faces already have panels? Face outlines + fill are GUIDES for
+  // placement. Once a face has panels on it the guide is done — fading it
+  // out drops a lot of visual noise on dense designs (e.g. Google's layout
+  // where 3 overlapping segment bboxes stack amber fills into mud).
+  const facesWithPanels = new Set();
+  for (const p of allPanels || []) {
+    if (p?.faceId) facesWithPanels.add(p.faceId);
+  }
+
   faces.forEach((face, i) => {
     if (!Array.isArray(face.polygon) || face.polygon.length < 3) return;
 
     const points = face.polygon.map(v => toCanvas(toPixel(v.latitude, v.longitude)));
+    const hasPanels = facesWithPanels.has(face.id);
 
     const isGoogle = face.source === 'google_solar';
-    const fill   = isGoogle ? 'rgba(245, 166, 35, 0.18)' : 'rgba(74, 124, 89, 0.18)';
-    const stroke = isGoogle ? 'rgba(255, 106, 0, 0.9)'   : 'rgba(74, 124, 89, 0.9)';
+    // Fade the fill + outline when the face has panels — kept just barely
+    // visible so the rep can still see the boundary if they need to.
+    const fill = hasPanels
+      ? 'rgba(255, 255, 255, 0)'   // fully transparent
+      : (isGoogle ? 'rgba(245, 166, 35, 0.18)' : 'rgba(74, 124, 89, 0.18)');
+    const stroke = hasPanels
+      ? (isGoogle ? 'rgba(255, 106, 0, 0.25)' : 'rgba(74, 124, 89, 0.25)')
+      : (isGoogle ? 'rgba(255, 106, 0, 0.9)'  : 'rgba(74, 124, 89, 0.9)');
+    const strokeWidth = hasPanels ? 1 : 2;
+    const strokeDashArray = hasPanels ? [4, 4] : null;
 
     const polygon = new fabric.Polygon(points, {
       ...TL_ORIGIN,
-      fill, stroke, strokeWidth: 2,
+      fill, stroke, strokeWidth,
+      ...(strokeDashArray ? { strokeDashArray } : {}),
       selectable: false,   // Phase 3b.7 will make faces selectable
       evented: false,
       hoverCursor: 'grab',
@@ -2016,31 +2162,34 @@ function overlayRoofFaces({ canvas, faces, roofAnalysis, imgWidth, imgHeight, le
     canvas.add(polygon);
     created.push(polygon);
 
-    // Small label at the polygon centroid with pitch + orientation + irradiance
-    const centroid = polygonCentroid(points);
-    const parts = [`#${i + 1}`];
-    if (face.areaMetres2)    parts.push(`${face.areaMetres2.toFixed(1)}m²`);
-    if (face.azimuthDegrees != null) parts.push(azimuthToCompass(face.azimuthDegrees));
-    if (face.pitchDegrees   != null) parts.push(`${face.pitchDegrees.toFixed(0)}°`);
-    // Phase 3b.8 — per-face solar irradiance (kWh/kW/yr) when we have it.
-    // Google-imported faces get the segment median from Google Solar's
-    // sunshineQuantiles; manual faces stay unlabelled (the footer's total
-    // still estimates them via estimateFaceSunshine).
-    if (typeof face.sunshineKwhPerKwPerYear === 'number' && face.sunshineKwhPerKwPerYear > 0) {
-      parts.push(`${Math.round(face.sunshineKwhPerKwPerYear)} kWh/kW/yr`);
+    // Face label — pitch + orientation + irradiance. ONLY rendered when the
+    // face has no panels yet (i.e. it's still a placement guide). Once the
+    // face is designed, the same info lives in the sidebar Roof-faces list
+    // and cluttering the aerial with labels stacking near overlapping faces
+    // (Google's segment bboxes overlap often) just adds noise.
+    if (!hasPanels) {
+      const topLeft = points.reduce((min, p) =>
+        (p.y < min.y || (p.y === min.y && p.x < min.x)) ? p : min, points[0]);
+      const parts = [`#${i + 1}`];
+      if (face.areaMetres2)    parts.push(`${face.areaMetres2.toFixed(1)}m²`);
+      if (face.azimuthDegrees != null) parts.push(azimuthToCompass(face.azimuthDegrees));
+      if (face.pitchDegrees   != null) parts.push(`${face.pitchDegrees.toFixed(0)}°`);
+      if (typeof face.sunshineKwhPerKwPerYear === 'number' && face.sunshineKwhPerKwPerYear > 0) {
+        parts.push(`${Math.round(face.sunshineKwhPerKwPerYear)} kWh/kW/yr`);
+      }
+      const label = new fabric.Text(parts.join(' · '), {
+        ...TL_ORIGIN,
+        left: topLeft.x + 4, top: topLeft.y - 14,   // sits just above the top-left corner
+        fontSize: 10,
+        fontFamily: '-apple-system, "Segoe UI", system-ui, sans-serif',
+        fill: '#1B1810',
+        backgroundColor: 'rgba(255, 253, 246, 0.85)',
+        padding: 2,
+        selectable: false, evented: false,
+      });
+      canvas.add(label);
+      created.push(label);
     }
-    const label = new fabric.Text(parts.join(' · '), {
-      left: centroid.x, top: centroid.y,
-      originX: 'center', originY: 'center',
-      fontSize: 10,
-      fontFamily: '-apple-system, "Segoe UI", system-ui, sans-serif',
-      fill: '#1B1810',
-      backgroundColor: 'rgba(255, 253, 246, 0.85)',
-      padding: 2,
-      selectable: false, evented: false,
-    });
-    canvas.add(label);
-    created.push(label);
   });
 
   return created;
@@ -2269,7 +2418,10 @@ function overlayPanels({ canvas, panels, panelCatalogueBySku, roofAnalysis, imgW
     const children = [body, busbar];
     const labelText = labels.get(panel.id);
     if (labelText) {
-      const fontPx = Math.max(9, Math.min(hPx * 0.28, 16));
+      // Cap at 11px so densely-packed layouts (Google's suggested layout
+      // in particular) don't have labels overflowing the panel edges. Was
+      // 16 before — too shouty on tight roofs.
+      const fontPx = Math.max(8, Math.min(hPx * 0.22, 11));
       const label = new fabric.Text(labelText, {
         left: 0, top: 0,
         originX: 'center', originY: 'center',
@@ -2568,7 +2720,7 @@ function armedPanelLabel(catalogue, sku) {
 // panel. Grouped by brand so the list stays scannable when catalogues get
 // large. Cards show brand, watts, and physical dimensions so the rep can
 // eyeball the fit against the roof before dropping.
-function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, onCopyArrayToFace, faces, allPanels, onDeleteFace, onAutoFillFace, distinctSkuCount, obstructions, onDeleteObstruction }) {
+function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount, totalKw, totalKwh, arrays, onSelectArray, onUngroupArray, onDeleteArrayAndPanels, onCopyArrayToFace, faces, allPanels, onDeleteFace, onAutoFillFace, distinctSkuCount, obstructions, onDeleteObstruction, sectionOpen, onToggleSection }) {
   const panelsPerFace = useMemo(() => {
     const map = new Map();
     for (const p of allPanels || []) map.set(p.faceId, (map.get(p.faceId) || 0) + 1);
@@ -2663,9 +2815,19 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
           to greedy-fill every valid grid cell on the face. */}
       {Array.isArray(faces) && faces.length > 0 && (
         <div className="border-b border-slate-200 flex-shrink-0">
-          <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-100">
-            Roof faces ({faces.length})
-          </div>
+          <button
+            type="button"
+            onClick={() => onToggleSection?.('faces')}
+            className="w-full flex items-center gap-1 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 hover:bg-slate-100 border-b border-slate-100"
+            title={sectionOpen?.faces ? 'Collapse this section' : 'Expand this section'}
+          >
+            {sectionOpen?.faces
+              ? <ChevronDown className="w-3 h-3" />
+              : <ChevronRight className="w-3 h-3" />}
+            <span className="flex-1 text-left">Roof faces</span>
+            <span className="text-slate-400 font-normal normal-case">{faces.length}</span>
+          </button>
+          {sectionOpen?.faces && (
           <ul className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
             {faces.map((f, i) => {
               const panelsOnFace = panelsPerFace.get(f.id) || 0;
@@ -2704,6 +2866,7 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
               );
             })}
           </ul>
+          )}
         </div>
       )}
 
@@ -2713,9 +2876,19 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
           world hazards the rep has flagged. */}
       {Array.isArray(obstructions) && obstructions.length > 0 && (
         <div className="border-b border-slate-200 flex-shrink-0">
-          <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-100">
-            Obstructions ({obstructions.length})
-          </div>
+          <button
+            type="button"
+            onClick={() => onToggleSection?.('obstructions')}
+            className="w-full flex items-center gap-1 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 hover:bg-slate-100 border-b border-slate-100"
+            title={sectionOpen?.obstructions ? 'Collapse this section' : 'Expand this section'}
+          >
+            {sectionOpen?.obstructions
+              ? <ChevronDown className="w-3 h-3" />
+              : <ChevronRight className="w-3 h-3" />}
+            <span className="flex-1 text-left">Obstructions</span>
+            <span className="text-slate-400 font-normal normal-case">{obstructions.length}</span>
+          </button>
+          {sectionOpen?.obstructions && (
           <ul className="divide-y divide-slate-100 max-h-40 overflow-y-auto">
             {obstructions.map((o, i) => (
               <li key={o.id} className="flex items-center gap-2 px-4 py-2 hover:bg-slate-50 group">
@@ -2738,16 +2911,26 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
               </li>
             ))}
           </ul>
+          )}
         </div>
       )}
 
-      {/* Phase 3b.9 — arrays list. Collapsed when empty so palette isn't
-          crowded on a fresh design; populates as the rep groups panels. */}
+      {/* Phase 3b.9 — arrays list. Collapsible header (Phase 3e cleanup). */}
       {Array.isArray(arrays) && arrays.length > 0 && (
         <div className="border-b border-slate-200 flex-shrink-0">
-          <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-100">
-            Arrays ({arrays.length})
-          </div>
+          <button
+            type="button"
+            onClick={() => onToggleSection?.('arrays')}
+            className="w-full flex items-center gap-1 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 hover:bg-slate-100 border-b border-slate-100"
+            title={sectionOpen?.arrays ? 'Collapse this section' : 'Expand this section'}
+          >
+            {sectionOpen?.arrays
+              ? <ChevronDown className="w-3 h-3" />
+              : <ChevronRight className="w-3 h-3" />}
+            <span className="flex-1 text-left">Arrays</span>
+            <span className="text-slate-400 font-normal normal-case">{arrays.length}</span>
+          </button>
+          {sectionOpen?.arrays && (
           <ul className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
             {arrays.map(a => {
               const isConfirming = confirmingArrayId === a.id;
@@ -2864,6 +3047,7 @@ function PanelPalette({ panels, loading, error, armedPanelSku, onArm, panelCount
               );
             })}
           </ul>
+          )}
         </div>
       )}
 

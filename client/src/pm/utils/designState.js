@@ -181,6 +181,7 @@ export function makeRoofFace({
   setbackMetres = DEFAULT_FACE_SETBACK_M,
   notes = '',
   sunshineKwhPerKwPerYear = null,
+  googleSegmentIndex = null,
 } = {}) {
   if (source !== 'google_solar' && source !== 'manual') {
     throw new Error(`[designState] makeRoofFace: source must be 'google_solar' or 'manual', got ${source}`);
@@ -207,6 +208,12 @@ export function makeRoofFace({
     // time; manual traces leave this null and inherit from other Google faces
     // (or the NZ default) via estimateFaceSunshine.
     sunshineKwhPerKwPerYear,
+    // Phase 3e — for google_solar faces, the source segmentIndex (0-based
+    // position in the buildingInsights roofSegmentStats array). Preserved
+    // so Google's solarPanels[] (which reference panels by segmentIndex)
+    // can be matched back to the correct face when importing Google's
+    // suggested layout. Null on manual traces.
+    googleSegmentIndex,
   };
 }
 
@@ -317,7 +324,7 @@ export function removeArray(state, id) {
 // lat/lng, so the polygon shows where the face is, not its exact edges.
 // Phase 3b.3 (manual tracing) will let the rep drag vertices to refine.
 // Later phases can use Google's `boundaryPolygon` if/when we start reading it.
-export function googleSegmentToRoofFace(seg) {
+export function googleSegmentToRoofFace(seg, indexInSegmentsArray = null) {
   const bbox = seg?.boundingBox;
   if (!bbox?.ne || !bbox?.sw) return null;
   if (typeof bbox.ne.latitude !== 'number' || typeof bbox.ne.longitude !== 'number') return null;
@@ -347,6 +354,7 @@ export function googleSegmentToRoofFace(seg) {
     azimuthDegrees: typeof seg.azimuthDegrees === 'number' ? seg.azimuthDegrees : null,
     areaMetres2:    typeof seg?.stats?.areaMeters2 === 'number' ? seg.stats.areaMeters2 : 0,
     sunshineKwhPerKwPerYear: medianSunshine,
+    googleSegmentIndex: Number.isInteger(indexInSegmentsArray) ? indexInSegmentsArray : null,
   });
 }
 
@@ -355,8 +363,8 @@ export function googleSegmentToRoofFace(seg) {
 export function googleSegmentsToRoofFaces(segments) {
   if (!Array.isArray(segments)) return [];
   const faces = [];
-  for (const seg of segments) {
-    const f = googleSegmentToRoofFace(seg);
+  for (let i = 0; i < segments.length; i++) {
+    const f = googleSegmentToRoofFace(segments[i], i);
     if (f) faces.push(f);
   }
   return faces;
@@ -554,6 +562,130 @@ export function copyArrayToFace({
   }
 
   return { state: next, copied, skipped, reasonCounts };
+}
+
+// ── Google 'suggest a layout' import (Phase 3e) ──────────────────────────
+// Google Solar returns solarPotential.solarPanels[] — an array of every
+// panel position Google's aerial + shading model considers usable. Each
+// element has { center: {latitude, longitude}, orientation: 'PORTRAIT' |
+// 'LANDSCAPE', segmentIndex: <int>, yearlyEnergyDcKwh: <number> }. Google
+// pre-sorts by yearlyEnergyDcKwh DESC, so panels[0] is the best-shaded
+// position and panels[N-1] is the worst.
+//
+// This helper turns that array into design-tool panels + arrays:
+//   • Every Google panel becomes a makePanel entry with the caller's chosen
+//     SKU (Google gives positions, not products — rep picks the product).
+//   • Panels are matched to faces via googleSegmentIndex (preserved on
+//     google_solar faces by googleSegmentToRoofFace). Panels whose segment
+//     isn't imported get skipped so we never orphan a panel.
+//   • For each face that ends up with imported panels, a new array is
+//     created named 'Segment N array' (auto-numbering falls out from array
+//     order for free — top-shaded position becomes S1P1, etc.).
+//
+// Returns { state, imported, skipped, arraysCreated, skippedReasons } —
+// skippedReasons is a Map<reason,count> so the caller can surface e.g.
+// '16 skipped: 14 overlap, 2 outside-face' when the armed SKU is bigger
+// than Google's assumed panel size.
+export function importGooglePanels({ state, googlePanels, sku, panelCatalogueBySku } = {}) {
+  const empty = { state, imported: 0, skipped: 0, arraysCreated: 0, skippedReasons: new Map() };
+  if (!state || !sku || !Array.isArray(googlePanels) || googlePanels.length === 0) return empty;
+
+  // Group google faces by segmentIndex for fast lookup.
+  const facesBySegmentIndex = new Map();
+  for (const f of state.roof?.faces || []) {
+    if (f?.source === 'google_solar' && Number.isInteger(f.googleSegmentIndex)) {
+      facesBySegmentIndex.set(f.googleSegmentIndex, f);
+    }
+  }
+  if (facesBySegmentIndex.size === 0) return empty;   // no faces to import onto
+
+  // Bucket panels by target faceId, preserving Google's yearlyEnergyDcKwh
+  // ordering (best-first). Google typically returns solarPanels sorted DESC
+  // by kWh, but we sort defensively so 'S1P1' is always the best position.
+  const panelsSorted = [...googlePanels].sort((a, b) =>
+    (b?.yearlyEnergyDcKwh || 0) - (a?.yearlyEnergyDcKwh || 0));
+
+  const bucketByFaceId = new Map();
+  let skipped = 0;
+  for (const gp of panelsSorted) {
+    const face = facesBySegmentIndex.get(Number(gp?.segmentIndex));
+    if (!face) { skipped++; continue; }
+    const centre = gp?.center;
+    if (typeof centre?.latitude !== 'number' || typeof centre?.longitude !== 'number') {
+      skipped++; continue;
+    }
+    if (!bucketByFaceId.has(face.id)) bucketByFaceId.set(face.id, []);
+    bucketByFaceId.get(face.id).push({
+      gp,
+      face,
+      orientation: gp.orientation === 'PORTRAIT' ? 'portrait' : 'landscape',
+    });
+  }
+
+  let next = state;
+  let imported = 0;
+  let arraysCreated = 0;
+  const skippedReasons = new Map();
+  const bumpReason = (r) => skippedReasons.set(r, (skippedReasons.get(r) || 0) + 1);
+  // Process faces in segmentIndex order for stable, predictable array
+  // numbering ('Segment 1 array' before 'Segment 2 array').
+  const orderedFaceIds = [...bucketByFaceId.keys()].sort((a, b) => {
+    const aIdx = facesBySegmentIndex.get(state.roof.faces.find(f => f.id === a)?.googleSegmentIndex)?.googleSegmentIndex ?? Infinity;
+    const bIdx = facesBySegmentIndex.get(state.roof.faces.find(f => f.id === b)?.googleSegmentIndex)?.googleSegmentIndex ?? Infinity;
+    return aIdx - bIdx;
+  });
+
+  // Look up SKU dimensions once — every rule check needs them.
+  const spec = panelCatalogueBySku?.get?.(sku);
+  const lenMm = Number(spec?.length_mm) > 0 ? Number(spec.length_mm) : 1755;
+  const widMm = Number(spec?.width_mm)  > 0 ? Number(spec.width_mm)  : 1038;
+
+  for (const faceId of orderedFaceIds) {
+    const bucket = bucketByFaceId.get(faceId);
+    const newPanelIds = [];
+    for (const { gp, face, orientation } of bucket) {
+      const centre = { latitude: gp.center.latitude, longitude: gp.center.longitude };
+      // Rule-check with the actual SKU dims. Google's positions assume a
+      // ~350W panel (~1750×1050mm); armed SKUs bigger than that overlap
+      // heavily at the same positions. Rule engine catches every conflict
+      // (outside-face, setback, overlap-panel, obstruction) and skips.
+      const check = checkPanelDropRules({
+        state: next, face,
+        panelCenter: centre,
+        panelLengthMm: lenMm, panelWidthMm: widMm,
+        orientation,
+        setbackMetres: Number.isFinite(face.setbackMetres) ? face.setbackMetres : DEFAULT_FACE_SETBACK_M,
+        panelCatalogueBySku,
+      });
+      if (!check.ok) { skipped++; bumpReason(check.reason); continue; }
+      try {
+        const panel = makePanel({
+          faceId: face.id,
+          sku,
+          center: centre,
+          rotationDegrees: typeof face.azimuthDegrees === 'number' ? face.azimuthDegrees : 0,
+          orientation,
+        });
+        next = addPanel(next, panel);
+        newPanelIds.push(panel.id);
+        imported++;
+      } catch {
+        skipped++;
+        bumpReason('invalid-panel');
+      }
+    }
+    if (newPanelIds.length > 0) {
+      const face = state.roof.faces.find(f => f.id === faceId);
+      const segIdx = face?.googleSegmentIndex;
+      const arrName = Number.isInteger(segIdx)
+        ? `Segment ${segIdx + 1} array`
+        : `Array ${(next.arrays?.length ?? 0) + 1}`;
+      next = addArray(next, makeArray({ name: arrName, panelIds: newPanelIds }));
+      arraysCreated++;
+    }
+  }
+
+  return { state: next, imported, skipped, arraysCreated, skippedReasons };
 }
 
 // ── Auto-layout (Phase 3b.13) ─────────────────────────────────────────────
