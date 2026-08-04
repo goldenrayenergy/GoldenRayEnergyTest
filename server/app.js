@@ -30,6 +30,7 @@ import packageRoutes from './routes/packages.js';
 import shopRoutes from './routes/shop.js';
 import tradeRequestRoutes from './routes/tradeRequests.js';
 import billAnalysisRoutes from './routes/billAnalysis.js';
+import pocRoutes from './routes/poc/index.js';
 import pmRoutes from './routes/pm/index.js';
 import publicProjectRoutes from './routes/public-projects.js';
 import qrRoutes from './routes/qr.js';
@@ -155,6 +156,15 @@ app.use('/api/packages', packageRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/trade-requests', tradeRequestRoutes);
 app.use('/api/bill-analysis', billAnalysisRoutes);
+
+// POC — new public quote flow (bill upload → map confirm → auto-designed proposal).
+// Feature-flagged so a POC-side bug can't affect live traffic. Unset ENABLE_POC (or
+// set to anything other than 'true') to unmount entirely — the router import above
+// is safe on its own; only mounting exposes the routes.
+if (process.env.ENABLE_POC === 'true') {
+  app.use('/api/poc', pocRoutes);
+}
+
 app.use('/api/pm', pmRoutes);  // PM tool (Phase A) — parallel project model, no overlap with /api/projects
 app.use('/api/public', publicProjectRoutes);  // Customer-facing project viewer (B-1) — no auth, gated by unguessable share_token
 app.use('/qr', qrRoutes);                     // QR-code redirect endpoint (Phase D) — no auth, logs scan + 302 to destination with UTM params

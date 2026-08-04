@@ -17,6 +17,10 @@ import BillAnalysisPage from './pages/BillAnalysisPage';
 import GetQuotePage from './pages/GetQuotePage';
 import PublicProposalPage from './pages/PublicProposalPage';
 
+// POC — new public quote flow spike; unlinked from anywhere, reachable only
+// by direct URL. Lazy-loaded so it doesn't add weight to the main bundle.
+const PocQuotePage = lazy(() => import('./pages/poc/QuotePage'));
+
 // Portal pages
 import PortalLayout from './components/layout/PortalLayout';
 import DashboardPage from './pages/portal/DashboardPage';
@@ -70,6 +74,16 @@ export default function App() {
       <Route path="/bill-analysis" element={<Navigate to="/get-quote" replace />} />
       <Route path="/bill-analysis/legacy" element={<BillAnalysisPage />} />
       <Route path="/get-quote" element={<GetQuotePage />} />
+
+      {/* POC — new quote flow spike (bill → map → design → 3-tier). Not linked. */}
+      <Route
+        path="/poc/quote"
+        element={
+          <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full" /></div>}>
+            <PocQuotePage />
+          </Suspense>
+        }
+      />
 
       {/* B-1 — Customer-facing magic-link viewer.
           Public (no auth), gated only by the unguessable share_token UUID
