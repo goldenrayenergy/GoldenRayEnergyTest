@@ -75,6 +75,12 @@ router.get('/options', async (req, res) => {
       Object.entries(catalogue.PANELS).map(([sku, p]) => ({
         sku, label: fmtPanelLabel(sku, p),
         brand: p.brand, watts: p.watts,
+        // Physical dimensions for the design-tool panel palette (Phase 3b.4).
+        // Kept null when the row hasn't been spec-filled yet — the palette
+        // falls back to a default panel size so the rep can still drop it.
+        length_mm: p.length_mm,
+        width_mm:  p.width_mm,
+        image_url: p.image_url,
       })), 'watts');
 
     const inverters = sortByBrandThenRating(

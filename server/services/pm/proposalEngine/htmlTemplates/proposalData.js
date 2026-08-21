@@ -292,6 +292,11 @@ export function buildProposalData({ spec, costResult, scenarios, engineering, bo
     },
     warranties: warrantyTerms(spec, catalogue),
     hardware: hardwareDetailBlocks(spec, catalogue, costResult),
+    // Google Solar API auto-analysis. Null when no analysis on file or when
+    // the caller didn't fetch/pass one. siteAnalysis PDF page renders only
+    // when status='ok' (failed/skipped states are hidden from customers —
+    // engineer sees them in SiteSurveySection).
+    roof_analysis: options.roofAnalysis || null,
     // Phase H6 — thread preferences through so SLD / scenarios can adapt
     // backup-circuit list, financing options, etc. to THIS customer.
     preferences: {

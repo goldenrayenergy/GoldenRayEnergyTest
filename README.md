@@ -105,6 +105,24 @@ This starts both:
 docker compose up --build
 ```
 
+### 7. POC quote flow (dev-only)
+
+The `/poc/quote` and `/poc/3d-test` routes host the earlier standalone spike
+of the quote flow. Kept in the repo for local reference — components in
+`client/src/pages/poc/QuotePage.jsx` are still imported by the merged
+`/get-quote` flow, so the code lives on regardless of route visibility.
+
+- **Client routes** — gated behind Vite's `import.meta.env.DEV`. Reachable
+  via `npm run dev`; physically absent from `npm run build` production
+  bundles (Vite dead-code-eliminates the block).
+- **Server API** — `/api/poc/*` is gated behind `ENABLE_POC=true`. Add
+  `ENABLE_POC=true` to `server/.env` to enable locally. Unset on Render
+  in production. Server logs `[server] POC endpoints ENABLED / disabled`
+  on boot so the current state is visible.
+
+Both gates must be true for POC to work end-to-end. Neither is set on
+production deployments.
+
 ## API Endpoints
 
 ### Authentication

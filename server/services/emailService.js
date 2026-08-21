@@ -244,6 +244,162 @@ export async function sendCustomerAckEmail({ form, projectCode, ownerName }) {
   });
 }
 
+// ── Phase B2 I3-followup (2026-08-21) — immediate "draft saved" email ────
+// Fires the moment a customer types their email into the header progressive-
+// capture input on the /get-quote wizard. Fulfils the "Email me if I don't
+// finish" promise the input label makes: silent DB writes were a broken
+// promise, so this ships the magic-link resume URL right away instead of
+// waiting on the 24-h bail-followup cron (which is still dormant per the
+// [[project-quote-flow-integration-plan]] scope lock).
+//
+// Distinct from sendBailFollowupEmail:
+//   • Fires ONCE, immediately on first draft save (leadService gates on
+//     !isUpdate so revisits don't re-email)
+//   • Softer tone — "we're holding your progress" not "you didn't finish"
+//   • Same magic-link CTA URL (/get-quote/resume/:enquiryId)
+export async function sendDraftSavedEmail({ form, resumeUrl }) {
+  if (!form?.email) {
+    console.log('Draft-saved: no email on form, skipping');
+    return null;
+  }
+  const firstName = (form.firstName || '').trim();
+  const friendly  = firstName && firstName !== 'Draft' ? firstName : 'there';
+  const cta       = resumeUrl || 'https://www.goldenrayenergy.co.nz/get-quote';
+
+  const body = `
+    <p style="font-size:14px">Kia ora <strong>${friendly}</strong>,</p>
+    <p style="color:#4b5563;font-size:13px">You started a solar quote with us — thanks. We've saved your progress so you can pick up on the same device, another device, or another day without losing your place.</p>
+
+    <div style="text-align:center;margin:22px 0">
+      <a href="${cta}" style="display:inline-block;background:linear-gradient(135deg,#f59e0b 0%,#d97706 100%);color:#fff;text-decoration:none;font-weight:800;font-size:14px;padding:14px 28px;border-radius:8px;box-shadow:0 4px 12px rgba(245,158,11,0.3)">Continue my quote →</a>
+      <div style="font-size:11px;color:#9ca3af;margin-top:8px">Bookmark this link — it works until you finalise the quote.</div>
+    </div>
+
+    <p style="color:#4b5563;font-size:13px"><strong>What you'll see when you come back</strong></p>
+    <ul style="color:#4b5563;font-size:13px;line-height:1.7;padding-left:18px;margin:8px 0">
+      <li>Your address + usage details already filled in</li>
+      <li>The roof analysis re-runs to make sure the numbers are fresh</li>
+      <li>Your tier pick (if you got that far) waiting to be finalised</li>
+    </ul>
+
+    <p style="color:#4b5563;font-size:13px">No rush. Questions in the meantime? Reply to this email or ring us on <strong>${COMPANY.phone}</strong>.</p>
+    <p style="font-size:13px;margin-top:18px">Talk soon,<br><strong>The ${COMPANY.name} team</strong></p>`;
+
+  return send({
+    to: form.email,
+    subject: `${friendly}, your solar quote is saved — pick up when you're ready`,
+    html: wrap({ body, footerNote: 'One email. No spam. Reply STOP to opt out of any future updates.' }),
+  });
+}
+
+// ── Phase B4 (2026-08-21) — customer proposal delivery email ─────────────
+// Sent from leadService.createOrUpdateLead after the merged /get-quote
+// residential flow completes /submit-with-design and we have a chosen tier
+// in hand. Two attachments:
+//   • the branded proposal PDF (generateProposalPDF adapter)
+//   • a soft-hold callback .ics (STATUS:TENTATIVE + TRANSP:TRANSPARENT)
+// Plus a "view online" magic-link to /p/{share_token} on the customer's
+// projects_v2 row so they don't need to keep the PDF handy to re-open the
+// proposal from any device.
+//
+// Distinct from sendCustomerAckEmail (which continues to fire on EVERY
+// residential submit — old wizard included — as a lightweight "we got it"
+// receipt). This one fires only when a real design + tier were picked, so
+// the customer receives BOTH: the fast ack, then the rich proposal email.
+export async function sendCustomerProposalDeliveryEmail({
+  form,
+  tier,
+  projectCode,
+  shareToken,
+  publicBaseUrl,
+  pdfBuffer,
+  pdfFilename,
+  icsBuffer,
+  icsFilename,
+  callbackLabel,   // e.g. "Mon, 24 Aug, 10:00 am NZST"
+}) {
+  if (!form?.email) {
+    console.log('No customer email — skipping proposal delivery');
+    return null;
+  }
+  const friendly = (form.firstName || form.lastName)
+    ? [form.firstName, form.lastName].filter(Boolean).join(' ').trim()
+    : 'there';
+  const first = form.firstName || 'there';
+  const base  = publicBaseUrl || process.env.PUBLIC_BASE_URL || 'https://www.goldenrayenergy.co.nz';
+  const viewOnlineUrl = shareToken ? `${base}/p/${shareToken}` : null;
+
+  const systemLabel = tier?.system_size_kwp || tier?.kwp
+    ? `${tier.system_size_kwp || tier.kwp} kW`
+    : '—';
+  const panelsLabel = tier?.panel?.count || tier?.panels || '—';
+  const batteryKwh  = tier?.battery?.usable_kwh || tier?.battery_kwh || 0;
+  const priceTotal  = tier?.pricing?.total_incl_gst || tier?.price;
+  const tierLabel   = tier?.label || tier?.name || 'Your proposal';
+
+  const savings25yr = tier?.savings?.expected_25yr_nzd
+                   || tier?.savings?.expected_25yr
+                   || tier?.savings_25yr;
+  const paybackYrs  = tier?.payback?.expected_years
+                   || tier?.payback_yrs
+                   || tier?.payback_years;
+
+  const body = `
+    <p style="font-size:14px">Kia ora <strong>${friendly}</strong>,</p>
+    <p style="color:#4b5563;font-size:13px">Your Goldenray solar proposal is ready. A specialist will call you <strong>${callbackLabel ? callbackLabel : 'within one business day'}</strong> to walk through it — we've added a soft hold to your calendar so you know when to expect us.</p>
+
+    <div style="background:linear-gradient(135deg,#fff7ed 0%,#ffedd5 100%);border-radius:10px;padding:16px 18px;margin:16px 0;border-left:4px solid #d97706">
+      <div style="font-size:11px;color:#92400e;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Your chosen system</div>
+      <div style="font-size:20px;font-weight:800;color:#1f2937">${tierLabel}</div>
+      <div style="font-size:12px;color:#78350f;margin-top:6px">${systemLabel} · ${panelsLabel} panels${batteryKwh > 0 ? ` · ${batteryKwh} kWh battery` : ''}${tier?.wattpilot_included ? ' · EV charger' : ''}</div>
+      ${priceTotal ? `<div style="font-size:18px;font-weight:800;color:#1f2937;margin-top:8px">${fmt$(priceTotal)}<span style="font-size:11px;color:#78350f;font-weight:500;margin-left:6px">incl. GST · installed</span></div>` : ''}
+    </div>
+
+    <div style="background:#f8fafc;border-radius:8px;padding:14px;margin:14px 0">
+      <div style="font-size:11px;color:#6b7280;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Headline numbers</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        ${form.address ? `<tr><td style="padding:3px 0;color:#6b7280">Address</td><td style="padding:3px 0;font-weight:600;text-align:right">${form.address}</td></tr>` : ''}
+        ${savings25yr  ? `<tr><td style="padding:3px 0;color:#6b7280">Est. 25-year savings</td><td style="padding:3px 0;font-weight:700;text-align:right;color:#059669">${fmt$(savings25yr)}</td></tr>` : ''}
+        ${paybackYrs   ? `<tr><td style="padding:3px 0;color:#6b7280">Estimated payback</td><td style="padding:3px 0;font-weight:700;text-align:right">${paybackYrs} years</td></tr>` : ''}
+        ${projectCode  ? `<tr><td style="padding:3px 0;color:#6b7280">Reference</td><td style="padding:3px 0;font-weight:600;text-align:right;font-family:monospace">${projectCode}</td></tr>` : ''}
+      </table>
+    </div>
+
+    ${viewOnlineUrl ? `
+    <div style="text-align:center;margin:22px 0">
+      <a href="${viewOnlineUrl}" style="display:inline-block;background:linear-gradient(135deg,#f59e0b 0%,#d97706 100%);color:#fff;text-decoration:none;font-weight:800;font-size:14px;padding:14px 28px;border-radius:8px;box-shadow:0 4px 12px rgba(245,158,11,0.3)">View proposal online →</a>
+      <div style="font-size:11px;color:#9ca3af;margin-top:8px">Or open the attached PDF — the calendar file (.ics) will add a soft hold to your calendar.</div>
+    </div>
+    ` : `
+    <p style="color:#4b5563;font-size:13px">The full proposal PDF is attached. The .ics file will add a soft hold to your calendar for our callback.</p>
+    `}
+
+    <p style="color:#4b5563;font-size:13px"><strong>What happens next</strong></p>
+    <ol style="color:#4b5563;font-size:13px;line-height:1.7;padding-left:18px;margin:8px 0">
+      <li>A specialist calls${callbackLabel ? ` around <strong>${callbackLabel}</strong>` : ' within one business day'} to walk through the proposal</li>
+      <li>We book a free site assessment to confirm roof + switchboard details</li>
+      <li>You get a final fixed quote — no obligation</li>
+    </ol>
+
+    <p style="color:#4b5563;font-size:13px">Questions before we call? Just reply to this email or ring us on <strong>${COMPANY.phone}</strong>.</p>
+    <p style="font-size:13px;margin-top:18px">Talk soon,<br><strong>The ${COMPANY.name} team</strong></p>`;
+
+  const attachments = [];
+  if (pdfBuffer) attachments.push({ filename: pdfFilename || 'GoldenRay-Solar-Proposal.pdf', content: pdfBuffer });
+  if (icsBuffer) attachments.push({
+    filename:     icsFilename || 'goldenray-callback-hold.ics',
+    content:      icsBuffer,
+    content_type: 'text/calendar; method=PUBLISH; charset=UTF-8',
+  });
+
+  return send({
+    to: form.email,
+    subject: `Your Goldenray solar proposal, ${first}${priceTotal ? ` — ${fmt$(priceTotal)} for ${systemLabel}` : ''}`,
+    html: wrap({ body, footerNote: 'PDF proposal + calendar hold attached. Reply anytime.' }),
+    attachments: attachments.length ? attachments : undefined,
+  });
+}
+
 // ── New: courtesy "we're closing your enquiry" when marked Lost/Disqualified ─
 // Sent once when sub_status is set to lost or disqualified. Polite close-out
 // so the customer doesn't think we ghosted them.

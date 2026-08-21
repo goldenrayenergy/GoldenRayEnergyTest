@@ -16,6 +16,7 @@ import QuoteNewPage from './pages/QuoteNewPage';
 import QuoteFormPage from './pages/QuoteFormPage';
 import QuoteDetailPage from './pages/QuoteDetailPage';
 import QuoteBillAnalysisPage from './pages/QuoteBillAnalysisPage';
+import DesignPage from './pages/DesignPage';
 import TroubleshootingPage from './pages/TroubleshootingPage';
 
 function PmProtected({ children }) {
@@ -45,6 +46,7 @@ export default function PmApp() {
         <Route path="quotes/:id" element={<QuoteDetailPage />} />
         <Route path="quotes/:id/edit" element={<QuoteFormPage />} />
         <Route path="quotes/:id/bill-analysis" element={<QuoteBillAnalysisPage />} />
+        <Route path="quotes/:id/design" element={<DesignPage />} />
         <Route path="troubleshooting" element={<TroubleshootingPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="admin/qr-codes" element={<QrCodesPage />} />

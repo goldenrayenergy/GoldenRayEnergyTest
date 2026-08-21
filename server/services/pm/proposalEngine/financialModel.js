@@ -46,7 +46,9 @@ function roundPreservingSum(rawValues, target) {
 }
 
 // Auckland monthly insolation distribution (% of annual yield per month, Jan→Dec)
-const MONTHLY_YIELD_PCT = [
+// Exported so the POC design route can fall back to this shape when PVGIS
+// monthly data isn't available (Google-Solar path addresses).
+export const MONTHLY_YIELD_PCT = [
   0.124, 0.105, 0.093, 0.063, 0.054, 0.042,
   0.047, 0.063, 0.076, 0.101, 0.113, 0.119,
 ];

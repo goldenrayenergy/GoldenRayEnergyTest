@@ -285,6 +285,13 @@ export default function QuoteDetailPage() {
                 Edit spec
               </Link>
             )}
+            {!isArchived && (
+              <Link to={`/pm/quotes/${id}/design`}
+                    className="px-3 py-1.5 border border-amber-500 text-amber-700 hover:bg-amber-50 rounded text-sm font-medium"
+                    title="Open the panel-layout design tool (Phase 3a — canvas + roof image)">
+                Design layout
+              </Link>
+            )}
             {/* Stage 1 → Stage 2 collapse — only when the spec is still
                 multi-tier (rep is mid-conversation with customer) AND the
                 quote is in an editable state. After click, the chosen tier

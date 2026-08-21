@@ -19,3 +19,8 @@ qr-output/
 
 # Apply-script log + CSV outputs — local-only artifacts
 server/scripts/out/
+
+# Regenerable puppeteer / test screenshot output — never commit
+server/scripts/test-output/
+server/scripts/e2e-phase3-out/
+server/scripts/_*-out/

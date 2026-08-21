@@ -80,6 +80,15 @@ function mapPanel(row) {
     cost_nzd: num(row.cost_nzd),
     margin_pct: num(row.default_margin_pct) ?? 30,
     peak_efficiency_pct: num(s.peak_efficiency_pct),
+    // Physical dimensions — needed by the DesignPage panel palette to draw
+    // panels on the roof at real-world size (canvas mm → image px via the
+    // tile's radiusMeters). Missing dims fall back to a Q.PEAK sensibly-sized
+    // default at the palette layer so old rows still render, just approximately.
+    length_mm:    num(s.length_mm),
+    width_mm:     num(s.width_mm),
+    thickness_mm: num(s.thickness_mm),
+    weight_kg:    num(s.weight_kg),
+    area_m2:      num(s.area_m2),
     datasheet_filename: s.datasheet_filename || null,
     image_url:     row.image_url || null,
     datasheet_url: row.datasheet_url || null,

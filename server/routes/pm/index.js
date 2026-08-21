@@ -16,6 +16,7 @@ import proposalRoutes from './proposals.js';
 import qrCodesRoutes from './qr-codes.js';
 import quotesRoutes from './quotes.js';
 import quoteActionsRoutes from './quote-actions.js';
+import designsRoutes from './designs.js';
 import contactsLookupRoutes from './contacts.js';
 import catalogueRoutes from './catalogue.js';
 import proposalEngineRoutes from './proposal-engine.js';
@@ -59,6 +60,10 @@ router.use('/contacts', contactsLookupRoutes);
 // deposit / audit-log / pdf download. Sits on the SAME /quotes prefix; Express
 // merges the two routers, with CRUD routes from quotesRoutes resolved first.
 router.use('/quotes', quoteActionsRoutes);
+
+// Phase 3a (design tool) — GET/PUT /api/pm/quotes/:id/design. Sits on the same
+// /quotes prefix as quotesRoutes + quoteActionsRoutes; Express merges.
+router.use('/quotes', designsRoutes);
 
 // MVP1_003 — products catalogue dropdown options (panels / inverters / batteries /
 // BMS / smart meters / EV chargers) from live products table with field aliasing.

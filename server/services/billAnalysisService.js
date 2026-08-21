@@ -67,20 +67,44 @@ export function aggregateBills(bills) {
 
 // ── Solar fit recommendation ──────────────────────────────────────────────
 //
-// Given annual kWh and the region's irradiance, recommend a system size
-// with ~20% headroom for future EV / hot water diversion.
+// Given annual kWh and the region's irradiance, recommend a system size.
+// 2026-08-19 · options.batteryKwh + options.evKmPerDay optional inputs
+// synced with poc/design.js:recommendSizeKw so PM tool + POC produce
+// identical sizing for the same customer.
+// Both default 0 = base-usage-only sizing (identical to pre-2026-08-19).
 
-export function recommendSystem(annualKwh, region = 'auckland') {
+const BATTERY_CYCLES_PER_YEAR = 300;   // ~5-6 cycles/week (weather-averaged)
+const BATTERY_RTE             = 0.92;
+const EV_KWH_PER_KM           = 0.20;
+
+export function recommendSystem(annualKwh, region = 'auckland', options = {}) {
+  const { batteryKwh: optBatteryKwh = 0, evKmPerDay = 0, roofCapKw = null } = options;
   const irradiance = (RATES.regions[region] || RATES.regions.auckland).irradiance_kwh_per_kw_per_year;
 
-  // Sizing: cover roughly 90-100% of consumption (don't oversize for residential —
-  // export-buyback rates are too low to justify it). Cap at 10 kW for
-  // residential; anything larger is commercial-grade and gets a custom quote.
+  // Battery + EV load addons — bring effective annual kWh up to include
+  // (a) battery cycling losses at 92% RTE, and (b) EV annual driving
+  // energy. Both zero by default. Matches poc/design.js formula.
+  const batteryAnnualLoss = Number(optBatteryKwh) > 0
+    ? Number(optBatteryKwh) * BATTERY_CYCLES_PER_YEAR * (1 - BATTERY_RTE)
+    : 0;
+  const evAnnualKwh = Number(evKmPerDay) > 0
+    ? Number(evKmPerDay) * EV_KWH_PER_KM * 365
+    : 0;
+  const effectiveAnnualKwh = annualKwh + batteryAnnualLoss + evAnnualKwh;
+
+  // Sizing: cover roughly 95% of effective consumption. Two caps applied:
+  //   • MAX_RESIDENTIAL_KW = 10  (business/regulatory)
+  //   • roofCapKw               (client-supplied physical roof capacity)
+  // Snap-to-standard REMOVED to match POC — panel-count granularity is now
+  // set by the downstream panelSelector's ceil(kwp/watts).
   const MAX_RESIDENTIAL_KW = 10;
-  const baseKw = Math.min(annualKwh * 0.95 / irradiance, MAX_RESIDENTIAL_KW);
-  // Snap to nearest standard residential size (3 / 5 / 6.6 / 10)
-  const standardSizes = [3, 5, 6.6, 10];
-  const recommendedKw = standardSizes.find(s => s >= baseKw) || MAX_RESIDENTIAL_KW;
+  const rawKw = (effectiveAnnualKwh * 0.95) / irradiance;
+  const roofCap = Number.isFinite(roofCapKw) && roofCapKw > 0 ? roofCapKw : Infinity;
+  const cappedKw = Math.min(rawKw, MAX_RESIDENTIAL_KW, roofCap);
+  // Round DOWN (not to 2 dp) so panelSelector's ceil(kw/watts) doesn't
+  // push panel count over the physical roof capacity. See design.js for
+  // the full rationale.
+  const recommendedKw = Math.floor(cappedKw * 10000) / 10000;
 
   // Battery sizing: enough to absorb the typical evening peak.
   // Without hourly data we estimate evening load as ~35% of daily total.

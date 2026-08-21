@@ -15,7 +15,28 @@ import ShopPage from './pages/ShopPage';
 import ShopProductDetailPage from './pages/ShopProductDetailPage';
 import BillAnalysisPage from './pages/BillAnalysisPage';
 import GetQuotePage from './pages/GetQuotePage';
+// Phase B3 (2026-08-21) — 30-second landing page that sells the merged
+// residential quote flow before the customer commits to the wizard. Sits
+// at /get-quote/preview so the current /get-quote wizard URL is unchanged.
+// [OWNER] approve copy/stats before promoting this URL widely.
+import GetQuoteLanding from './pages/quote/GetQuoteLanding';
+// Phase B2 I3 (2026-08-21) — magic-link resume for the merged /get-quote
+// residential wizard. Route: /get-quote/resume/:token. Deliberately not
+// lazy-loaded — it mounts ResidentialWizard synchronously with server-side
+// hydration payload, so lazy would add a spinner-flash on top of the API
+// fetch that ResumeQuotePage already handles.
+import ResumeQuotePage from './pages/quote/ResumeQuotePage';
 import PublicProposalPage from './pages/PublicProposalPage';
+
+// POC — new public quote flow spike; unlinked from anywhere, reachable only
+// by direct URL. Lazy-loaded so it doesn't add weight to the main bundle.
+const PocQuotePage = lazy(() => import('./pages/poc/QuotePage'));
+
+// POC 3D — Cesium + Google Photorealistic 3D Tiles smoke test.
+// Lazy-loaded because Cesium is ~1.5 MB gzipped; loading it on the landing
+// page would kill perf. Separate from the 2D POC quote page so nothing
+// existing breaks while the 3D rebuild is in progress.
+const CesiumSmokeTest = lazy(() => import('./pages/poc/3d/CesiumSmokeTest'));
 
 // Portal pages
 import PortalLayout from './components/layout/PortalLayout';
@@ -70,6 +91,40 @@ export default function App() {
       <Route path="/bill-analysis" element={<Navigate to="/get-quote" replace />} />
       <Route path="/bill-analysis/legacy" element={<BillAnalysisPage />} />
       <Route path="/get-quote" element={<GetQuotePage />} />
+      {/* Phase B3 landing page — sits at /preview so /get-quote wizard URL unchanged. */}
+      <Route path="/get-quote/preview" element={<GetQuoteLanding />} />
+      {/* Phase B2 I3 (2026-08-21) — bail-out magic-link resume. Token = enquiry.id UUID. */}
+      <Route path="/get-quote/resume/:token" element={<ResumeQuotePage />} />
+
+      {/* POC routes — DEV-ONLY (Phase E revision, 2026-08-21).
+          `import.meta.env.DEV` is true under `npm run dev`, false under
+          `npm run build`. Vite dead-code-eliminates the whole block at
+          production build time, so /poc/quote + /poc/3d-test physically
+          don't exist in the deployed bundle. POC code stays in the repo
+          + still bundled (the /get-quote steps import shared components
+          from QuotePage.jsx); only the CUSTOMER-VISIBLE ROUTES are gated.
+          Server-side /api/poc/* endpoints have their own ENABLE_POC env
+          var guard on Render; both gates need to be true for POC to work. */}
+      {import.meta.env.DEV && (
+        <>
+          <Route
+            path="/poc/quote"
+            element={
+              <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full" /></div>}>
+                <PocQuotePage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/poc/3d-test"
+            element={
+              <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-white bg-black"><div className="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full" /></div>}>
+                <CesiumSmokeTest />
+              </Suspense>
+            }
+          />
+        </>
+      )}
 
       {/* B-1 — Customer-facing magic-link viewer.
           Public (no auth), gated only by the unguessable share_token UUID

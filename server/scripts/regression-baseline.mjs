@@ -48,6 +48,14 @@ export const baseline = {
     'test-e2e-quote-lifecycle',
     'test-e2e-quote-day7-lifecycle',
     'test-e2e-two-customers',
+    // POC e2e suites — need Vite (:5173) + Express (:5000) up. Added to the
+    // list after 2026-06-26 baseline was written; they were slipping through
+    // as NEW-FAIL in every default `npm test` run because Google Solar +
+    // LiDAR cold-start makes the puppeteer/http flow easily exceed the
+    // runner's 120s per-suite budget. Both pass standalone (~15-30s each)
+    // with the servers up — run with `--with-server`.
+    'test-e2e-roof-analyse',
+    'test-e2e-browser',
   ],
   // Read PDF fixtures from machine-specific absolute paths (C:/Users/.../Downloads).
   // Non-portable until vendored into the repo. Run with --with-fixtures.

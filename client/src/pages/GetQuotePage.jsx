@@ -24,6 +24,11 @@ import { publicApi } from '../services/api';
 import WebsiteNav from '../components/website/WebsiteNav';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import AddressAutocomplete from '../components/ui/AddressAutocomplete';
+// Phase B1 ticket B1.1 (2026-08-20) — residential customers branch into the
+// merged 5-step wizard after picking the intent tile on Step 1. Commercial /
+// off-grid / PPA continue through this file's legacy step components.
+// See [[project-quote-flow-integration-plan]].
+import ResidentialWizard from './quote/ResidentialWizard';
 
 const fmt$ = n => '$' + Math.round(Number(n || 0)).toLocaleString('en-NZ');
 const fmtSign = n => (n >= 0 ? '+' : '') + fmt$(n);
@@ -173,7 +178,11 @@ export default function GetQuotePage() {
       <WebsiteNav />
 
       <main className="pt-12 pb-16 px-4 md:px-10">
-        <div className="max-w-3xl mx-auto">
+        {/* max-w-3xl for the legacy wizard's step components (they're
+            portrait-shaped forms). ResidentialWizard (Step 2+) needs wider
+            room for the 3D + 3 tier cards side-by-side. Width bumped to
+            max-w-6xl for residential 2026-08-20 (Phase B1 ticket B1.7). */}
+        <div className={`mx-auto ${step > 1 && customerType === 'residential' ? 'max-w-6xl' : 'max-w-3xl'}`}>
 
           {/* Prefilled package hint (when entering from a package detail page) */}
           {prefilledPackage && step === 1 && (
@@ -182,12 +191,29 @@ export default function GetQuotePage() {
             </div>
           )}
 
-          {/* Progress bar */}
-          <ProgressBar step={step} skipProjection={skipProjection} />
+          {/* Progress bar — hidden when residential branches into ResidentialWizard
+              (which has its own 5-step StepRail). Non-residential paths keep this bar. */}
+          {!(step > 1 && customerType === 'residential') && (
+            <ProgressBar step={step} skipProjection={skipProjection} />
+          )}
 
           {/* Step content */}
           {step === 1 && <Step1IntentPicker customerType={customerType} setCustomerType={setCustomerType} onPick={pickIntent} />}
-          {step === 2 && (
+
+          {/* Phase B1 ticket B1.1 — Residential handoff to the merged 5-step
+              flow. Only fires when customer picked "Residential" on Step 1
+              (default). Non-residential (commercial / off-grid / PPA)
+              continues through the legacy step components below. Old wizard
+              is untouched for those paths. */}
+          {step > 1 && customerType === 'residential' && (
+            <ResidentialWizard
+              intent={intent}
+              utm={utm}
+              onBack={() => setStep(1)}
+            />
+          )}
+
+          {step === 2 && customerType !== 'residential' && (
             <Step2Container
               subtitle={subtitleForIntent(intent, customerType)}
               onBack={back} onNext={next} nextEnabled={step2Ready}
@@ -198,7 +224,7 @@ export default function GetQuotePage() {
               {intent === 'manual_table' && <ManualTableBranch rows={manualRows} setRows={setManualRows} onSwitchToUpload={() => setIntent('bills')} />}
             </Step2Container>
           )}
-          {step === 3 && (
+          {step === 3 && customerType !== 'residential' && (
             <Step3Capture
               intent={intent}
               customerType={customerType}
@@ -215,7 +241,7 @@ export default function GetQuotePage() {
               }}
             />
           )}
-          {step === 4 && (
+          {step === 4 && customerType !== 'residential' && (
             <Step3Projection
               intent={intent}
               files={files}
@@ -229,7 +255,7 @@ export default function GetQuotePage() {
               onFallbackToManual={() => { setIntent('manual_table'); setStep(2); setAnalysisResult(null); }}
             />
           )}
-          {step === 5 && (
+          {step === 5 && customerType !== 'residential' && (
             <Step4ContactForm
               intent={intent}
               customerType={customerType}
@@ -297,7 +323,7 @@ export default function GetQuotePage() {
               }}
             />
           )}
-          {step === 6 && <Step5Confirmation contact={contact} customerType={customerType} />}
+          {step === 6 && customerType !== 'residential' && <Step5Confirmation contact={contact} customerType={customerType} />}
 
         </div>
       </main>
@@ -548,33 +574,72 @@ function Step1IntentPicker({ customerType, setCustomerType, onPick }) {
         )}
       </div>
 
-      {/* ── Intent cards (same as before — but framed by customer type above) ── */}
-      <div className="text-[10px] font-extrabold tracking-widest text-gray-500 dark:text-gray-400 mb-2 uppercase">
-        How would you like to proceed?
-      </div>
-      <div className="space-y-3">
-        <IntentCard color="amber" accuracy="±2%" icon="📄"
-          title="I have my power bills"
-          desc={isResidential
-            ? 'Upload 1-12 PDFs · Get your exact 25-year savings · Most accurate path'
-            : 'Upload your usage bills · Helps us scope your install accurately'}
-          onClick={() => onPick('bills')} />
-        <IntentCard color="blue" accuracy="±15%" icon="⚡"
-          title="I don't have bills handy"
-          desc={isResidential
-            ? 'Answer 4 quick questions · Get an estimate · Refine later'
-            : 'Answer a few questions about your site · We\'ll fill in detail on the call'}
-          onClick={() => onPick('estimate')} />
-        <IntentCard color="emerald" accuracy="FAST" icon="📞"
-          title="I just want a callback"
-          desc={isResidential
-            ? 'Skip the numbers · Sales rep will call within 24h'
-            : 'Skip the numbers · Our specialist will call to walk through your site'}
-          onClick={() => onPick('callback')} />
-      </div>
+      {/* Residential: single CTA — no intent tiles. Bill/spend/kWh choice
+          happens ONCE inside ResidentialWizard's tabbed Step 1 (no duplication
+          across two screens). "Just want a callback" is caught in two places
+          inside the merged flow: Step 3 site-survey fallback if analysis
+          fails, and a "prefer to talk to sales?" link on Step 5. Design
+          decision 2026-08-20 per Option 1. */}
+      {isResidential && (
+        <div>
+          <div className="rounded-2xl border border-amber-200 dark:border-amber-500/30 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-500/5 dark:to-orange-500/5 p-5 mb-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-500/20 grid place-items-center flex-shrink-0">
+                <span className="text-2xl">🏡</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-gray-900 dark:text-gray-100">
+                  Instant 3D quote &mdash; ~2 minutes
+                </div>
+                <div className="text-xs text-gray-600 dark:text-gray-300 mt-1 leading-relaxed">
+                  We&apos;ll analyse your roof from satellite + LiDAR, size a system, and give you 3 tiered quotes with 25-year savings. Real numbers, no waiting for a callback.
+                </div>
+                <ul className="text-[11px] text-gray-500 dark:text-gray-400 mt-2 space-y-0.5">
+                  <li>&check; 3D view of your roof with panels laid out</li>
+                  <li>&check; 3 tiers to choose from (essential / balanced / premium)</li>
+                  <li>&check; Downloadable PDF proposal at the end</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onPick('bills')}
+            className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold shadow-lg shadow-amber-500/20 transition"
+          >
+            Start my quote <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Non-residential (commercial / off-grid / PPA): keep the 3-intent
+          tiles as-is. Their legacy wizard depends on the intent routing. */}
+      {!isResidential && (
+        <>
+          <div className="text-[10px] font-extrabold tracking-widest text-gray-500 dark:text-gray-400 mb-2 uppercase">
+            How would you like to proceed?
+          </div>
+          <div className="space-y-3">
+            <IntentCard color="amber" accuracy="±2%" icon="📄"
+              title="I have my power bills"
+              desc="Upload your usage bills · Helps us scope your install accurately"
+              onClick={() => onPick('bills')} />
+            <IntentCard color="blue" accuracy="±15%" icon="⚡"
+              title="I don't have bills handy"
+              desc="Answer a few questions about your site · We'll fill in detail on the call"
+              onClick={() => onPick('estimate')} />
+            <IntentCard color="emerald" accuracy="FAST" icon="📞"
+              title="I just want a callback"
+              desc="Skip the numbers · Our specialist will call to walk through your site"
+              onClick={() => onPick('callback')} />
+          </div>
+        </>
+      )}
 
       <p className="text-[10px] text-gray-400 dark:text-gray-500 text-center mt-6">
-        All three paths produce one customer record. You can change your mind later.
+        {isResidential
+          ? 'You can pick your bill / spend / usage tab on the next step.'
+          : 'All three paths produce one customer record. You can change your mind later.'}
       </p>
     </div>
   );

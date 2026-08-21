@@ -124,6 +124,7 @@ export default function QuoteFormPage() {
   // engine-pick line ("Engine: ~17 panels (8.0 kWp ÷ 475W)"). Null when no
   // analysis on file — hints fall back to range + typical band only.
   const [billRec, setBillRec] = useState(null);
+  const [roofAnalysis, setRoofAnalysis] = useState(null);
 
   // Option 4c (b) — fetch tier strip settings once on mount
   useEffect(() => {
@@ -161,6 +162,21 @@ export default function QuoteFormPage() {
       .then(r => {
         if (cancelled || !r?.data) return;
         setBillRec(r.data.system_recommendation || null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [quote?.contact_id]);
+
+  // Google Solar roof analysis — populated by the wizard-submit pipeline.
+  // Silent on 204 (no analysis on file) and on error (SiteSurveySection just
+  // omits the panel when roofAnalysis is null).
+  useEffect(() => {
+    if (!quote?.contact_id) return;
+    let cancelled = false;
+    pmContactsAPI.latestRoofAnalysis(quote.contact_id)
+      .then(r => {
+        if (cancelled || !r?.data) return;
+        setRoofAnalysis(r.data);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -563,6 +579,7 @@ export default function QuoteFormPage() {
               errors={errorMap}
               engineSnapshot={previewResult || saveResult}
               billRecommendation={billRec}
+              roofAnalysis={roofAnalysis}
               costSnapshot={(() => {
                 const eng = (previewResult || saveResult)?.engine;
                 if (!eng) return null;
@@ -802,6 +819,13 @@ function SingleTierValidationPanel({ saveResult, previewing }) {
           : '✗ Cannot ship — see block reasons below.'}
       </div>
 
+      {/* Configuration errors surface when the engine refused the spec
+          (e.g. Stage 2 quote missing site-survey fields). Each entry has
+          a path + message; render as a bullet list under a clear heading
+          so the rep knows exactly what to fix before Generate PDF will
+          succeed. */}
+      <ConfigErrorList configErrors={saveResult.engine?.config_errors} />
+
       {saveResult.engine?.margin_floor_status && (
         <div className="text-xs">
           <span className="text-slate-500">Margin floor:</span>{' '}
@@ -889,6 +913,9 @@ function MultiTierValidationPanel({ saveResult, previewing }) {
           : `✗ ${tiers.filter(t => !t.can_ship).length}/${tiers.length} tier(s) blocked.`}
       </div>
 
+      {/* Top-level config_errors (rare: missing tiers[], duplicate ids etc.) */}
+      <ConfigErrorList configErrors={eng.config_errors} heading="Configuration errors (spec-level)" />
+
       {/* Per-tier rows */}
       <div className="space-y-2">
         {tiers.map((t, i) => {
@@ -958,6 +985,12 @@ function MultiTierValidationPanel({ saveResult, previewing }) {
                   <FindingCards hardFails={t.hard_fails} softWarnings={t.soft_warnings} />
                 </div>
               )}
+              {/* Per-tier config_errors (e.g. site_survey missing for this tier) */}
+              {t.config_errors?.length > 0 && (
+                <div className="mt-2">
+                  <ConfigErrorList configErrors={t.config_errors} heading={`Configuration errors — ${t.label}`} />
+                </div>
+              )}
             </div>
           );
         })}
@@ -981,6 +1014,33 @@ function MultiTierValidationPanel({ saveResult, previewing }) {
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// ── Config-error list (P6-2026-07 bug fix) ─────────────────────────────────
+// Renders engine config_errors as a red bullet list under a compact heading.
+// Used by both single-tier and multi-tier validation panels — surfaces the
+// spec-level issues that make /generate refuse (e.g. Stage 2 quote missing
+// site-survey fields) BEFORE the rep clicks Generate PDF.
+//
+// Each config_error is either { path, message } or a bare string. Formats
+// as "path — message" when both present.
+function ConfigErrorList({ configErrors, heading = 'Configuration errors' }) {
+  if (!Array.isArray(configErrors) || configErrors.length === 0) return null;
+  return (
+    <div>
+      <h4 className="text-xs font-semibold text-rose-700 mb-1">{heading}</h4>
+      <ul className="space-y-1 text-xs text-rose-700">
+        {configErrors.map((e, i) => {
+          const text = typeof e === 'string' ? e
+            : e?.path && e?.message ? `${e.path} — ${e.message}`
+            : e?.message ? e.message
+            : e?.path ? `${e.path} (missing detail)`
+            : JSON.stringify(e);
+          return <li key={i}>• {text}</li>;
+        })}
+      </ul>
     </div>
   );
 }

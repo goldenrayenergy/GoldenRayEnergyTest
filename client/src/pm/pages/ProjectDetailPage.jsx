@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { pmProjectsAPI } from '../services/pmApi';
+import { pmContactsAPI } from '../services/pmQuotesApi';
 import { fmtDateLong } from '../../utils/format';
 import ItemPanel from '../components/ItemPanel';
 import { SkeletonProjectDetail, LoadError } from '../components/LoadingSkeletons';
@@ -58,6 +59,24 @@ export default function ProjectDetailPage() {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
 
+  // Google Solar roof analysis for this project's contact. Silent on 204
+  // (no analysis on file), on error (endpoint down), and on non-'ok' status
+  // — the info card only renders when there's a successful analysis. All
+  // other states surface in the quote-form Site Survey tab instead.
+  const [roofAnalysis, setRoofAnalysis] = useState(null);
+  useEffect(() => {
+    const contactId = project?.contact_id;
+    if (!contactId) return;
+    let cancelled = false;
+    pmContactsAPI.latestRoofAnalysis(contactId)
+      .then(r => {
+        if (cancelled || !r?.data) return;
+        setRoofAnalysis(r.data);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [project?.contact_id]);
+
   async function setLaneStatus(lane, status, blockedReason) {
     setBusyKey(`${lane}.status`);
     setError('');
@@ -109,6 +128,8 @@ export default function ProjectDetailPage() {
           {error}
         </div>
       )}
+
+      <RoofPotentialCard roofAnalysis={roofAnalysis} />
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {LANES.map(lane => {
@@ -373,6 +394,71 @@ function ProposalDownloadButtons({ projectId, hasBill }) {
         {downloading === 2 ? '⏳ Generating…' : '📄 Stage 2 PDF'}
       </button>
       {error && <div className="text-[10px] text-red-600 max-w-[200px] break-words">{error}</div>}
+    </div>
+  );
+}
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// RoofPotentialCard — slim summary of Google Solar auto-analysis
+//
+// Renders only when a successful analysis exists (status='ok'). Other
+// states are shown in the quote-form Site Survey tab instead — the
+// project-view info card is meant to be a compact "at a glance" surface,
+// not a diagnostic panel.
+// ────────────────────────────────────────────────────────────────────────────
+function RoofPotentialCard({ roofAnalysis }) {
+  if (!roofAnalysis || roofAnalysis.status !== 'ok') return null;
+
+  const a = roofAnalysis;
+  const panels    = a.max_array_panels_count ?? '—';
+  const sunshine  = a.max_sunshine_hours_per_year != null ? Math.round(a.max_sunshine_hours_per_year) : '—';
+  const areaM2    = a.max_array_area_m2 != null ? Number(a.max_array_area_m2).toFixed(0) : '—';
+  const segCount  = Array.isArray(a.roof_segments) ? a.roof_segments.length : 0;
+  const quality   = a.imagery_quality || '—';
+
+  return (
+    <div className="mb-4 bg-white border border-slate-200 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">
+          Solar potential (Google Solar)
+        </h2>
+        <span className="text-[10px] text-slate-500">
+          Auto-analysed from aerial imagery · imagery quality {quality}
+        </span>
+      </div>
+      {a.roof_image_signed_url ? (
+        <div className="grid grid-cols-[220px_1fr] gap-4 items-start">
+          <img
+            src={a.roof_image_signed_url}
+            alt="Aerial view of the roof"
+            className="w-full h-auto max-h-40 object-contain rounded border border-slate-200 bg-white"
+          />
+          <div className="grid grid-cols-2 gap-4">
+            <StatTile label="Max panels" value={panels} sub="that fit on roof" />
+            <StatTile label="Usable area" value={`${areaM2}`} sub="square metres" />
+            <StatTile label="Sunshine" value={sunshine} sub="hours per year" />
+            <StatTile label="Roof segments" value={segCount} sub="facings identified" />
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-4 gap-4">
+          <StatTile label="Max panels" value={panels} sub="that fit on roof" />
+          <StatTile label="Usable area" value={`${areaM2}`} sub="square metres" />
+          <StatTile label="Sunshine" value={sunshine} sub="hours per year" />
+          <StatTile label="Roof segments" value={segCount} sub="facings identified" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatTile({ label, value, sub }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">{label}</div>
+      <div className="text-xl font-bold text-slate-900 mt-0.5">{value}</div>
+      <div className="text-[10px] text-slate-500">{sub}</div>
     </div>
   );
 }

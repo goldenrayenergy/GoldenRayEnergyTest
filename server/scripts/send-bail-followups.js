@@ -180,10 +180,16 @@ for (const enquiry of candidates) {
   //    retries. (Without this rollback an SMTP outage would burn the
   //    customer's only chance at a follow-up.)
   try {
+    // Phase B2 I3 (2026-08-21) — magic-link resume URL. The enquiry.id IS
+    // the token (a UUID, unguessable, invalidates automatically once /submit-
+    // with-design promotes the row from 'partial' → 'new'). PUBLIC_BASE_URL
+    // override lets local/staging runs point at a different origin.
+    const publicBase = process.env.PUBLIC_BASE_URL || 'https://www.goldenrayenergy.co.nz';
+    const resumeUrl  = `${publicBase}/get-quote/resume/${enquiry.id}`;
     const result = await sendBailFollowupEmail({
       enquiry,
       analysis,
-      resumeUrl: 'https://www.goldenrayenergy.co.nz/get-quote',
+      resumeUrl,
     });
     console.log(`  ✅ ${enquiry.id.slice(0, 8)} → ${enquiry.email} · variant=${variant} · resend_id=${result?.id || '—'}`);
     sent++;

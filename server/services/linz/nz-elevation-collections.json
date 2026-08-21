@@ -1,0 +1,1129 @@
+{
+  "generatedAt": "2026-08-06",
+  "catalogUrl": "https://nz-elevation.s3-ap-southeast-2.amazonaws.com/catalog.json",
+  "total": 102,
+  "collections": [
+    {
+      "collectionPath": "new-zealand/new-zealand/dsm_1m/2193",
+      "title": "New Zealand LiDAR 1m DSM",
+      "bbox": [
+        166.9691106,
+        -47.239115,
+        178.8574378,
+        -34.0291036
+      ],
+      "itemCount": 424
+    },
+    {
+      "collectionPath": "west-coast/west-coast_2020-2022/dsm_1m/2193",
+      "title": "West Coast LiDAR 1m DSM (2020-2024)",
+      "bbox": [
+        168.0352097,
+        -44.5233786,
+        172.742493,
+        -40.7163816
+      ],
+      "itemCount": 843
+    },
+    {
+      "collectionPath": "canterbury/canterbury_2020-2023/dsm_1m/2193",
+      "title": "Canterbury LiDAR 1m DSM (2020-2025)",
+      "bbox": [
+        169.4839839,
+        -45.1015354,
+        174.0724206,
+        -41.8817418
+      ],
+      "itemCount": 1273
+    },
+    {
+      "collectionPath": "northland/northland_2018-2020/dsm_1m/2193",
+      "title": "Northland LiDAR 1m DSM (2018-2020)",
+      "bbox": [
+        171.9837701,
+        -36.4327099,
+        174.8350624,
+        -34.0962294
+      ],
+      "itemCount": 502
+    },
+    {
+      "collectionPath": "waikato/waikato_2021/dsm_1m/2193",
+      "title": "Waikato LiDAR 1m DSM (2021)",
+      "bbox": [
+        174.5702773,
+        -39.329461,
+        176.7362937,
+        -36.4037416
+      ],
+      "itemCount": 873
+    },
+    {
+      "collectionPath": "canterbury/canterbury_2018-2019/dsm_1m/2193",
+      "title": "Canterbury LiDAR 1m DSM (2018-2019)",
+      "bbox": [
+        170.6822667,
+        -44.98452,
+        173.1465831,
+        -42.5999333
+      ],
+      "itemCount": 290
+    },
+    {
+      "collectionPath": "canterbury/canterbury_2016-2017/dsm_1m/2193",
+      "title": "Canterbury LiDAR 1m DSM (2016-2017)",
+      "bbox": [
+        169.7662116,
+        -45.432701,
+        172.672706,
+        -43.4392042
+      ],
+      "itemCount": 175
+    },
+    {
+      "collectionPath": "southland/southland_2020-2023/dsm_1m/2193",
+      "title": "Southland LiDAR 1m DSM (2020-2024)",
+      "bbox": [
+        167.1806453,
+        -46.6893848,
+        169.3363348,
+        -44.6247872
+      ],
+      "itemCount": 665
+    },
+    {
+      "collectionPath": "otago/otago_2016/dsm_1m/2193",
+      "title": "Otago LiDAR 1m DSM (2016)",
+      "bbox": [
+        168.8244481,
+        -46.4456066,
+        171.2058988,
+        -44.6725407
+      ],
+      "itemCount": 160
+    },
+    {
+      "collectionPath": "bay-of-plenty/bay-of-plenty_2019-2022/dsm_1m/2193",
+      "title": "Bay of Plenty LiDAR 1m DSM (2019-2022)",
+      "bbox": [
+        175.7942516,
+        -38.909689,
+        178.1384604,
+        -37.2338091
+      ],
+      "itemCount": 454
+    },
+    {
+      "collectionPath": "hawkes-bay/hawkes-bay_2020-2021/dsm_1m/2193",
+      "title": "Hawke's Bay LiDAR 1m DSM (2020-2021)",
+      "bbox": [
+        176.0260349,
+        -40.4739342,
+        178.0283496,
+        -38.5592701
+      ],
+      "itemCount": 471
+    },
+    {
+      "collectionPath": "hawkes-bay/hawkes-bay_2023/dsm_1m/2193",
+      "title": "Hawke's Bay LiDAR 1m DSM (2023-2024)",
+      "bbox": [
+        176.0260349,
+        -40.4739342,
+        178.0283496,
+        -38.5592701
+      ],
+      "itemCount": 498
+    },
+    {
+      "collectionPath": "otago/coastal-catchments_2021/dsm_1m/2193",
+      "title": "Otago - Coastal Catchments LiDAR 1m DSM (2021)",
+      "bbox": [
+        169.1442885,
+        -46.691381,
+        171.2058988,
+        -44.8508836
+      ],
+      "itemCount": 187
+    },
+    {
+      "collectionPath": "hawkes-bay/gisborne-and-hawkes-bay-cyclone-gabrielle-river-flood_2023/dsm_1m/2193",
+      "title": "Gisborne and Hawke's Bay - Cyclone Gabrielle River Flood LiDAR 1m DSM (2023)",
+      "bbox": [
+        176.4556302,
+        -40.019003,
+        178.3620224,
+        -38.0678855
+      ],
+      "itemCount": 127
+    },
+    {
+      "collectionPath": "marlborough/marlborough_2020-2022/dsm_1m/2193",
+      "title": "Marlborough LiDAR 1m DSM (2020-2022)",
+      "bbox": [
+        172.6801711,
+        -42.5351814,
+        174.458987,
+        -40.6496832
+      ],
+      "itemCount": 408
+    },
+    {
+      "collectionPath": "canterbury/kaikoura-and-waimakariri_2022/dsm_1m/2193",
+      "title": "Canterbury - Kaikōura and Waimakariri LiDAR 1m DSM (2022)",
+      "bbox": [
+        172.0213315,
+        -43.506864,
+        173.9594288,
+        -42.0772793
+      ],
+      "itemCount": 34
+    },
+    {
+      "collectionPath": "manawatu-whanganui/manawatu-whanganui_2015-2016/dsm_1m/2193",
+      "title": "Manawatū-Whanganui LiDAR 1m DSM (2015-2016)",
+      "bbox": [
+        174.7100346,
+        -40.765512,
+        176.0833559,
+        -38.7557257
+      ],
+      "itemCount": 153
+    },
+    {
+      "collectionPath": "gisborne/gisborne_2018-2020/dsm_1m/2193",
+      "title": "Gisborne LiDAR 1m DSM (2018-2020)",
+      "bbox": [
+        177.1042804,
+        -38.9989083,
+        178.6355576,
+        -37.4863429
+      ],
+      "itemCount": 305
+    },
+    {
+      "collectionPath": "gisborne/gisborne_2023/dsm_1m/2193",
+      "title": "Gisborne LiDAR 1m DSM (2023)",
+      "bbox": [
+        177.1042804,
+        -38.9989083,
+        178.6355576,
+        -37.4863429
+      ],
+      "itemCount": 305
+    },
+    {
+      "collectionPath": "tasman/tasman_2020-2022/dsm_1m/2193",
+      "title": "Tasman LiDAR 1m DSM (2020-2022)",
+      "bbox": [
+        172.0435002,
+        -42.3395863,
+        173.3166108,
+        -40.5883396
+      ],
+      "itemCount": 310
+    },
+    {
+      "collectionPath": "waikato/west-coast-and-hauraki-plains_2015/dsm_1m/2193",
+      "title": "Waikato - West Coast and Hauraki Plains LiDAR 1m DSM (2015)",
+      "bbox": [
+        174.5702773,
+        -38.7625134,
+        175.7447982,
+        -36.9977812
+      ],
+      "itemCount": 86
+    },
+    {
+      "collectionPath": "waikato/waikato_2024/dsm_1m/2193",
+      "title": "Waikato LiDAR 1m DSM (2024)",
+      "bbox": [
+        174.6540045,
+        -37.8985301,
+        175.9722922,
+        -36.4119692
+      ],
+      "itemCount": 199
+    },
+    {
+      "collectionPath": "wellington/wellington_2013-2014/dsm_1m/2193",
+      "title": "Wellington LiDAR 1m DSM (2013-2014)",
+      "bbox": [
+        174.5749311,
+        -41.6707333,
+        176.3820697,
+        -40.6067447
+      ],
+      "itemCount": 300
+    },
+    {
+      "collectionPath": "auckland/auckland-part-2_2024/dsm_1m/2193",
+      "title": "Auckland Part 2 LiDAR 1m DSM (2024)",
+      "bbox": [
+        174.1503643,
+        -37.3298549,
+        175.5940431,
+        -36.0228458
+      ],
+      "itemCount": 172
+    },
+    {
+      "collectionPath": "canterbury/canterbury_2010/dsm_1m/2193",
+      "title": "Canterbury LiDAR 1m DSM (2010)",
+      "bbox": [
+        170.983072,
+        -44.6605991,
+        172.4941877,
+        -43.4992178
+      ],
+      "itemCount": 100
+    },
+    {
+      "collectionPath": "bay-of-plenty/bay-of-plenty_2018-2019/dsm_1m/2193",
+      "title": "Bay of Plenty LiDAR 1m DSM (2018-2019)",
+      "bbox": [
+        175.8509111,
+        -38.5211801,
+        177.3479462,
+        -37.3721055
+      ],
+      "itemCount": 86
+    },
+    {
+      "collectionPath": "taranaki/taranaki_2021/dsm_1m/2193",
+      "title": "Taranaki LiDAR 1m DSM (2021)",
+      "bbox": [
+        173.6951122,
+        -39.9290771,
+        175.0828484,
+        -38.6936157
+      ],
+      "itemCount": 283
+    },
+    {
+      "collectionPath": "manawatu-whanganui/whanganui-river-catchment_2025/dsm_1m/2193",
+      "title": "Manawatū-Whanganui - Whanganui River Catchment LiDAR 1m DSM (2025)",
+      "bbox": [
+        174.7100346,
+        -40.0534343,
+        175.7437045,
+        -38.4195775
+      ],
+      "itemCount": 298
+    },
+    {
+      "collectionPath": "auckland/auckland-north_2016-2018/dsm_1m/2193",
+      "title": "Auckland North LiDAR 1m DSM (2016-2018)",
+      "bbox": [
+        174.0977806,
+        -37.0772518,
+        175.5940431,
+        -36.0228458
+      ],
+      "itemCount": 192
+    },
+    {
+      "collectionPath": "manawatu-whanganui/manawatu-whanganui_2024/dsm_1m/2193",
+      "title": "Manawatū-Whanganui LiDAR 1m DSM (2024)",
+      "bbox": [
+        175.4452746,
+        -40.8042299,
+        176.6551272,
+        -39.7031899
+      ],
+      "itemCount": 138
+    },
+    {
+      "collectionPath": "bay-of-plenty/bay-of-plenty_2024/dsm_1m/2193",
+      "title": "Bay of Plenty LiDAR 1m DSM (2024)",
+      "bbox": [
+        175.8509111,
+        -38.11634,
+        177.3479462,
+        -37.3721055
+      ],
+      "itemCount": 76
+    },
+    {
+      "collectionPath": "bay-of-plenty/tauranga-and-coast_2015/dsm_1m/2193",
+      "title": "Bay of Plenty - Tauranga and Coast LiDAR 1m DSM (2015)",
+      "bbox": [
+        175.8533819,
+        -38.0554072,
+        177.4570272,
+        -37.3721055
+      ],
+      "itemCount": 64
+    },
+    {
+      "collectionPath": "tasman/golden-bay_2017/dsm_1m/2193",
+      "title": "Tasman - Golden Bay LiDAR 1m DSM (2017)",
+      "bbox": [
+        172.401518,
+        -41.8218757,
+        173.2014805,
+        -40.4590873
+      ],
+      "itemCount": 52
+    },
+    {
+      "collectionPath": "otago/central-otago_2022-2023/dsm_1m/2193",
+      "title": "Otago - Central Otago LiDAR 1m DSM (2022-2023)",
+      "bbox": [
+        169.0452978,
+        -45.532782,
+        170.1155572,
+        -44.5604602
+      ],
+      "itemCount": 143
+    },
+    {
+      "collectionPath": "canterbury/christchurch-and-selwyn_2015/dsm_1m/2193",
+      "title": "Canterbury - Christchurch and Selwyn LiDAR 1m DSM (2015)",
+      "bbox": [
+        171.6032562,
+        -43.959082,
+        172.8513887,
+        -43.2425921
+      ],
+      "itemCount": 90
+    },
+    {
+      "collectionPath": "northland/northland_2024/dsm_1m/2193",
+      "title": "Northland LiDAR 1m DSM (2024)",
+      "bbox": [
+        173.718208,
+        -36.4327099,
+        174.6290608,
+        -35.453677
+      ],
+      "itemCount": 153
+    },
+    {
+      "collectionPath": "waikato/reporoa-and-upper-piako-river_2019/dsm_1m/2193",
+      "title": "Waikato - Reporoa and Upper Piako River LiDAR 1m DSM (2019)",
+      "bbox": [
+        175.584141,
+        -38.5310391,
+        176.5480563,
+        -37.6392367
+      ],
+      "itemCount": 26
+    },
+    {
+      "collectionPath": "canterbury/kaikoura_2012/dsm_1m/2193",
+      "title": "Canterbury - Kaikōura LiDAR 1m DSM (2012)",
+      "bbox": [
+        173.2056449,
+        -42.9240384,
+        174.0724206,
+        -41.9465794
+      ],
+      "itemCount": 44
+    },
+    {
+      "collectionPath": "canterbury/selwyn_2023/dsm_1m/2193",
+      "title": "Canterbury - Selwyn LiDAR 1m DSM (2023)",
+      "bbox": [
+        171.6032562,
+        -43.959082,
+        172.6730573,
+        -43.2425921
+      ],
+      "itemCount": 102
+    },
+    {
+      "collectionPath": "nelson/top-of-the-south-flood_2022/dsm_1m/2193",
+      "title": "Nelson and Tasman - Top of the South Flood LiDAR 1m DSM (2022)",
+      "bbox": [
+        172.7437525,
+        -41.5623833,
+        173.715274,
+        -40.7839011
+      ],
+      "itemCount": 56
+    },
+    {
+      "collectionPath": "marlborough/marlborough_2018/dsm_1m/2193",
+      "title": "Marlborough LiDAR 1m DSM (2018)",
+      "bbox": [
+        173.2590459,
+        -41.948916,
+        174.2425113,
+        -41.2327826
+      ],
+      "itemCount": 52
+    },
+    {
+      "collectionPath": "manawatu-whanganui/manawatu-whanganui_2022-2023/dsm_1m/2193",
+      "title": "Manawatū-Whanganui LiDAR 1m DSM (2022-2023)",
+      "bbox": [
+        175.052043,
+        -40.6229895,
+        176.1338432,
+        -39.984514
+      ],
+      "itemCount": 92
+    },
+    {
+      "collectionPath": "manawatu-whanganui/oroua_2025/dsm_1m/2193",
+      "title": "Manawatū-Whanganui - Oroua LiDAR 1m DSM (2025)",
+      "bbox": [
+        175.3440563,
+        -40.5008146,
+        176.181127,
+        -39.7118532
+      ],
+      "itemCount": 94
+    },
+    {
+      "collectionPath": "manawatu-whanganui/rangitikei-river_2021/dsm_1m/2193",
+      "title": "Manawatū-Whanganui - Rangitīkei River LiDAR 1m DSM (2021)",
+      "bbox": [
+        175.1726498,
+        -40.3745087,
+        176.0571022,
+        -39.7061852
+      ],
+      "itemCount": 30
+    },
+    {
+      "collectionPath": "auckland/auckland-part-1_2024/dsm_1m/2193",
+      "title": "Auckland Part 1 LiDAR 1m DSM (2024)",
+      "bbox": [
+        174.3677505,
+        -37.3346925,
+        175.0281809,
+        -36.5514359
+      ],
+      "itemCount": 109
+    },
+    {
+      "collectionPath": "waikato/huntly_2015-2019/dsm_1m/2193",
+      "title": "Waikato - Huntly LiDAR 1m DSM (2015-2019)",
+      "bbox": [
+        174.6525807,
+        -37.6503992,
+        175.688171,
+        -37.196423
+      ],
+      "itemCount": 53
+    },
+    {
+      "collectionPath": "auckland/auckland-south_2016-2017/dsm_1m/2193",
+      "title": "Auckland South LiDAR 1m DSM (2016-2017)",
+      "bbox": [
+        174.4837264,
+        -37.3346925,
+        175.3504479,
+        -36.8082191
+      ],
+      "itemCount": 85
+    },
+    {
+      "collectionPath": "canterbury/hurunui-rivers_2013/dsm_1m/2193",
+      "title": "Canterbury - Hurunui Rivers LiDAR 1m DSM (2013)",
+      "bbox": [
+        172.500061,
+        -42.9241895,
+        173.3815101,
+        -42.4698929
+      ],
+      "itemCount": 53
+    },
+    {
+      "collectionPath": "tasman/abel-tasman-and-golden-bay_2023/dsm_1m/2193",
+      "title": "Tasman - Abel Tasman and Golden Bay LiDAR 1m DSM (2023)",
+      "bbox": [
+        172.401518,
+        -41.1084811,
+        173.0857515,
+        -40.589008
+      ],
+      "itemCount": 41
+    },
+    {
+      "collectionPath": "canterbury/banks-peninsula_2023/dsm_1m/2193",
+      "title": "Canterbury - Banks Peninsula LiDAR 1m DSM (2023)",
+      "bbox": [
+        172.3127142,
+        -43.9615254,
+        173.149415,
+        -43.5722488
+      ],
+      "itemCount": 54
+    },
+    {
+      "collectionPath": "canterbury/mackenzie_2015/dsm_1m/2193",
+      "title": "Canterbury - Mackenzie LiDAR 1m DSM (2015)",
+      "bbox": [
+        169.9006493,
+        -44.5118652,
+        170.5154636,
+        -43.9938781
+      ],
+      "itemCount": 44
+    },
+    {
+      "collectionPath": "tasman/motueka-river-valley_2018-2019/dsm_1m/2193",
+      "title": "Tasman - Motueka River Valley LiDAR 1m DSM (2018-2019)",
+      "bbox": [
+        172.5686916,
+        -41.4975302,
+        173.1434853,
+        -41.0435377
+      ],
+      "itemCount": 29
+    },
+    {
+      "collectionPath": "canterbury/christchurch-and-ashley-river_2018-2019/dsm_1m/2193",
+      "title": "Canterbury - Christchurch and Ashley River LiDAR 1m DSM (2018-2019)",
+      "bbox": [
+        172.3758499,
+        -43.7020304,
+        172.8513887,
+        -43.1818868
+      ],
+      "itemCount": 36
+    },
+    {
+      "collectionPath": "wellington/south-wairarapa_2025/dsm_1m/2193",
+      "title": "Wellington - South Wairarapa LiDAR 1m DSM (2025)",
+      "bbox": [
+        175.034859,
+        -41.4763206,
+        175.5502985,
+        -41.0180826
+      ],
+      "itemCount": 39
+    },
+    {
+      "collectionPath": "canterbury/banks-peninsula_2018-2019/dsm_1m/2193",
+      "title": "Canterbury - Banks Peninsula LiDAR 1m DSM (2018-2019)",
+      "bbox": [
+        172.5527303,
+        -43.9615254,
+        173.149415,
+        -43.5716925
+      ],
+      "itemCount": 47
+    },
+    {
+      "collectionPath": "canterbury/rangiora_2014/dsm_1m/2193",
+      "title": "Canterbury - Rangiora LiDAR 1m DSM (2014)",
+      "bbox": [
+        172.1408607,
+        -43.5070798,
+        172.7932703,
+        -43.1821917
+      ],
+      "itemCount": 32
+    },
+    {
+      "collectionPath": "marlborough/blenheim_2014/dsm_1m/2193",
+      "title": "Marlborough - Blenheim LiDAR 1m DSM (2014)",
+      "bbox": [
+        173.5463195,
+        -41.6882374,
+        174.18235,
+        -41.3624698
+      ],
+      "itemCount": 34
+    },
+    {
+      "collectionPath": "otago/central-otago_2021/dsm_1m/2193",
+      "title": "Otago - Central Otago LiDAR 1m DSM (2021)",
+      "bbox": [
+        169.2729518,
+        -45.7897267,
+        169.7222606,
+        -45.3350418
+      ],
+      "itemCount": 38
+    },
+    {
+      "collectionPath": "nelson/nelson_2021/dsm_1m/2193",
+      "title": "Nelson LiDAR 1m DSM (2021)",
+      "bbox": [
+        173.1432012,
+        -41.4325902,
+        173.657408,
+        -41.0417549
+      ],
+      "itemCount": 28
+    },
+    {
+      "collectionPath": "canterbury/timaru-rivers_2014/dsm_1m/2193",
+      "title": "Canterbury - Timaru Rivers LiDAR 1m DSM (2014)",
+      "bbox": [
+        171.1055033,
+        -44.3393238,
+        171.5311798,
+        -43.8821696
+      ],
+      "itemCount": 36
+    },
+    {
+      "collectionPath": "tasman/abel-tasman-and-golden-bay_2016/dsm_1m/2193",
+      "title": "Tasman - Abel Tasman and Golden Bay LiDAR 1m DSM (2016)",
+      "bbox": [
+        172.6868094,
+        -41.1733388,
+        173.0857515,
+        -40.7188997
+      ],
+      "itemCount": 28
+    },
+    {
+      "collectionPath": "nelson/nelson_2025/dsm_1m/2193",
+      "title": "Nelson LiDAR 1m DSM (2025)",
+      "bbox": [
+        173.1432012,
+        -41.4325902,
+        173.6014303,
+        -41.0420661
+      ],
+      "itemCount": 26
+    },
+    {
+      "collectionPath": "tasman/motueka-river-valley_2024/dsm_1m/2193",
+      "title": "Tasman - Motueka River Valley LiDAR 1m DSM (2024)",
+      "bbox": [
+        172.5691212,
+        -41.4975302,
+        173.0286971,
+        -41.1083109
+      ],
+      "itemCount": 30
+    },
+    {
+      "collectionPath": "tasman/tasman-bay_2022/dsm_1m/2193",
+      "title": "Tasman - Tasman Bay LiDAR 1m DSM (2022)",
+      "bbox": [
+        172.913651,
+        -41.5624698,
+        173.2582727,
+        -41.0435943
+      ],
+      "itemCount": 29
+    },
+    {
+      "collectionPath": "bay-of-plenty/tauranga_2025/dsm_1m/2193",
+      "title": "Bay of Plenty - Tauranga LiDAR 1m DSM (2025)",
+      "bbox": [
+        175.9696946,
+        -37.8919503,
+        176.4623641,
+        -37.562256
+      ],
+      "itemCount": 22
+    },
+    {
+      "collectionPath": "tasman/richmond-and-motueka_2015/dsm_1m/2193",
+      "title": "Tasman - Richmond and Motueka LiDAR 1m DSM (2015)",
+      "bbox": [
+        172.914164,
+        -41.4976164,
+        173.2582727,
+        -41.0435943
+      ],
+      "itemCount": 22
+    },
+    {
+      "collectionPath": "canterbury/christchurch_2020-2021/dsm_1m/2193",
+      "title": "Canterbury - Christchurch LiDAR 1m DSM (2020-2021)",
+      "bbox": [
+        172.3758499,
+        -43.7020304,
+        172.8513887,
+        -43.376959
+      ],
+      "itemCount": 27
+    },
+    {
+      "collectionPath": "canterbury/christchurch_2024-2025/dsm_1m/2193",
+      "title": "Canterbury - Christchurch LiDAR 1m DSM (2024-2025)",
+      "bbox": [
+        172.3758499,
+        -43.7020304,
+        172.8513887,
+        -43.376959
+      ],
+      "itemCount": 27
+    },
+    {
+      "collectionPath": "canterbury/waimakariri_2023/dsm_1m/2193",
+      "title": "Canterbury - Waimakariri LiDAR 1m DSM (2023)",
+      "bbox": [
+        172.0213315,
+        -43.506864,
+        172.7333572,
+        -43.3090661
+      ],
+      "itemCount": 19
+    },
+    {
+      "collectionPath": "manawatu-whanganui/whanganui-urban_2020-2021/dsm_1m/2193",
+      "title": "Manawatū-Whanganui - Whanganui Urban LiDAR 1m DSM (2020-2021)",
+      "bbox": [
+        174.8799205,
+        -40.0534343,
+        175.386853,
+        -39.7867148
+      ],
+      "itemCount": 24
+    },
+    {
+      "collectionPath": "wellington/kapiti-coast_2021/dsm_1m/2193",
+      "title": "Wellington - Kāpiti Coast LiDAR 1m DSM (2021)",
+      "bbox": [
+        174.9089866,
+        -41.0277519,
+        175.2506622,
+        -40.6337799
+      ],
+      "itemCount": 19
+    },
+    {
+      "collectionPath": "wellington/kapiti-coast_2024-2025/dsm_1m/2193",
+      "title": "Wellington - Kāpiti Coast LiDAR 1m DSM (2024-2025)",
+      "bbox": [
+        174.9089866,
+        -41.0277519,
+        175.2506622,
+        -40.6337799
+      ],
+      "itemCount": 19
+    },
+    {
+      "collectionPath": "otago/balclutha_2020/dsm_1m/2193",
+      "title": "Otago - Balclutha LiDAR 1m DSM (2020)",
+      "bbox": [
+        169.5984967,
+        -46.4456066,
+        169.9866335,
+        -46.1150135
+      ],
+      "itemCount": 24
+    },
+    {
+      "collectionPath": "manawatu-whanganui/palmerston-north_2018/dsm_1m/2193",
+      "title": "Manawatū-Whanganui - Palmerston North LiDAR 1m DSM (2018)",
+      "bbox": [
+        175.4592799,
+        -40.5620358,
+        175.8008159,
+        -40.231557
+      ],
+      "itemCount": 23
+    },
+    {
+      "collectionPath": "waikato/hamilton_2019/dsm_1m/2193",
+      "title": "Waikato - Hamilton LiDAR 1m DSM (2019)",
+      "bbox": [
+        175.0930298,
+        -37.9097967,
+        175.4295474,
+        -37.5845465
+      ],
+      "itemCount": 23
+    },
+    {
+      "collectionPath": "waikato/hamilton_2023/dsm_1m/2193",
+      "title": "Waikato - Hamilton LiDAR 1m DSM (2023)",
+      "bbox": [
+        175.0930298,
+        -37.9097967,
+        175.4295474,
+        -37.5845465
+      ],
+      "itemCount": 23
+    },
+    {
+      "collectionPath": "waikato/hamilton_2025/dsm_1m/2193",
+      "title": "Waikato - Hamilton LiDAR 1m DSM (2025)",
+      "bbox": [
+        175.0930298,
+        -37.9097967,
+        175.4295474,
+        -37.5845465
+      ],
+      "itemCount": 23
+    },
+    {
+      "collectionPath": "otago/queenstown_2016/dsm_1m/2193",
+      "title": "Otago - Queenstown LiDAR 1m DSM (2016)",
+      "bbox": [
+        168.5763338,
+        -45.1811534,
+        168.9551722,
+        -44.9134657
+      ],
+      "itemCount": 19
+    },
+    {
+      "collectionPath": "waikato/thames_2017-2019/dsm_1m/2193",
+      "title": "Waikato - Thames LiDAR 1m DSM (2017-2019)",
+      "bbox": [
+        175.5102693,
+        -37.4459782,
+        175.7400516,
+        -37.0581599
+      ],
+      "itemCount": 13
+    },
+    {
+      "collectionPath": "canterbury/amberley_2012/dsm_1m/2193",
+      "title": "Canterbury - Amberley LiDAR 1m DSM (2012)",
+      "bbox": [
+        172.6156695,
+        -43.3130477,
+        172.8524917,
+        -42.9886025
+      ],
+      "itemCount": 13
+    },
+    {
+      "collectionPath": "wellington/wellington-city_2019-2020/dsm_1m/2193",
+      "title": "Wellington City LiDAR 1m DSM (2019-2020)",
+      "bbox": [
+        174.6877591,
+        -41.4202865,
+        174.9202826,
+        -41.0935096
+      ],
+      "itemCount": 12
+    },
+    {
+      "collectionPath": "wellington/wellington-city_2025/dsm_1m/2193",
+      "title": "Wellington - Wellington City LiDAR 1m DSM (2025)",
+      "bbox": [
+        174.6877591,
+        -41.4202865,
+        174.9202826,
+        -41.0935096
+      ],
+      "itemCount": 12
+    },
+    {
+      "collectionPath": "wellington/porirua_2023/dsm_1m/2193",
+      "title": "Wellington - Porirua LiDAR 1m DSM (2023)",
+      "bbox": [
+        174.7415177,
+        -41.2240674,
+        175.0308433,
+        -40.9619694
+      ],
+      "itemCount": 14
+    },
+    {
+      "collectionPath": "otago/wanaka_2022-2023/dsm_1m/2193",
+      "title": "Otago - Wanaka LiDAR 1m DSM (2022-2023)",
+      "bbox": [
+        169.0896929,
+        -44.8099309,
+        169.3439075,
+        -44.5472619
+      ],
+      "itemCount": 12
+    },
+    {
+      "collectionPath": "otago/queenstown_2021/dsm_1m/2193",
+      "title": "Otago - Queenstown LiDAR 1m DSM (2021)",
+      "bbox": [
+        168.5763338,
+        -45.1165141,
+        168.8945028,
+        -44.9157948
+      ],
+      "itemCount": 13
+    },
+    {
+      "collectionPath": "wellington/hutt-city_2021/dsm_1m/2193",
+      "title": "Wellington - Hutt City LiDAR 1m DSM (2021)",
+      "bbox": [
+        174.802131,
+        -41.3527997,
+        175.034859,
+        -41.0906186
+      ],
+      "itemCount": 12
+    },
+    {
+      "collectionPath": "wellington/hutt-city_2025/dsm_1m/2193",
+      "title": "Wellington - Hutt City LiDAR 1m DSM (2025)",
+      "bbox": [
+        174.802131,
+        -41.3527997,
+        175.034859,
+        -41.0906186
+      ],
+      "itemCount": 12
+    },
+    {
+      "collectionPath": "manawatu-whanganui/levin_2024/dsm_1m/2193",
+      "title": "Manawatū-Whanganui - Levin LiDAR 1m DSM (2024)",
+      "bbox": [
+        175.1305536,
+        -40.8292918,
+        175.3599279,
+        -40.5656245
+      ],
+      "itemCount": 11
+    },
+    {
+      "collectionPath": "northland/whangarei-heads_2016/dsm_1m/2193",
+      "title": "Northland - Whangarei Heads LiDAR 1m DSM (2016)",
+      "bbox": [
+        174.3531843,
+        -35.9079461,
+        174.6223831,
+        -35.7132637
+      ],
+      "itemCount": 9
+    },
+    {
+      "collectionPath": "gisborne/hicks-bay_2026/dsm_1m/2193",
+      "title": "Gisborne - Hicks Bay LiDAR 1m DSM (2026)",
+      "bbox": [
+        178.0798751,
+        -37.6874257,
+        178.4139545,
+        -37.5485171
+      ],
+      "itemCount": 9
+    },
+    {
+      "collectionPath": "wellington/upper-hutt-city_2021/dsm_1m/2193",
+      "title": "Wellington - Upper Hutt City LiDAR 1m DSM (2021)",
+      "bbox": [
+        174.9717275,
+        -41.2212486,
+        175.2023473,
+        -41.0237366
+      ],
+      "itemCount": 7
+    },
+    {
+      "collectionPath": "wellington/upper-hutt-city_2025/dsm_1m/2193",
+      "title": "Wellington - Upper Hutt City LiDAR 1m DSM (2025)",
+      "bbox": [
+        174.9717275,
+        -41.2212486,
+        175.2023473,
+        -41.0237366
+      ],
+      "itemCount": 7
+    },
+    {
+      "collectionPath": "bay-of-plenty/waioweka-gorge_2026/dsm_1m/2193",
+      "title": "Bay of Plenty - Waioweka Gorge LiDAR 1m DSM (2026)",
+      "bbox": [
+        177.2463438,
+        -38.3672468,
+        177.4768312,
+        -38.1731423
+      ],
+      "itemCount": 7
+    },
+    {
+      "collectionPath": "otago/dunedin-and-mosgiel_2021/dsm_1m/2193",
+      "title": "Otago - Dunedin and Mosgiel LiDAR 1m DSM (2021)",
+      "bbox": [
+        170.3063778,
+        -45.9445839,
+        170.5595063,
+        -45.8095509
+      ],
+      "itemCount": 7
+    },
+    {
+      "collectionPath": "canterbury/cheviot_2015/dsm_1m/2193",
+      "title": "Canterbury - Cheviot LiDAR 1m DSM (2015)",
+      "bbox": [
+        173.1465831,
+        -42.8592009,
+        173.3231548,
+        -42.7292537
+      ],
+      "itemCount": 5
+    },
+    {
+      "collectionPath": "southland/stewart-island-rakiura-oban_2021/dsm_1m/2193",
+      "title": "Stewart Island / Rakiura - Oban LiDAR 1m DSM (2021)",
+      "bbox": [
+        168.0465809,
+        -46.970433,
+        168.1839243,
+        -46.8359485
+      ],
+      "itemCount": 4
+    },
+    {
+      "collectionPath": "otago/cardrona_2025/dsm_1m/2193",
+      "title": "Otago - Cardrona LiDAR 1m DSM (2025)",
+      "bbox": [
+        168.9551722,
+        -44.9311993,
+        169.0853206,
+        -44.7976505
+      ],
+      "itemCount": 4
+    },
+    {
+      "collectionPath": "canterbury/hawarden_2015/dsm_1m/2193",
+      "title": "Canterbury - Hawarden LiDAR 1m DSM (2015)",
+      "bbox": [
+        172.6172892,
+        -42.988754,
+        172.7356,
+        -42.8587487
+      ],
+      "itemCount": 4
+    },
+    {
+      "collectionPath": "northland/marsden-point_2016/dsm_1m/2193",
+      "title": "Northland - Marsden Point LiDAR 1m DSM (2016)",
+      "bbox": [
+        174.4073784,
+        -35.909242,
+        174.516032,
+        -35.7781586
+      ],
+      "itemCount": 4
+    },
+    {
+      "collectionPath": "manawatu-whanganui/dannevirke_2022/dsm_1m/2193",
+      "title": "Manawatū-Whanganui - Dannevirke LiDAR 1m DSM (2022)",
+      "bbox": [
+        176.0686761,
+        -40.2891839,
+        176.1338432,
+        -40.0933545
+      ],
+      "itemCount": 3
+    },
+    {
+      "collectionPath": "otago/kingston_2025/dsm_1m/2193",
+      "title": "Otago - Kingston LiDAR 1m DSM (2025)",
+      "bbox": [
+        168.6784259,
+        -45.3750644,
+        168.8054722,
+        -45.3058699
+      ],
+      "itemCount": 2
+    },
+    {
+      "collectionPath": "tasman/waimea-dam_2023/dsm_1m/2193",
+      "title": "Tasman - Waimea Dam LiDAR 1m DSM (2023)",
+      "bbox": [
+        173.143628,
+        -41.4975302,
+        173.2012794,
+        -41.4325902
+      ],
+      "itemCount": 1
+    }
+  ]
+}

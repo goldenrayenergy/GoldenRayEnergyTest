@@ -30,6 +30,7 @@ import packageRoutes from './routes/packages.js';
 import shopRoutes from './routes/shop.js';
 import tradeRequestRoutes from './routes/tradeRequests.js';
 import billAnalysisRoutes from './routes/billAnalysis.js';
+import pocRoutes from './routes/poc/index.js';
 import pmRoutes from './routes/pm/index.js';
 import publicProjectRoutes from './routes/public-projects.js';
 import qrRoutes from './routes/qr.js';
@@ -155,6 +156,22 @@ app.use('/api/packages', packageRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/trade-requests', tradeRequestRoutes);
 app.use('/api/bill-analysis', billAnalysisRoutes);
+
+// POC — new public quote flow (bill upload → map confirm → auto-designed proposal).
+// Feature-flagged so a POC-side bug can't affect live traffic. Unset ENABLE_POC (or
+// set to anything other than 'true') to unmount entirely — the router import above
+// is safe on its own; only mounting exposes the routes.
+// Phase E revision (2026-08-21) — client-side /poc/* routes are ALSO gated by
+// Vite's import.meta.env.DEV in client/src/App.jsx, so production deployments
+// hide POC in both surfaces. This boot log makes the current state visible so
+// nobody has to hunt through env vars to answer "why is /poc not working?".
+if (process.env.ENABLE_POC === 'true') {
+  app.use('/api/poc', pocRoutes);
+  console.log('[server] POC endpoints ENABLED (/api/poc/*)');
+} else {
+  console.log('[server] POC endpoints disabled (set ENABLE_POC=true in .env to enable locally)');
+}
+
 app.use('/api/pm', pmRoutes);  // PM tool (Phase A) — parallel project model, no overlap with /api/projects
 app.use('/api/public', publicProjectRoutes);  // Customer-facing project viewer (B-1) — no auth, gated by unguessable share_token
 app.use('/qr', qrRoutes);                     // QR-code redirect endpoint (Phase D) — no auth, logs scan + 302 to destination with UTM params

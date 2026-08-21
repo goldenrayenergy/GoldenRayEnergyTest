@@ -149,6 +149,55 @@ router.post('/:id/generate',
       }
     }
 
+    // Google Solar roof analysis — populated by the wizard-submit pipeline
+    // (services/googleSolar/analyseRoof.js). Optional; siteAnalysis PDF page
+    // renders only when status='ok'. raw_response excluded from projection
+    // — proposal only needs the parsed summary + segments.
+    //
+    // Phase 2: also select the roof image storage location. If present,
+    // download the PNG bytes and attach as a base64 data URI so pageSiteAnalysis
+    // can embed <img src="data:image/png;base64,..."> directly. We use data
+    // URI (not signed URL) because Puppeteer sometimes fails silently on
+    // remote img fetches — same reason the logo is embedded that way.
+    let roofAnalysis = null;
+    if (quote.contact_id) {
+      try {
+        const { data } = await sb().from('roof_analyses')
+          .select(`
+            id, status, address_used, latitude, longitude,
+            imagery_quality, imagery_date,
+            max_array_area_m2, max_array_panels_count,
+            max_sunshine_hours_per_year, carbon_offset_factor_kg_per_kwh,
+            roof_segments, created_at,
+            roof_image_storage_bucket, roof_image_storage_path
+          `)
+          .eq('contact_id', quote.contact_id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        roofAnalysis = data || null;
+
+        // Phase 2 — fetch the roof PNG and embed as base64 data URI.
+        // Best-effort: any failure leaves image_data_uri unset and the PDF
+        // page falls back to text-only. Skip when no image on file.
+        if (roofAnalysis?.roof_image_storage_bucket && roofAnalysis?.roof_image_storage_path) {
+          try {
+            const { data: fileBlob, error: dlErr } = await sb().storage
+              .from(roofAnalysis.roof_image_storage_bucket)
+              .download(roofAnalysis.roof_image_storage_path);
+            if (dlErr) throw dlErr;
+            const arrayBuf = await fileBlob.arrayBuffer();
+            const b64 = Buffer.from(arrayBuf).toString('base64');
+            roofAnalysis.image_data_uri = `data:image/png;base64,${b64}`;
+          } catch (imgErr) {
+            console.warn('quote-actions /generate: roof image download failed (non-fatal):', imgErr?.message || imgErr);
+          }
+        }
+      } catch (e) {
+        console.warn('quote-actions /generate: roof_analysis load failed:', e.message);
+      }
+    }
+
     // ── Render PDFs. renderProposalPdfs auto-routes on engine.is_multi_tier.
     //    Catalogue is threaded through so any DB-only product field
     //    (image_url, datasheet_url, etc.) surfaces in the PDF — without
@@ -164,6 +213,7 @@ router.post('/:id/generate',
         quote_date: new Date().toISOString(),
         catalogue: engineOptions.catalogue,
         billAnalysis,
+        roofAnalysis,
       },
     });
 
