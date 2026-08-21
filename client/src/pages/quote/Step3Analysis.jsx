@@ -1,6 +1,6 @@
 // Step3Analysis — merged 5-step flow, roof-analysis step (B1.4, 2026-08-20).
 //
-// Fires POST /api/poc/roof/analyse on mount using the confirmed address from
+// Fires POST /api/roof/analyse on mount using the confirmed address from
 // Step 2. Shows the polished EnergyFlowOverlay (already built in POC) during
 // the wait — customer sees the isometric 2.5D scene + 4 time-of-day modes +
 // prominent status card while the server does Google-Solar → LiDAR → OSM.
@@ -58,13 +58,13 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
         // Retry once on 500/504/timeout — LiDAR path is cold-slow.
         let data;
         try {
-          const res = await publicApi.post('/poc/roof/analyse', body, { timeout: 90_000 });
+          const res = await publicApi.post('/roof/analyse', body, { timeout: 90_000 });
           data = res.data;
         } catch (retryable) {
           const s = retryable?.response?.status;
           if (s === 500 || s === 504 || retryable?.code === 'ECONNABORTED' || !s) {
             console.warn(`[Step3Analysis] first attempt failed (${s || retryable?.code}), retrying once`);
-            const res2 = await publicApi.post('/poc/roof/analyse', body, { timeout: 90_000 });
+            const res2 = await publicApi.post('/roof/analyse', body, { timeout: 90_000 });
             data = res2.data;
           } else {
             throw retryable;

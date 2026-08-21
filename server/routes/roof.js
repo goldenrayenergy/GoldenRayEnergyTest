@@ -15,23 +15,23 @@
 //   disagree with what Google Maps shows the customer).
 
 import { Router } from 'express';
-import env from '../../config/env.js';
-import { createClient as createSolarClient } from '../../services/googleSolar/client.js';
-import { createGeocoder }                     from '../../services/googleSolar/geocoder.js';
+import env from '../config/env.js';
+import { createClient as createSolarClient } from '../services/googleSolar/client.js';
+import { createGeocoder }                     from '../services/googleSolar/geocoder.js';
 import { parseBuildingInsightsResponse,
-         computeOptimalTileRadius }           from '../../services/googleSolar/analyseRoof.js';
+         computeOptimalTileRadius }           from '../services/googleSolar/analyseRoof.js';
 import { chooseZoom,
          computeTileGrid,
          latLngToTileFrac,
-         metersPerPixel }                     from '../../services/linz/aerialFetcher.js';
-import { fetchTile as fetchLinzTile }         from '../../services/linz/basemapClient.js';
+         metersPerPixel }                     from '../services/linz/aerialFetcher.js';
+import { fetchTile as fetchLinzTile }         from '../services/linz/basemapClient.js';
 import { queryBuildingsNear,
          buildingContaining,
-         nearestBuilding }                    from '../../services/linz/buildingOutlines.js';
-import { queryOsmBuildingsNear }              from '../../services/osm/buildingOutlines.js';
-import { analyseRoofFromLidar }               from '../../services/linz/lidarAnalyseRoof.js';
-import { getPvgisClient }                     from '../../services/pvgis/pvgisClient.js';
-import { computePvgisYieldForSegments }       from '../../services/pvgis/pvgisSegmentYield.js';
+         nearestBuilding }                    from '../services/linz/buildingOutlines.js';
+import { queryOsmBuildingsNear }              from '../services/osm/buildingOutlines.js';
+import { analyseRoofFromLidar }               from '../services/linz/lidarAnalyseRoof.js';
+import { getPvgisClient }                     from '../services/pvgis/pvgisClient.js';
+import { computePvgisYieldForSegments }       from '../services/pvgis/pvgisSegmentYield.js';
 
 // Try OSM first (crowdsourced, current), fall back to LINZ (2017-era for
 // Auckland but authoritative when it has data), then return whichever

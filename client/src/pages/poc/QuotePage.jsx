@@ -8,9 +8,9 @@
 //   Slice 4: engine → three-tier proposal with panels drawn on roof
 //
 // Server-side counterpart:
-//   server/routes/poc/bill.js  — POST /api/poc/bill/extract
-//   server/routes/poc/roof.js  — POST /api/poc/roof/analyse
-//                                 GET  /api/poc/aerial/tile?z=&x=&y=
+//   server/routes/bills.js  — POST /api/bills/extract
+//   server/routes/roof.js  — POST /api/roof/analyse
+//                                 GET  /api/aerial/tile?z=&x=&y=
 //   (mounted from server/app.js behind ENABLE_POC=true)
 
 import { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
@@ -249,7 +249,7 @@ export default function QuotePage() {
     const fd = new FormData();
     fd.append('bill', file);
     try {
-      const { data } = await publicApi.post('/poc/bill/extract', fd, {
+      const { data } = await publicApi.post('/bills/extract', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setBill(data);
@@ -285,13 +285,13 @@ export default function QuotePage() {
       // attempt is usually fast because caches are warm.
       let data;
       try {
-        const res = await publicApi.post('/poc/roof/analyse', body, { timeout: 60_000 });
+        const res = await publicApi.post('/roof/analyse', body, { timeout: 60_000 });
         data = res.data;
       } catch (retryable) {
         const s = retryable?.response?.status;
         if (s === 500 || s === 504 || retryable?.code === 'ECONNABORTED' || !s) {
           console.warn(`[analyseAddress] first attempt failed (${s || retryable?.code}), retrying once`);
-          const res2 = await publicApi.post('/poc/roof/analyse', body, { timeout: 60_000 });
+          const res2 = await publicApi.post('/roof/analyse', body, { timeout: 60_000 });
           data = res2.data;
         } else {
           throw retryable;
@@ -412,7 +412,7 @@ export default function QuotePage() {
       // tier kwp so all 3 tiers show honest panel counts.
       const recommendedPanelWatts = design?.tiers?.[design?.recommended_index]?.panel?.watts
         || 595;   // Phono 595W default
-      const { data } = await publicApi.post('/poc/design/compose', {
+      const { data } = await publicApi.post('/design/compose', {
         annual_kwh: annualKwh,
         postcode:   bill.service_postcode || null,
         system_yield_kwh_per_kwp_per_year: effectiveYield,
@@ -1095,7 +1095,7 @@ function ExtractStage({ bill, onReset, onContinue, analysing, analysisError, con
 }
 
 // ── Places Autocomplete widget ────────────────────────────────────────────
-// Debounced input that hits /api/poc/places/autocomplete. When user picks a
+// Debounced input that hits /api/places/autocomplete. When user picks a
 // suggestion, we fetch details for the exact lat/lng and hand the parent
 // a { place_id, formattedAddress, latitude, longitude }. sessionToken is
 // generated once per widget mount and reused across all autocomplete calls
@@ -1126,7 +1126,7 @@ export function PlacesAutocomplete({ initial, confirmedPlace, onConfirm }) {
       setLoading(true);
       setError(null);
       try {
-        const { data } = await publicApi.get('/poc/places/autocomplete', {
+        const { data } = await publicApi.get('/places/autocomplete', {
           params: { input: q, sessionToken },
           signal: abortRef.current.signal,
         });
@@ -1149,7 +1149,7 @@ export function PlacesAutocomplete({ initial, confirmedPlace, onConfirm }) {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await publicApi.get('/poc/places/details', {
+      const { data } = await publicApi.get('/places/details', {
         params: { placeId: s.place_id, sessionToken },
       });
       onConfirm({
@@ -1680,7 +1680,7 @@ function AddressStage({ analysis, onBack, onConfirm }) {
 // (roof planes count, usable area, max panels, sunshine, CO₂ offset,
 // imagery quality/date, per-plane pitch/azimuth/area) as POC's AddressStage.
 //
-// Depends only on `analysis` prop shape returned by /api/poc/roof/analyse.
+// Depends only on `analysis` prop shape returned by /api/roof/analyse.
 // Renders NO navigation buttons — parent owns those.
 export function GoogleSolarReadCard({ analysis }) {
   if (!analysis) return null;
@@ -1851,7 +1851,7 @@ function MaterialStage({ analysis, material, onPick, onBack, onConfirm, designin
   const { coords, formattedAddress } = analysis;
   const [svError, setSvError] = useState(null);
 
-  const svUrl = `/api/poc/aerial/streetview?lat=${coords.latitude}&lng=${coords.longitude}&size=640x480&pitch=15`;
+  const svUrl = `/api/aerial/streetview?lat=${coords.latitude}&lng=${coords.longitude}&size=640x480&pitch=15`;
 
   return (
     <div>
@@ -4972,7 +4972,7 @@ function EnvironmentalImpactSection({ design }) {
 
 // ── C1 · BookSiteSurveyCTA ────────────────────────────────────────────────
 // Primary conversion CTA. Simple form (name / phone / email / preferred
-// visit time) with a POST to /api/poc/leads. Success flips into a thank-you
+// visit time) with a POST to /api/quote/legacy-submit. Success flips into a thank-you
 // state so the customer feels confirmed.
 //
 // POC scope: no real lead-management integration yet — server logs the
@@ -5006,7 +5006,7 @@ function BookSiteSurveyCTA({ bill, analysis, design }) {
           from_manual_entry:    !!bill?._manual_entry,
         },
       };
-      await publicApi.post('/poc/leads', payload);
+      await publicApi.post('/quote/legacy-submit', payload);
       setSubmitted(true);
     } catch (err) {
       setSubmitError(err?.response?.data?.error || err?.message || 'Submission failed. Please try again or email us directly.');

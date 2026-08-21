@@ -1,4 +1,4 @@
-// End-to-end HTTP test of the /api/poc/roof/analyse endpoint.
+// End-to-end HTTP test of the /api/roof/analyse endpoint.
 //
 // Runs against the ACTUAL running server (localhost:5000). Does not mock
 // anything — every failure here reproduces exactly what the browser sees.
@@ -35,7 +35,7 @@ const assert = (cond, msg) => {
 };
 
 async function getPlaceId(input) {
-  const r = await fetch(`${SERVER}/api/poc/places/autocomplete?input=${encodeURIComponent(input)}`);
+  const r = await fetch(`${SERVER}/api/places/autocomplete?input=${encodeURIComponent(input)}`);
   const j = await r.json();
   const first = j.suggestions?.[0];
   if (!first?.place_id) throw new Error(`autocomplete found no match for "${input}"`);
@@ -43,7 +43,7 @@ async function getPlaceId(input) {
 }
 
 async function analyseRoof(placeId) {
-  const r = await fetch(`${SERVER}/api/poc/roof/analyse`, {
+  const r = await fetch(`${SERVER}/api/roof/analyse`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ place_id: placeId }),
@@ -179,7 +179,7 @@ async function testWoodacre() {
 async function testServerUp() {
   console.log('\n══ Sanity: server is up ══');
   try {
-    const r = await fetch(`${SERVER}/api/poc/places/autocomplete?input=test`);
+    const r = await fetch(`${SERVER}/api/places/autocomplete?input=test`);
     assert(r.status === 200, `server responds 200 (got ${r.status})`);
   } catch (e) {
     console.error(`  ✗ server not reachable at ${SERVER}: ${e.message}`);

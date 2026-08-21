@@ -30,7 +30,18 @@ import packageRoutes from './routes/packages.js';
 import shopRoutes from './routes/shop.js';
 import tradeRequestRoutes from './routes/tradeRequests.js';
 import billAnalysisRoutes from './routes/billAnalysis.js';
-import pocRoutes from './routes/poc/index.js';
+// Public quote-flow endpoints (bill parse, roof analysis, tier compose, etc.).
+// Previously mounted under /api/poc/* and gated by ENABLE_POC — that gate was
+// removed 2026-08-21 when Phase E confirmed these are load-bearing for the
+// production merged /get-quote flow, not experimental POC endpoints. Each now
+// lives at its natural home. See server/routes/legacy-submit.js for the one
+// endpoint still tied to the dev-only /poc/quote page's payload shape.
+import billsRoutes    from './routes/bills.js';
+import placesRoutes   from './routes/places.js';
+import roofRoutes, { aerialRouter } from './routes/roof.js';
+import designRoutes   from './routes/design.js';
+import threedRoutes   from './routes/threed.js';
+import legacySubmitRoutes from './routes/legacy-submit.js';
 import pmRoutes from './routes/pm/index.js';
 import publicProjectRoutes from './routes/public-projects.js';
 import qrRoutes from './routes/qr.js';
@@ -157,20 +168,17 @@ app.use('/api/shop', shopRoutes);
 app.use('/api/trade-requests', tradeRequestRoutes);
 app.use('/api/bill-analysis', billAnalysisRoutes);
 
-// POC — new public quote flow (bill upload → map confirm → auto-designed proposal).
-// Feature-flagged so a POC-side bug can't affect live traffic. Unset ENABLE_POC (or
-// set to anything other than 'true') to unmount entirely — the router import above
-// is safe on its own; only mounting exposes the routes.
-// Phase E revision (2026-08-21) — client-side /poc/* routes are ALSO gated by
-// Vite's import.meta.env.DEV in client/src/App.jsx, so production deployments
-// hide POC in both surfaces. This boot log makes the current state visible so
-// nobody has to hunt through env vars to answer "why is /poc not working?".
-if (process.env.ENABLE_POC === 'true') {
-  app.use('/api/poc', pocRoutes);
-  console.log('[server] POC endpoints ENABLED (/api/poc/*)');
-} else {
-  console.log('[server] POC endpoints disabled (set ENABLE_POC=true in .env to enable locally)');
-}
+// Public quote-flow endpoints (Phase E rename, 2026-08-21). These used to
+// live under /api/poc/* behind an ENABLE_POC gate, back when they were an
+// experimental spike. They now power the production /get-quote flow, so the
+// gate is gone and they always mount at their natural URLs.
+app.use('/api/bills',                billsRoutes);       // POST /extract (bill parse)
+app.use('/api/places',               placesRoutes);      // GET /autocomplete, /details
+app.use('/api/roof',                 roofRoutes);        // POST /analyse; GET /linz-buildings, /osm-buildings
+app.use('/api/aerial',               aerialRouter);      // GET /google, /streetview, /tile
+app.use('/api/design',               designRoutes);      // POST /compose
+app.use('/api/threed',               threedRoutes);      // GET /tileset-config
+app.use('/api/quote/legacy-submit',  legacySubmitRoutes); // POST — only used by dev-only /poc/quote page
 
 app.use('/api/pm', pmRoutes);  // PM tool (Phase A) — parallel project model, no overlap with /api/projects
 app.use('/api/public', publicProjectRoutes);  // Customer-facing project viewer (B-1) — no auth, gated by unguessable share_token

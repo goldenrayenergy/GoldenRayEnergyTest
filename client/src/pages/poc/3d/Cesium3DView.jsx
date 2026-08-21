@@ -15,7 +15,7 @@
 // Panel target count comes from the engine (parent passes it in). The
 // multi-segment distribution logic decides how many go on each face.
 //
-// Server counterpart: server/routes/poc/threed.js → GET /api/poc/3d/tileset-config
+// Server counterpart: server/routes/threed.js → GET /api/threed/tileset-config
 
 import { useEffect, useRef, useState } from 'react';
 import { publicApi } from '../../../services/api';
@@ -859,7 +859,7 @@ export default function Cesium3DView({
         if (import.meta.env.DEV) console.log('[Cesium3DView] step 1 — fetching tileset config');
         // 1. Server hands us the tileset URL with the API key baked in
         //    (key never touches the browser directly).
-        const { data: cfg } = await publicApi.get('/poc/3d/tileset-config');
+        const { data: cfg } = await publicApi.get('/threed/tileset-config');
         if (cancelled) return;
         setAttribution(cfg.attribution || '');
         if (import.meta.env.DEV) console.log('[Cesium3DView] step 2 — dynamic-importing Cesium');

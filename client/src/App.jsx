@@ -103,8 +103,10 @@ export default function App() {
           don't exist in the deployed bundle. POC code stays in the repo
           + still bundled (the /get-quote steps import shared components
           from QuotePage.jsx); only the CUSTOMER-VISIBLE ROUTES are gated.
-          Server-side /api/poc/* endpoints have their own ENABLE_POC env
-          var guard on Render; both gates need to be true for POC to work. */}
+          Server-side, all quote-flow API endpoints (bills, roof, places,
+          design, threed, aerial) are now at their natural /api/* URLs —
+          no ENABLE_POC gate anymore. The dev-only /poc/quote page uses
+          POST /api/quote/legacy-submit for its distinct payload shape. */}
       {import.meta.env.DEV && (
         <>
           <Route

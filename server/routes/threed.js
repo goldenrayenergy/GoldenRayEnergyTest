@@ -19,7 +19,7 @@
 //        tile, so only worth it if key leakage becomes a real risk.
 
 import { Router } from 'express';
-import env from '../../config/env.js';
+import env from '../config/env.js';
 
 const router = Router();
 
