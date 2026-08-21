@@ -1,84 +1,21 @@
 import { Router } from 'express';
 import { calculateSolar } from '../services/calcService.js';
 import { generateQuotePDF } from '../services/quotePdfService.js';
-import { sendQuoteEmail, sendTeamNewLeadEmail, sendCustomerAckEmail } from '../services/emailService.js';
+import { sendQuoteEmail, sendTeamNewLeadEmail } from '../services/emailService.js';
 import { supabaseAdmin } from '../config/supabase.js';
-import { validateQuoteForm } from '../utils/validators.js';
-import env from '../config/env.js';
-import { analyseRoof } from '../services/googleSolar/analyseRoof.js';
-import { geocodeAddress } from '../services/googleSolar/geocoder.js';
-import { reserveQuota } from '../services/googleSolar/quotaTracker.js';
-
-// Multi-touch follow-up cadence created at enquiry time. Sales rep ticks
-// each off as they happen; remaining ones cancel naturally if the lead
-// converts (we don't auto-cancel — the rep marks them done).
-//
-// Cadence varies by customer type (Phase 7.3):
-//   residential — fast cadence (1h / 1d / 3d / 7d / 14d). B2C sales cycles
-//                 are short; speed-to-lead matters most.
-//   off-grid    — medium cadence (1d / 3d / 7d / 14d / 30d). Site survey
-//                 is the first concrete step, not a phone call.
-//   commercial  — slow cadence (1d / 5d / 14d / 30d / 60d). B2B procurement
-//                 cycles run 3-12 months; chasing too hard burns goodwill.
-//   ppa         — slowest cadence (2d / 7d / 21d / 45d / 90d). Multi-month
-//                 contract negotiations with finance + legal involvement.
-const CADENCE_BY_TYPE = {
-  residential: [
-    { offsetDays: 0,  title: 'First call within 1 hour',        priority: 'high',   task_type: 'call' },
-    { offsetDays: 1,  title: 'Day 1: text + email follow-up',    priority: 'medium', task_type: 'call' },
-    { offsetDays: 3,  title: 'Day 3: phone check-in',            priority: 'medium', task_type: 'call' },
-    { offsetDays: 7,  title: 'Day 7: email follow-up',           priority: 'low',    task_type: 'email' },
-    { offsetDays: 14, title: 'Day 14: final follow-up',          priority: 'low',    task_type: 'call' },
-  ],
-  'off-grid': [
-    { offsetDays: 0,  title: 'Off-grid: initial call within 1 business day',     priority: 'high',   task_type: 'call' },
-    { offsetDays: 3,  title: 'Off-grid: schedule on-site survey',                 priority: 'high',   task_type: 'call' },
-    { offsetDays: 7,  title: 'Off-grid: confirm survey date + site access',       priority: 'medium', task_type: 'call' },
-    { offsetDays: 14, title: 'Off-grid: deliver custom design + quote',           priority: 'medium', task_type: 'email' },
-    { offsetDays: 30, title: 'Off-grid: 30-day proposal follow-up',               priority: 'low',    task_type: 'call' },
-  ],
-  commercial: [
-    { offsetDays: 0,  title: 'Commercial: initial call within 1 business day',    priority: 'high',   task_type: 'call' },
-    { offsetDays: 5,  title: 'Commercial: schedule on-site survey + tariff review', priority: 'high', task_type: 'call' },
-    { offsetDays: 14, title: 'Commercial: deliver proposal + IRR / depreciation', priority: 'medium', task_type: 'email' },
-    { offsetDays: 30, title: 'Commercial: stakeholder follow-up call',            priority: 'medium', task_type: 'call' },
-    { offsetDays: 60, title: 'Commercial: 60-day proposal check-in',              priority: 'low',    task_type: 'call' },
-  ],
-  ppa: [
-    { offsetDays: 1,  title: 'PPA: initial finance call within 2 business days',  priority: 'high',   task_type: 'call' },
-    { offsetDays: 7,  title: 'PPA: site survey + tariff modelling kicked off',    priority: 'high',   task_type: 'call' },
-    { offsetDays: 21, title: 'PPA: deliver contract draft + per-kWh rate',        priority: 'medium', task_type: 'email' },
-    { offsetDays: 45, title: 'PPA: legal / board review follow-up',               priority: 'medium', task_type: 'call' },
-    { offsetDays: 90, title: 'PPA: 90-day decision check-in',                     priority: 'low',    task_type: 'call' },
-  ],
-};
-
-// Resolve which cadence to apply. Accept either the new `customerType` or
-// the legacy `installationType` field. Fall back to residential.
-function pickCadence(form) {
-  const key = form.customerType || form.installationType;
-  return CADENCE_BY_TYPE[key] || CADENCE_BY_TYPE.residential;
-}
-
-// Human-readable team label for the activity description — surfaces in
-// the CRM so the right team picks the lead up.
-function teamForCustomerType(form) {
-  const key = form.customerType || form.installationType;
-  if (key === 'off-grid')   return 'Off-grid specialist';
-  if (key === 'commercial') return 'Commercial team';
-  if (key === 'ppa')        return 'PPA / Finance team';
-  return 'Sales';
-}
+// createOrUpdateLead was extracted from this file's /submit handler on
+// 2026-08-20 (Phase A ticket A3, [[project-quote-flow-integration-plan]]).
+// Old /submit now delegates to the shared service so the same write pipeline
+// serves the incoming /api/quote/submit-with-design endpoint too.
+import { createOrUpdateLead } from '../services/leadService.js';
 
 const router = Router();
 
-// Derive backend systemType from landing-page installationType + batteryOption
-const deriveSystemType = (form) => {
-  if (form.installationType === 'commercial') return 'on-grid';
-  if (form.installationType === 'off-grid')   return 'off-grid';
-  if (form.installationType === 'ppa')        return 'ppa';
-  return form.batteryOption === 'with-battery' ? 'hybrid' : 'on-grid';
-};
+// NOTE 2026-08-20 (Phase A / A3): CADENCE_BY_TYPE + pickCadence +
+// teamForCustomerType + deriveSystemType moved to services/leadService.js
+// as part of the shared lead-write pipeline extraction. They live there now
+// so both /api/quote/submit (this file) and the incoming
+// /api/quote/submit-with-design endpoint can share the same behavior.
 
 // Public endpoint — saves to website_enquiries + contacts (CRM) + activities (dashboard feed).
 //
@@ -94,376 +31,293 @@ router.post('/submit', async (req, res) => {
     if (!form) return res.status(400).json({ error: 'Form data is required.' });
     if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
 
-    // UPDATE path is taken when the wizard was preceded by /submit-partial
-    // (QR visitor) and we're now enriching the existing row rather than
-    // creating a duplicate.
-    const isUpdate = !!(form.enquiry_id && form.contact_id);
-
-    // Centralised validation (migration 020) — friendly messages BEFORE the
-    // DB rejects with a CHECK constraint violation. Covers email/phone format,
-    // postcode 4-digit, monetary fields non-negative, and the referrer rule.
-    const validationErrors = validateQuoteForm(form);
-    if (validationErrors.length) {
-      return res.status(400).json({
-        error: validationErrors[0],   // primary error for legacy UIs
-        errors: validationErrors,     // full list for new UIs that handle multiple
-      });
-    }
-
-    // Calculate server-side so landing page doesn't need a pre-calc step
-    const calculation = form.monthlyBill
-      ? calculateSolar({
-          monthlyBill: form.monthlyBill,
-          electricityRate: form.electricityRate || 0.32,
-          systemType: deriveSystemType(form),
-          batteryOption: form.batteryOption,
-        })
-      : null;
-
-    // Lead score based on form completeness
-    let score = 10;
-    if (form.firstName && form.lastName)  score += 10;
-    if (form.email)                        score += 15;
-    if (form.phone)                        score += 15;
-    if (form.address)                      score += 10;
-    if (form.monthlyBill)                  score += 10;
-    if (form.installationType)             score += 10;
-    if (form.roofType)                     score += 5;
-    if (form.callToDiscuss === 'yes')      score += 15;
-    if (calculation?.totalCost)            score += 10;
-    const leadScore = Math.min(score, 100);
-
-    // ── 0. Pull UTM + QR-scan attribution from the form body ───────────────
-    // These are echoed by the /get-quote frontend from URL params set by the
-    // /qr/:slug redirect. Empty/undefined when the visitor came in directly
-    // (no QR scan, no campaign URL).
-    const utmSource   = form.utm_source   ? String(form.utm_source).slice(0, 50)   : null;
-    const utmMedium   = form.utm_medium   ? String(form.utm_medium).slice(0, 50)   : null;
-    const utmCampaign = form.utm_campaign ? String(form.utm_campaign).slice(0, 80) : null;
-    // qr_scan_id is a UUID; validate loosely to avoid SQL errors on garbage values.
-    const qrScanId = (form.qr_scan_id && /^[0-9a-f-]{36}$/i.test(form.qr_scan_id))
-      ? form.qr_scan_id : null;
-
-    // ── 1. Save full form data to website_enquiries ──────────────────────────
-    // INSERT for fresh leads; UPDATE when this completes a previously-captured
-    // QR partial (promotes status 'partial' → 'new', enriches with full data).
-    const enquiryFields = {
-      first_name:             form.firstName             || null,
-      last_name:              form.lastName              || null,
-      email:                  form.email                 || null,
-      phone:                  form.phone                 || null,
-      address:                form.address               || null,
-      owns_home:              form.ownsHome              || null,
-      floors:                 form.floors ? parseInt(form.floors) : null,
-      roof_type:              form.roofType              || null,
-      installation_type:      form.installationType      || null,
-      battery_option:         form.batteryOption         || null,
-      lead_source:            form.leadSource            || null,
-      lead_source_other:      form.leadSourceOther       || null,
-      referrer_name:          form.referrerName          || null,
-      referrer_phone:         form.referrerPhone         || null,
-      street:                 form.addressStreet         || null,
-      suburb:                 form.addressSuburb         || null,
-      city:                   form.addressCity           || null,
-      postcode:               form.addressPostcode       || null,
-      call_to_discuss:        form.callToDiscuss         || null,
-      installation_timeframe: form.installationTimeframe || null,
-      monthly_bill:           form.monthlyBill ? parseFloat(form.monthlyBill) : null,
-      system_size_kw:         calculation?.systemSize    || null,
-      total_cost:             calculation?.totalCost     || null,
-      monthly_savings:        calculation?.monthlySavings || null,
-      annual_savings:         calculation?.annualSavings || null,
-      payback_years:          calculation?.paybackYears  || null,
-      roi_percent:            calculation?.roi           || null,
-      panels:                 calculation?.panels        || null,
-      battery_kwh:            calculation?.batteryKwh    || null,
-      lead_score: leadScore,
-      status:     'new',
-      utm_source:   utmSource,
-      utm_medium:   utmMedium,
-      utm_campaign: utmCampaign,
-      qr_scan_id:   qrScanId,
-    };
-
-    let enquiry;
-    if (isUpdate) {
-      const { data, error: updError } = await supabaseAdmin
-        .from('website_enquiries')
-        .update(enquiryFields)
-        .eq('id', form.enquiry_id)
-        .select('id')
-        .single();
-      if (updError) throw updError;
-      enquiry = data;
-    } else {
-      const { data, error: enqError } = await supabaseAdmin
-        .from('website_enquiries')
-        .insert(enquiryFields)
-        .select('id')
-        .single();
-      if (enqError) throw enqError;
-      enquiry = data;
-    }
-
-    // ── 2. Create CRM contact so lead appears in employee portal ─────────────
-    const name = [form.firstName, form.lastName].filter(Boolean).join(' ').trim() || 'Website Enquiry';
-    const systemType = deriveSystemType(form);
-    // contacts.system_type CHECK only allows on-grid/off-grid/hybrid — collapse ppa
-    const contactSystemType = systemType === 'ppa' ? 'on-grid' : systemType;
-    const notes = [
-      form.installationType      && `Installation: ${form.installationType}`,
-      form.ownsHome              && `Owns home: ${form.ownsHome}`,
-      form.floors                && `Floors: ${form.floors}`,
-      form.roofType              && `Roof type: ${form.roofType}`,
-      form.batteryOption         && `Battery: ${form.batteryOption}`,
-      form.callToDiscuss         && `Call to discuss: ${form.callToDiscuss}`,
-      form.installationTimeframe && `Timeframe: ${form.installationTimeframe}`,
-    ].filter(Boolean).join(' | ') || null;
-
-    const contactFields = {
-      name,
-      email:           form.email                                            || null,
-      phone:           form.phone                                            || null,
-      location:        form.address                                          || null,
-      type:            form.installationType === 'commercial' ? 'commercial' : 'residential',
-      system_type:     contactSystemType,
-      monthly_bill:    form.monthlyBill ? parseFloat(form.monthlyBill)       : null,
-      stage:           'new',
-      // If the lead came from a QR campaign, source = utm_source (e.g. "card"/"flyer"/"show");
-      // otherwise fall back to the form-supplied leadSource or generic "website".
-      source:          utmSource || form.leadSource || 'website',
-      lead_source:        form.leadSource       || null,
-      lead_source_other:  form.leadSourceOther  || null,
-      referrer_name:      form.referrerName     || null,
-      referrer_phone:     form.referrerPhone    || null,
-      street:             form.addressStreet    || null,
-      suburb:             form.addressSuburb    || null,
-      city:               form.addressCity      || null,
-      postcode:           form.addressPostcode  || null,
-      lifecycle:       'subscriber',
-      estimated_value: calculation?.totalCost                                || null,
-      lead_score:      leadScore,
-      last_activity:   isUpdate ? 'Wizard completed (QR partial promoted)' : 'Website enquiry submitted',
-      notes,
-      utm_source:   utmSource,
-      utm_medium:   utmMedium,
-      utm_campaign: utmCampaign,
-      qr_scan_id:   qrScanId,
-    };
-
-    let contact;
-    if (isUpdate) {
-      const { data, error: cUpdError } = await supabaseAdmin
-        .from('contacts')
-        .update(contactFields)
-        .eq('id', form.contact_id)
-        .select('id')
-        .single();
-      if (cUpdError) throw cUpdError;
-      contact = data;
-    } else {
-      const { data, error: contactError } = await supabaseAdmin
-        .from('contacts')
-        .insert(contactFields)
-        .select('id')
-        .single();
-      if (contactError) throw contactError;
-      contact = data;
-    }
-
-    // ── 2b. Back-link the scan event to the lead it generated ──────────────
-    // Best-effort — failure here doesn't block the lead flow.
-    if (qrScanId) {
-      try {
-        await supabaseAdmin
-          .from('qr_scans')
-          .update({ lead_enquiry_id: enquiry.id, lead_contact_id: contact.id })
-          .eq('id', qrScanId);
-      } catch (e) {
-        console.warn('qr_scans back-link failed (non-fatal):', e.message);
-      }
-    }
-
-    // ── 2c. Google roof analysis pipeline (fire-and-forget) ──────────────
-    // Two-step: geocode address → analyseRoof(lat/lng). Both APIs share the
-    // same Google API key (Q-KEY = one key, both APIs restricted). Each is
-    // quota-tracked independently under its own endpoint in
-    // google_solar_usage — so a burst of geocoding doesn't eat the
-    // Solar API cap.
-    //
-    // Feature-flag gated: if FEATURE_GOOGLE_SOLAR is off, skip both API
-    // calls and let analyseRoof record a 'skipped_flag' row. Prevents any
-    // paid API traffic when the feature is disabled (Q6a).
-    //
-    // Fire-and-forget — wizard response returns fast; the pipeline runs on
-    // the Node event loop. Errors are captured in the roof_analyses row
-    // (error_message column) rather than propagated to the wizard response.
-    Promise.resolve().then(async () => {
-      const composedAddress =
-        form.address ||
-        [form.addressStreet, form.addressSuburb, form.addressCity].filter(Boolean).join(', ') ||
-        'unknown';
-
-      // Prefer frontend-supplied coords (from browser-side autocomplete) if
-      // present. Fall back to server-side geocoding via Google Geocoding API.
-      let latitude  = typeof form.latitude  === 'number' ? form.latitude  : undefined;
-      let longitude = typeof form.longitude === 'number' ? form.longitude : undefined;
-
-      const needsGeocode = latitude === undefined || longitude === undefined;
-      if (env.googleSolar.enabled && needsGeocode && composedAddress !== 'unknown') {
-        try {
-          const reservation = await reserveQuota('geocoding');
-          if (reservation.allowed) {
-            const geo = await geocodeAddress(composedAddress);
-            if (geo.ok) {
-              latitude  = geo.latitude;
-              longitude = geo.longitude;
-            } else {
-              console.warn(`[quote.js] geocode failed for enquiry=${enquiry.id} reason=${geo.reason}: ${geo.error}`);
-            }
-          } else {
-            console.warn(`[quote.js] geocode skipped for enquiry=${enquiry.id} — quota exhausted (${reservation.callCount}/${reservation.quota})`);
-          }
-        } catch (err) {
-          // Don't let a geocoding failure block analyseRoof — it will
-          // record 'failed' with a geocoding-required message.
-          console.warn(`[quote.js] geocode threw for enquiry=${enquiry.id}: ${err?.message || err}`);
-        }
-      }
-
-      await analyseRoof({
-        enquiryId: enquiry.id,
-        address:   composedAddress,
-        latitude,
-        longitude,
-        contactId: contact.id,
-      });
-    }).catch(err => console.error('[quote.js] roof analysis pipeline failed:', err?.message || err));
-
-    // NOTE: We deliberately do NOT create a project here. Projects are
-    // operational records for confirmed customers. Sales reps qualify the
-    // lead through the cadence below, then promote the contact to a project
-    // when the customer commits (POST /api/leads/:id/promote-to-project).
-    // Until then the contact lives in /portal/pipeline only.
-
-    // ── 3. Create the multi-touch follow-up cadence (Phase 7.3 type-aware) ──
-    const team = teamForCustomerType(form);
-    const cadence = pickCadence(form);
-
-    const baseDescription = [
-      `[${team}]`,
-      `New website enquiry${form.monthlyBill ? ` — $${form.monthlyBill}/mo bill` : ''}.`,
-      form.customerType          && `Customer type: ${form.customerType}.`,
-      form.installationType      && form.installationType !== form.customerType && `Installation: ${form.installationType}.`,
-      form.wizardIntent          && `Wizard intent: ${form.wizardIntent}.`,
-      form.phoneVerified === true  && '✓ Phone OTP-verified.',
-      form.phoneVerified === false && '⚠ Phone NOT verified (passers-by risk).',
-      form.businessType          && `Business type: ${form.businessType}.`,
-      form.operatingHours        && `Hours: ${form.operatingHours}.`,
-      form.dailyKwh              && `Daily kWh need: ${form.dailyKwh}.`,
-      form.autonomyDays          && `Autonomy days: ${form.autonomyDays}.`,
-      form.offGridReason         && `Off-grid reason: ${form.offGridReason}.`,
-      form.contractLength        && `Contract length: ${form.contractLength} yrs.`,
-      form.decisionMakers        && `Decision-makers: ${form.decisionMakers}.`,
-      form.batteryOption         && `Battery: ${form.batteryOption}.`,
-      form.installationTimeframe && `Timeframe: ${form.installationTimeframe}.`,
-      form.callToDiscuss === 'yes' && 'Customer requested a callback.',
-      form.notes                 && `Customer notes: ${form.notes}`,
-      calculation?.systemSize && `Est. system: ${calculation.systemSize} kW, $${Math.round(calculation.totalCost).toLocaleString()}.`,
-    ].filter(Boolean).join(' ');
-
-    // Track 2 urgency tagging: every full submit is 'high' priority on Day 0
-    // (customer completed the wizard — they're serious enough to pursue).
-    // For UPDATE path (partial → new), we also clear the medium-priority
-    // bail-out task that was created at Step 3 so sales doesn't see stale work.
-    const cadenceTasks = cadence.map(step => ({
-      title:       `${step.title} — ${name}`,
-      description: baseDescription,
-      contact_id:  contact.id,
-      due_date:    new Date(Date.now() + step.offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      priority:    step.offsetDays === 0 ? 'high' : step.priority,
-      status:      'todo',
-      task_type:   step.task_type,
-      assignee_id: null,
-    }));
-    await supabaseAdmin.from('tasks').insert(cadenceTasks);
-
-    // Promote the partial bail-out task to 'done' if this is the UPDATE path —
-    // sales doesn't need to chase someone who just completed the wizard.
-    if (isUpdate) {
-      try {
-        await supabaseAdmin
-          .from('tasks')
-          .update({ status: 'done', description: 'Auto-completed: customer finished the wizard.' })
-          .eq('contact_id', contact.id)
-          .like('title', 'Mid-flow partial — bail-out follow-up%')
-          .eq('status', 'todo');
-      } catch (e) { console.warn('partial-task cleanup failed (non-fatal):', e.message); }
-    }
-
-    // ── 4. Log activity so it appears in dashboard Recent Activity feed ─────
-    await supabaseAdmin.from('activities').insert({
-      type:        'system',
-      description: `New website lead: ${name}${form.monthlyBill ? ` — $${form.monthlyBill}/mo bill` : ''}${calculation?.totalCost ? ` — est. $${Math.round(calculation.totalCost).toLocaleString()}` : ''}`,
-      contact_id:  contact.id,
-      metadata: {
-        enquiry_id:   enquiry.id,
-        monthly_bill: form.monthlyBill || null,
-        system_size:  calculation?.systemSize || null,
-        total_cost:   calculation?.totalCost  || null,
-        lead_score:   leadScore,
-        source:       'website_form',
-      },
-    });
-
-    // ── 5. If this lead came with an analysisId, fetch the review flag so the
-    //      team email can warn sales the bills need verification before quoting.
-    let reviewFlag = null;
-    if (form.analysisId) {
-      try {
-        const { data: analysisRow } = await supabaseAdmin
-          .from('bill_analyses')
-          .select('id, review_required, review_reasons')
-          .eq('id', form.analysisId)
-          .maybeSingle();
-        if (analysisRow?.review_required) {
-          reviewFlag = {
-            analysis_id:     analysisRow.id,
-            enquiry_id:      enquiry.id,
-            review_required: true,
-            review_reasons:  analysisRow.review_reasons || [],
-          };
-        }
-      } catch (e) { console.warn('Could not fetch analysis review flag (non-fatal):', e.message); }
-    }
-
-    // ── 6. Notify the team + send customer acknowledgment in parallel.
-    //      Both non-fatal — we never block the API response on email problems.
-    //      Skip the team email on UPDATE path (it was sent at /submit-partial).
-    Promise.all([
-      (async () => {
-        if (isUpdate) return;   // team already notified during partial capture
-        try {
-          const { data: admins } = await supabaseAdmin
-            .from('users')
-            .select('email')
-            .eq('role', 'admin')
-            .eq('is_active', true);
-          const recipients = (admins || []).map(u => u.email).filter(Boolean);
-          await sendTeamNewLeadEmail({ form, calculation, leadScore, recipients, reviewFlag });
-        } catch (e) { console.error('Team notification email failed (non-fatal):', e.message); }
-      })(),
-      (async () => {
-        try {
-          await sendCustomerAckEmail({ form });
-        } catch (e) { console.error('Customer ack email failed (non-fatal):', e.message); }
-      })(),
-    ]);
-
-    res.status(201).json({ success: true, id: enquiry.id, contact_id: contact.id });
+    // All the writes (enquiry, contact, qr back-link, roof-analysis pipeline,
+    // cadence tasks, activity, review flag, team/customer emails) now live in
+    // services/leadService.js — same identical behavior, just extracted into a
+    // shared service so the incoming /api/quote/submit-with-design endpoint
+    // can reuse the exact same write pipeline. Refactor 2026-08-20 (A3).
+    const result = await createOrUpdateLead({ form });
+    res.status(201).json({ success: true, id: result.enquiryId, contact_id: result.contactId });
   } catch (e) {
+    // createOrUpdateLead throws err.status=400 on validation failure so the
+    // wizard still gets the same friendly per-field messages it used to.
+    if (e.status === 400) {
+      return res.status(400).json({
+        error: e.message,
+        errors: e.errors,
+      });
+    }
     console.error('Submit enquiry error:', e.message);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Phase A ticket A5 (2026-08-20) — /api/quote/submit-with-design ────────
+// Called by the new merged residential flow when the customer clicks
+// "Get this quote" on their chosen tier. Payload = { form, design }.
+//   • form   — same shape as /submit (contact + address). Wizard fields
+//              like installationType, batteryOption, etc. are still accepted
+//              so leadService fills in the legacy columns identically.
+//   • design — the POC output the customer saw: roof analysis result + all
+//              3 tier options + which tier they picked + customise sliders
+//              (battery kWh, EV opt-in, km/day). Shape:
+//                {
+//                  chosenTierId, systemKwp, panelCount,
+//                  batteryKwh, evIncluded, tierPrice, roofSource,
+//                  lat, lng, fullPayload
+//                }
+//
+// Uses the shared leadService with two flags flipped vs old /submit:
+//   • skipRoofAnalysis=true — POC's /api/poc/roof/analyse already ran; we
+//                             don't need the legacy Google-Solar fire-and-
+//                             forget pipeline to overwrite our better result
+//   • createProjectV2=true  — Phase 6.6 bundle: auto-create a projects_v2
+//                             row so sales team sees the full design in the
+//                             PM Tool without manual copy-paste
+router.post('/submit-with-design', async (req, res) => {
+  try {
+    const { form, design } = req.body;
+    if (!form)   return res.status(400).json({ error: 'Form data is required.' });
+    if (!design) return res.status(400).json({ error: 'Design payload is required.' });
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+
+    const result = await createOrUpdateLead({
+      form,
+      design,
+      skipRoofAnalysis: true,
+      createProjectV2:  true,
+    });
+
+    res.status(201).json({
+      success:     true,
+      id:          result.enquiryId,
+      contact_id:  result.contactId,
+      project_id:  result.projectId,   // null in A5; populated once A7 wires projects_v2 write
+      share_token: result.shareToken,  // Phase B4 — magic-link viewer /p/:token
+    });
+  } catch (e) {
+    if (e.status === 400) {
+      return res.status(400).json({
+        error:  e.message,
+        errors: e.errors,
+      });
+    }
+    console.error('Submit-with-design error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Phase B2 (2026-08-20) — progressive draft capture ─────────────────────
+// Called by the merged /get-quote residential wizard on:
+//   • Email typed in the header progressive-capture input (I2)
+//   • Tier chosen on Step 4 (B4 optimistic quote save)
+// Persists whatever we know so far as a partial website_enquiries + contacts
+// row. Idempotent — echoing the returned enquiry_id + contact_id upserts
+// the same draft instead of creating duplicates.
+//
+// UNLIKE /submit-partial (which enforces firstName + email + phone), THIS
+// endpoint requires ONLY email. Name defaults to 'Draft' + phone is nullable,
+// so the customer can save state before they've committed contact info.
+// Once the customer completes Step 5, /submit-with-design promotes the row
+// to status='new' via the ids we return (same reuse pattern as /submit-partial).
+router.post('/draft', async (req, res) => {
+  try {
+    const { form = {}, design = null, enquiry_id = null, contact_id = null } = req.body || {};
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    // Only requirement — email. Everything else is best-effort progressive.
+    const email = (form.email || '').trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Valid email address is required.' });
+    }
+    // Fill safe defaults so the shared write pipeline (validateQuoteForm
+    // inside leadService) accepts the payload without name/phone.
+    const draftForm = {
+      firstName:      form.firstName?.trim() || 'Draft',
+      lastName:       form.lastName?.trim()  || null,
+      email,
+      phone:          form.phone?.trim() || null,
+      address:        form.address || null,
+      customerType:   form.customerType   || 'residential',
+      installationType: form.installationType || 'residential',
+      wizardIntent:   form.wizardIntent   || null,
+      monthlyBill:    form.monthlyBill    || null,
+      utm_source:     form.utm_source,
+      utm_medium:     form.utm_medium,
+      utm_campaign:   form.utm_campaign,
+      qr_scan_id:     form.qr_scan_id,
+      // Echo prior ids for upsert idempotency — matches /submit-partial's
+      // Back-and-forward guarantee, so multiple debounced saves for the
+      // same customer land on the same DB row.
+      enquiry_id,
+      contact_id,
+    };
+    const result = await createOrUpdateLead({
+      form: draftForm,
+      design,                     // may include chosenTierId + tierPrice + design summary
+      skipRoofAnalysis: true,     // draft = no fire-and-forget Google Solar pipeline
+      createProjectV2:  false,    // don't create PM Tool row until customer commits
+      draftMode:        true,     // status='partial', skip cadence/activity/emails
+    });
+    return res.status(201).json({
+      success:    true,
+      enquiry_id: result.enquiryId,
+      contact_id: result.contactId,
+    });
+  } catch (e) {
+    if (e.status === 400) {
+      return res.status(400).json({ error: e.message, errors: e.errors });
+    }
+    console.error('/quote/draft error:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Phase B2 I3 (2026-08-21) — resume a bailed wizard from a magic-link ──
+// GET /api/quote/resume/:id
+//
+// Called by the client /get-quote/resume/:token route when a customer clicks
+// the CTA in the bail-out follow-up email. Returns just enough server-side
+// state to rehydrate the wizard without touching the customer's session:
+//   • contact fields (name, email, phone) — from the enquiry row
+//   • address (formattedAddress + lat/lng) — reconstructed from enquiry cols
+//   • usage / bill blob — from poc_design_json (only present if they got past
+//                          Step 4 tier pick; earlier bailers get NULL and the
+//                          wizard falls back to Step 1 with just contact/address)
+//   • chosen tier — from poc_design_json + flat migration-042 columns
+//   • draftIds — echoed back so Step 5 submit UPSERTS the same row
+//                (status='partial' → 'new' promotion, same idempotency as B2)
+//
+// Token = enquiry.id (a UUID, already unguessable). No dedicated resume_token
+// column needed — same design tradeoff as projects_v2.share_token but reusing
+// an existing identifier. Gated on status='partial' so once /submit-with-design
+// promotes the row to 'new' the token stops working — invalidate-on-submit is
+// free. Rate limiter (express-rate-limit) already caps public /quote/* routes.
+//
+// No auth — the UUID IS the credential, same as /api/public/p/:share_token.
+router.get('/resume/:id', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured.' });
+    const id = String(req.params.id || '');
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      return res.status(400).json({ error: 'Invalid resume token.' });
+    }
+    const { data: enquiry, error } = await supabaseAdmin
+      .from('website_enquiries')
+      .select(`
+        id, status, first_name, last_name, email, phone, address,
+        street, suburb, city, postcode,
+        monthly_bill, coords_lat, coords_lng,
+        submission_source, chosen_tier_id, system_kwp, panel_count,
+        battery_kwh_chosen, ev_charger_included, tier_price, roof_source,
+        poc_design_json, created_at, updated_at
+      `)
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[/quote/resume] db error:', error.message);
+      return res.status(500).json({ error: 'Could not load your saved quote.' });
+    }
+    // Invalidate-on-submit: /submit-with-design promotes status to 'new'.
+    // Anything other than 'partial' means the draft is either not-a-draft or
+    // already been finalised — either way, no resume for you.
+    if (!enquiry || enquiry.status !== 'partial') {
+      return res.status(404).json({ error: 'This quote is no longer available. Start a fresh one.' });
+    }
+
+    // Look up the contact row (the wizard populates its `contact` state from
+    // this). One-to-one with enquiry by email + created within the same
+    // draft-save, so a bounded lookup by email is safe.
+    let contactId = null;
+    if (enquiry.email) {
+      const { data: contactRow } = await supabaseAdmin
+        .from('contacts')
+        .select('id')
+        .eq('email', enquiry.email)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      contactId = contactRow?.id || null;
+    }
+
+    // Rehydrate address if we have enough to reconstruct it.
+    const address = enquiry.address || enquiry.street || enquiry.coords_lat != null
+      ? {
+          formattedAddress: enquiry.address
+            || [enquiry.street, enquiry.suburb, enquiry.city, enquiry.postcode].filter(Boolean).join(', ')
+            || null,
+          latitude:  enquiry.coords_lat  != null ? Number(enquiry.coords_lat)  : null,
+          longitude: enquiry.coords_lng != null ? Number(enquiry.coords_lng) : null,
+        }
+      : null;
+
+    // Rehydrate chosen tier — prefer the JSONB blob (has the full engine
+    // response), fall back to flat columns.
+    let chosenTier = null;
+    if (enquiry.chosen_tier_id && enquiry.poc_design_json?.tier) {
+      chosenTier = { id: enquiry.chosen_tier_id, tier: enquiry.poc_design_json.tier };
+    } else if (enquiry.chosen_tier_id) {
+      chosenTier = {
+        id: enquiry.chosen_tier_id,
+        tier: {
+          label:              enquiry.chosen_tier_id,
+          system_size_kwp:    enquiry.system_kwp,
+          panels:             enquiry.panel_count,
+          battery_kwh:        enquiry.battery_kwh_chosen,
+          wattpilot_included: !!enquiry.ev_charger_included,
+          price_inc_gst:      enquiry.tier_price,
+        },
+      };
+    }
+
+    // Usage — the JSONB blob is the only source of truth for the customer's
+    // Step 1 bill/spend/kwh input. If it's missing, fall back to monthly_bill.
+    const usage = enquiry.poc_design_json?.usage || (
+      enquiry.monthly_bill
+        ? { tab: 'spend', monthlySpend: Number(enquiry.monthly_bill), bill: null, annualKwh: null }
+        : null
+    );
+
+    // Decide the farthest step the client should jump to based on how far
+    // the customer got. Higher = further along; the wizard uses this as the
+    // initial stepIdx AND the StepRail's forward-jump ceiling.
+    //   0=usage, 1=house, 2=analysis, 3=system, 4=quote
+    // Analysis (step 2) is never persisted — a resume ALWAYS re-runs it — so
+    // we never jump past Step 2 without re-running. If we know tier they were
+    // eyeing, land on Step 2 anyway so they see the roof re-analyse.
+    let farthestStep = 0;
+    if (usage)             farthestStep = 1;
+    if (address)           farthestStep = 2;
+    // Don't jump past analysis — it needs re-running. Chosen-tier is
+    // rehydrated into state so if analysis succeeds, the wizard can advance
+    // to Step 4 with the customer's original pick intact.
+
+    return res.json({
+      ok: true,
+      resumed_at: new Date().toISOString(),
+      farthest_step: farthestStep,
+      form: {
+        firstName: enquiry.first_name || '',
+        lastName:  enquiry.last_name  || '',
+        email:     enquiry.email      || '',
+        phone:     enquiry.phone      || '',
+      },
+      address,
+      usage,
+      chosenTier,
+      draftIds: {
+        enquiryId: enquiry.id,
+        contactId,
+      },
+      meta: {
+        submission_source: enquiry.submission_source,
+        created_at:        enquiry.created_at,
+        updated_at:        enquiry.updated_at,
+      },
+    });
+  } catch (e) {
+    console.error('[/quote/resume] threw:', e?.message || e);
+    return res.status(500).json({ error: 'Could not load your saved quote.' });
   }
 });
 

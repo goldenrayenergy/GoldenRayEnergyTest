@@ -1,0 +1,14 @@
+{
+  "//": "Server dev watcher. Switched from `node --watch` because Node 25's watcher restarted the process whenever a dep in node_modules (e.g. pdf-parse's dynamic imports during a bill upload) touched files it had loaded — killing in-flight requests, which the Vite proxy surfaces to the browser as a bare text/plain 500 with no server-side stack trace. Nodemon ignores node_modules by default and only restarts on OUR source changes.",
+  "watch": ["."],
+  "ignore": [
+    "node_modules",
+    "scripts",
+    "test-*.mjs",
+    "test-*.js",
+    "**/*.test.js",
+    "**/*.test.mjs",
+    ".git"
+  ],
+  "ext": "js,mjs,json"
+}

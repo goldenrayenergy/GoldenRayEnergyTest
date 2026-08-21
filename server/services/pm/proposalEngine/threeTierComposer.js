@@ -101,8 +101,21 @@ function priceTierFromCatalogue(tier, catalogue) {
     const bom  = buildBom(effectiveSpec, { catalogue });
     const cost = computeCost(effectiveSpec, bom, { catalogue });
     const listPrice = cost?.totals?.total_list_inc_gst;
+    if (!Number.isFinite(listPrice)) {
+      // TEMP diagnostic (2026-08-14): why is listPrice non-finite? Log the
+      // totals shape once so we can see what computeCost actually produced.
+      console.warn('[priceTierFromCatalogue] listPrice not finite:', {
+        tier_label:  tier.label,
+        cost_keys:   cost ? Object.keys(cost) : 'cost is null/undefined',
+        totals:      cost?.totals || null,
+      });
+    }
     return Number.isFinite(listPrice) ? listPrice : null;
   } catch (e) {
+    // TEMP diagnostic (2026-08-14): surface the silent catch so we can see
+    // why buildBom / computeCost is throwing on POC-flow inputs.
+    console.warn('[priceTierFromCatalogue] throw during compute:', tier.label, '·', e?.message || String(e));
+    if (e?.stack) e.stack.split('\n').slice(0, 4).forEach(l => console.warn('    ' + l));
     return null;
   }
 }
@@ -284,23 +297,42 @@ export function composeThreeTiers({
 
   // ── Engine-driven path (bills exist) ──────────────────────────────────
   const recBat = Number(billAnalysis.recommended_battery_kwh) || 11;
-  const tierKwp = sizeMode === 'tiered_sizes'
+  // 2026-08-19 · sizeMode='per_tier' — POC path where each tier is sized
+  // independently for its own load profile (base | +battery | +battery+EV).
+  // Client sends battery_kwh + ev_km_per_day; server computes 3 kwp values;
+  // composer honours them via billAnalysis.tier_kwp_override.
+  const override = Array.isArray(billAnalysis?.tier_kwp_override) && billAnalysis.tier_kwp_override.length === 3
+    ? billAnalysis.tier_kwp_override.map(v => Number(v) || recKw)
+    : null;
+  const tierKwp = sizeMode === 'per_tier' && override
+    ? { t1: override[0], t2: override[1], t3: override[2] }
+    : sizeMode === 'tiered_sizes'
     ? {
         t1: +(recKw * mults.tier_1_starter).toFixed(2),
         t2: +(recKw * mults.tier_2_right_size).toFixed(2),
         t3: +(recKw * mults.tier_3_future_proof).toFixed(2),
       }
     : { t1: recKw, t2: recKw, t3: recKw };
+  // Tier 3 EV — honour explicit client toggle when POC sent it; otherwise
+  // default to true (legacy behaviour: tier 3 always includes Wattpilot).
+  const tier3HasEv = typeof billAnalysis?.tier3_ev_enabled === 'boolean'
+    ? billAnalysis.tier3_ev_enabled
+    : true;
+  // Tier 2 EV — off by default (matches legacy). Set to true when POC
+  // client sends tier2_ev_enabled=true (customer toggled EV on via the
+  // Customise-System panel — then EV load applies to tier 2 sizing +
+  // tier 2 tier card shows "EV-ready").
+  const tier2HasEv = !!billAnalysis?.tier2_ev_enabled;
 
   const tierInputs = [
     { kwp: tierKwp.t1, batt: null,         hasEv: false,
       label: labels.tier_1 || (sizeMode === 'tiered_sizes' ? `Starter ${tierKwp.t1} kW` : 'Solar only'),
       isRecommended: false },
-    { kwp: tierKwp.t2, batt: recBat,       hasEv: false,
-      label: labels.tier_2 || (sizeMode === 'tiered_sizes' ? `Right-size ${tierKwp.t2} kW` : `Solar + ${recBat} kWh battery`),
+    { kwp: tierKwp.t2, batt: recBat,       hasEv: tier2HasEv,
+      label: labels.tier_2 || (sizeMode === 'tiered_sizes' ? `Right-size ${tierKwp.t2} kW` : `Solar + ${recBat} kWh battery${tier2HasEv ? ' + EV-ready' : ''}`),
       isRecommended: true },
-    { kwp: tierKwp.t3, batt: recBat + 2.76, hasEv: true,
-      label: labels.tier_3 || (sizeMode === 'tiered_sizes' ? `Future-proof ${tierKwp.t3} kW` : `Solar + ${(recBat+2.76).toFixed(1)} kWh battery + EV-ready`),
+    { kwp: tierKwp.t3, batt: recBat + 2.76, hasEv: tier3HasEv,
+      label: labels.tier_3 || (sizeMode === 'tiered_sizes' ? `Future-proof ${tierKwp.t3} kW` : `Solar + ${(recBat+2.76).toFixed(1)} kWh battery${tier3HasEv ? ' + EV-ready' : ''}`),
       isRecommended: false },
   ];
 
@@ -360,7 +392,7 @@ export function composeThreeTiers({
 // recommendation by default.
 function applyPricesFromCatalogue(tiers, catalogue) {
   for (const tier of tiers) {
-    tier.pricing.customer_price_inc_gst = null;   // auto-priced by default
+    tier.pricing.customer_price_inc_gst = null;   // reset to "auto-priced" default
     const price = priceTierFromCatalogue(tier, catalogue);
     if (price == null) {
       tier.engine_warnings = tier.engine_warnings || [];
@@ -370,6 +402,15 @@ function applyPricesFromCatalogue(tiers, catalogue) {
                  'or compliance line in the catalogue. Price will compute on first save ' +
                  'once the catalogue is complete.',
       });
+    } else {
+      // Fix (2026-08-14): assignment was missing — the engine computed a
+      // price but the composer silently dropped it, leaving every POC tier
+      // priceless. Symptoms: null tier_price in the API response, no
+      // pricing_pending warnings (because compute DID succeed), no visible
+      // $ on TierCard, and financials/F1/F3/F6 sections silently hidden
+      // (my design.js guards against costResult.totals.customer_total_inc_gst
+      // being non-finite).
+      tier.pricing.customer_price_inc_gst = price;
     }
   }
 }

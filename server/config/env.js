@@ -70,6 +70,11 @@ export default {
     // (no registration required, but keys expire after 90 days — auto-regenerated
     // on next visit). Production later should use a Developer key: email
     // basemaps@linz.govt.nz.
+    //
+    // NOTE: Basemap and Data Service are SEPARATE LINZ products with separate
+    // key management. Basemap keys don't work for Data Service (vector queries
+    // like NZ Building Outlines) and vice versa. Use dataApiKey below for
+    // Data Service calls.
     apiKey: (() => {
       if (process.env.LINZ_BASEMAP_API_KEY) return process.env.LINZ_BASEMAP_API_KEY;
       if (process.env.FEATURE_LINZ_IMAGERY === 'true'
@@ -81,6 +86,11 @@ export default {
       }
       return null;
     })(),
+    // LINZ Data Service key — separate from Basemap. Grants access to vector
+    // datasets like NZ Building Outlines (layer 101290). Create at
+    // data.linz.govt.nz → My APIs. Enable Vector Query API scope + the
+    // NZ Building Outlines layer on the key.
+    dataApiKey: process.env.LINZ_DATA_API_KEY || null,
     enabled: process.env.FEATURE_LINZ_IMAGERY === 'true',
     // Default tile format — WebP is smallest at good quality; sharp reads it.
     tileFormat: process.env.LINZ_TILE_FORMAT || 'webp',

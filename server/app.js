@@ -161,8 +161,15 @@ app.use('/api/bill-analysis', billAnalysisRoutes);
 // Feature-flagged so a POC-side bug can't affect live traffic. Unset ENABLE_POC (or
 // set to anything other than 'true') to unmount entirely — the router import above
 // is safe on its own; only mounting exposes the routes.
+// Phase E revision (2026-08-21) — client-side /poc/* routes are ALSO gated by
+// Vite's import.meta.env.DEV in client/src/App.jsx, so production deployments
+// hide POC in both surfaces. This boot log makes the current state visible so
+// nobody has to hunt through env vars to answer "why is /poc not working?".
 if (process.env.ENABLE_POC === 'true') {
   app.use('/api/poc', pocRoutes);
+  console.log('[server] POC endpoints ENABLED (/api/poc/*)');
+} else {
+  console.log('[server] POC endpoints disabled (set ENABLE_POC=true in .env to enable locally)');
 }
 
 app.use('/api/pm', pmRoutes);  // PM tool (Phase A) — parallel project model, no overlap with /api/projects

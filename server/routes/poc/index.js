@@ -9,6 +9,9 @@ import { Router } from 'express';
 import billRoutes from './bill.js';
 import roofRoutes, { aerialRouter } from './roof.js';
 import placesRoutes from './places.js';
+import designRoutes from './design.js';
+import threedRoutes from './threed.js';
+import leadsRoutes from './leads.js';
 
 const router = Router();
 
@@ -16,7 +19,10 @@ router.get('/health', (_req, res) => res.json({ ok: true, scope: 'poc' }));
 
 router.use('/bill',   billRoutes);
 router.use('/roof',   roofRoutes);
-router.use('/aerial', aerialRouter);  // Google Static Maps + LINZ tiles
-router.use('/places', placesRoutes);  // Places API (New) autocomplete + details
+router.use('/aerial', aerialRouter);   // Google Static Maps + Streetview + LINZ tiles
+router.use('/places', placesRoutes);   // Places API (New) autocomplete + details
+router.use('/design', designRoutes);   // threeTierComposer bridge
+router.use('/3d',     threedRoutes);   // Cesium + Google Photorealistic 3D Tiles
+router.use('/leads',  leadsRoutes);    // Book-a-site-survey CTA capture (POC only)
 
 export default router;
