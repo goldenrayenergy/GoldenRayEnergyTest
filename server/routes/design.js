@@ -8,12 +8,12 @@
 // route at /api/pm/proposal-engine/compose-three-tiers.
 
 import { Router } from 'express';
-import { supabaseAdmin } from '../../config/supabase.js';
-import { loadCatalogueFromDb } from '../../services/pm/proposalEngine/catalogue/dbLoader.js';
-import { composeThreeTiers }   from '../../services/pm/proposalEngine/threeTierComposer.js';
-import { runThreeScenarios, MONTHLY_YIELD_PCT }   from '../../services/pm/proposalEngine/financialModel.js';
+import { supabaseAdmin } from '../config/supabase.js';
+import { loadCatalogueFromDb } from '../services/pm/proposalEngine/catalogue/dbLoader.js';
+import { composeThreeTiers }   from '../services/pm/proposalEngine/threeTierComposer.js';
+import { runThreeScenarios, MONTHLY_YIELD_PCT }   from '../services/pm/proposalEngine/financialModel.js';
 import { REGIONS, COMPATIBILITY, BMS_RULES, TIER_STRIP_SETTINGS }
-  from '../../services/pm/proposalEngine/data/engineeringRules.js';
+  from '../services/pm/proposalEngine/data/engineeringRules.js';
 
 // Typical NZ residential defaults for the MANUAL-flow (no-bill) path — we
 // can't compute exact old-bill trajectory without the customer's actual

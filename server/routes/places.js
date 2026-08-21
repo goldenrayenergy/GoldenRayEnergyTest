@@ -15,7 +15,7 @@
 // GOOGLE_SOLAR_API_KEY. NZ-biased via regionCode/includedRegionCodes.
 
 import { Router } from 'express';
-import env from '../../config/env.js';
+import env from '../config/env.js';
 
 const router = Router();
 

@@ -1,5 +1,5 @@
 // Live HTTP smoke test for /api/quote/submit + /api/quote/submit-with-design
-// + /api/poc/leads. Fires real requests against a running local server. If
+// + /api/quote/legacy-submit. Fires real requests against a running local server. If
 // SUPABASE_DATABASE_URL is set, also queries the DB to verify rows landed
 // with the expected shape. Cleans up after itself.
 //
@@ -114,8 +114,8 @@ async function run() {
   // project_id may be null if projects_v2 write failed (which is non-fatal)
   console.log(`  INFO  project_id = ${submitWithDesign.body?.project_id || 'null'} (null OK if migration 042/projects_v2 write couldn't run)`);
 
-  console.log(`\n── /api/poc/leads (upgraded from stub, Phase A/A6) ──`);
-  const pocLead = await postJson(`${SERVER}/api/poc/leads`, {
+  console.log(`\n── /api/quote/legacy-submit (upgraded from stub, Phase A/A6) ──`);
+  const pocLead = await postJson(`${SERVER}/api/quote/legacy-submit`, {
     contact: {
       name:  'POC Test',
       email: `poc-${testEmail}`,
@@ -132,7 +132,7 @@ async function run() {
       from_manual_entry:  false,
     },
   });
-  assert(pocLead.status === 201, `POST /api/poc/leads → 201 (got ${pocLead.status}; body: ${(pocLead.raw || '').slice(0, 300)})`);
+  assert(pocLead.status === 201, `POST /api/quote/legacy-submit → 201 (got ${pocLead.status}; body: ${(pocLead.raw || '').slice(0, 300)})`);
   assert(pocLead.body?.ok === true, `response.ok === true`);
   assert(pocLead.body?.lead_id, `response.lead_id present`);
   assert(pocLead.body?.contact_id, `response.contact_id present`);

@@ -21,7 +21,7 @@
 // the new merged flow submits directly to /api/quote/submit-with-design.
 
 import { Router } from 'express';
-import { createOrUpdateLead } from '../../services/leadService.js';
+import { createOrUpdateLead } from '../services/leadService.js';
 
 const router = Router();
 

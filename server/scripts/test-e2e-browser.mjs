@@ -188,7 +188,7 @@ async function testFullFlow(browser, spec) {
   // Capture the /extract API body so we can assert on it later.
   let extractApiBody = null;
   page.on('response', async (resp) => {
-    if (resp.url().includes('/api/poc/bill/extract') && resp.request().method() === 'POST') {
+    if (resp.url().includes('/api/bills/extract') && resp.request().method() === 'POST') {
       try { extractApiBody = await resp.json(); } catch { /* noop */ }
     }
   });
@@ -354,7 +354,7 @@ async function sanityChecks() {
     process.exit(1);
   }
   try {
-    const r = await fetch('http://localhost:5000/api/poc/places/autocomplete?input=test');
+    const r = await fetch('http://localhost:5000/api/places/autocomplete?input=test');
     if (!r.ok) throw new Error(`server ${r.status}`);
     console.log(`✓ Backend responsive at localhost:5000`);
   } catch (e) {

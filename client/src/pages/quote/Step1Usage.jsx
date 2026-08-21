@@ -1,7 +1,7 @@
 // Step1Usage — the merged 5-step flow's first screen (B1.2, 2026-08-20).
 //
 // Three tabs, one screen, no wizard-step transition between them:
-//   [I have bills]       — PDF upload → /api/poc/bill/extract → parsed kWh
+//   [I have bills]       — PDF upload → /api/bills/extract → parsed kWh
 //                          + extracted address (feeds Step 2 pre-populate).
 //   [I know my spend]    — monthly-$ slider, derives annual kWh.
 //   [I know my usage]    — annual-kWh direct input.
@@ -154,7 +154,7 @@ export default function Step1Usage({ usage, onChange, onContinue, onBack }) {
   );
 }
 
-// ── Tab: bill upload → /api/poc/bill/extract ────────────────────────────────
+// ── Tab: bill upload → /api/bills/extract ────────────────────────────────
 function BillsTab({ bill, onBill }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
@@ -172,7 +172,7 @@ function BillsTab({ bill, onBill }) {
     try {
       const fd = new FormData();
       fd.append('bill', file);
-      const { data } = await publicApi.post('/poc/bill/extract', fd, {
+      const { data } = await publicApi.post('/bills/extract', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 60_000,
       });

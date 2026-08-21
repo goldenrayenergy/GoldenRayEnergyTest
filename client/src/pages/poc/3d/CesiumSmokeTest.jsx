@@ -3,7 +3,7 @@
 // Standalone page at /poc/3d-test. Loads a rotatable/tiltable 3D scene
 // using Google's Photorealistic 3D Tiles.
 //
-// Server counterpart: server/routes/poc/threed.js (GET /api/poc/3d/tileset-config)
+// Server counterpart: server/routes/threed.js (GET /api/threed/tileset-config)
 //
 // Query string modes:
 //   Default:      ?lat=&lng=&height=&heading=&pitch=   → free-look at coord
@@ -13,8 +13,8 @@
 //                                                          snapped to Cesium mesh
 //
 // When ?address= is present, the smoke test:
-//   1. Calls /api/poc/places/autocomplete to resolve address → Place ID
-//   2. Calls /api/poc/roof/analyse to get Google Solar roof segments
+//   1. Calls /api/places/autocomplete to resolve address → Place ID
+//   2. Calls /api/roof/analyse to get Google Solar roof segments
 //   3. Picks the largest segment and computes an idealized panel grid
 //   4. Uses Cesium's sampleHeightMostDetailed() to snap each panel's altitude
 //      to the ACTUAL 3D Tiles mesh height at that lat/lng (not Google Solar's
@@ -85,7 +85,7 @@ export default function CesiumSmokeTest() {
         // 1. Get the tileset URL + attribution from our server. Keeps the
         //    API key server-side; browser only sees the ready-to-use URL.
         setStatus('fetching-config');
-        const { data: config } = await publicApi.get('/poc/3d/tileset-config');
+        const { data: config } = await publicApi.get('/threed/tileset-config');
         if (cancelled) return;
         setAttribution(config.attribution);
 
@@ -160,7 +160,7 @@ export default function CesiumSmokeTest() {
           console.log(`[address-mode] Looking up "${addressMode}"`);
 
           // 6a. Places autocomplete → first suggestion → Place ID.
-          const { data: ac } = await publicApi.get('/poc/places/autocomplete', {
+          const { data: ac } = await publicApi.get('/places/autocomplete', {
             params: { input: addressMode },
           });
           if (cancelled) { viewer.destroy(); return; }
@@ -173,7 +173,7 @@ export default function CesiumSmokeTest() {
 
           // 6b. Analyse endpoint → segments + coord.
           setStatus('fetching-analyse');
-          const { data: analyse } = await publicApi.post('/poc/roof/analyse', {
+          const { data: analyse } = await publicApi.post('/roof/analyse', {
             place_id: first.place_id,
           });
           if (cancelled) { viewer.destroy(); return; }

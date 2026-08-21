@@ -8,7 +8,7 @@
 
 import { Router } from 'express';
 import multer from 'multer';
-import { parseBillPdf } from '../../services/billOcrService.js';
+import { parseBillPdf } from '../services/billOcrService.js';
 
 const router = Router();
 

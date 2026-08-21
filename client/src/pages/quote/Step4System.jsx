@@ -123,7 +123,7 @@ export default function Step4System({
         : (analysis?.roof?.system_yield?.source || null);
 
       const recommendedPanelWatts = designRef.current?.tiers?.[designRef.current?.recommended_index]?.panel?.watts || 595;
-      const { data } = await publicApi.post('/poc/design/compose', {
+      const { data } = await publicApi.post('/design/compose', {
         annual_kwh: annualKwh,
         postcode:   bill.service_postcode || null,
         system_yield_kwh_per_kwp_per_year: effectiveYield,

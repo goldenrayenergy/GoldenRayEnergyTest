@@ -105,23 +105,32 @@ This starts both:
 docker compose up --build
 ```
 
-### 7. POC quote flow (dev-only)
+### 7. Quote-flow API endpoints
 
-The `/poc/quote` and `/poc/3d-test` routes host the earlier standalone spike
-of the quote flow. Kept in the repo for local reference — components in
-`client/src/pages/poc/QuotePage.jsx` are still imported by the merged
-`/get-quote` flow, so the code lives on regardless of route visibility.
+The public quote flow relies on a handful of endpoints that were previously
+grouped under `/api/poc/*` and gated by an `ENABLE_POC` env var. They power
+the production `/get-quote` residential flow, so both the URL prefix and the
+gate were removed on 2026-08-21. Endpoints now live at their natural homes:
 
-- **Client routes** — gated behind Vite's `import.meta.env.DEV`. Reachable
-  via `npm run dev`; physically absent from `npm run build` production
-  bundles (Vite dead-code-eliminates the block).
-- **Server API** — `/api/poc/*` is gated behind `ENABLE_POC=true`. Add
-  `ENABLE_POC=true` to `server/.env` to enable locally. Unset on Render
-  in production. Server logs `[server] POC endpoints ENABLED / disabled`
-  on boot so the current state is visible.
+| URL | Purpose |
+|---|---|
+| `POST /api/bills/extract` | Parse an uploaded power bill (PDF → kWh, spend, ICP) |
+| `GET  /api/places/autocomplete`, `/details` | Google Places address search + resolve |
+| `POST /api/roof/analyse` | Google Solar → NZ LiDAR → OSM roof fusion |
+| `GET  /api/roof/linz-buildings`, `/osm-buildings` | Building outline lookups used by the analyser |
+| `GET  /api/aerial/google`, `/streetview`, `/tile` | Aerial + Street View tile passthrough for the previews |
+| `POST /api/design/compose` | Three-tier system design + live re-price |
+| `GET  /api/threed/tileset-config` | Cesium 3D Tiles config for the immersive view |
+| `POST /api/quote/legacy-submit` | Alternate submit path for the dev-only `/poc/quote` page's payload shape |
 
-Both gates must be true for POC to work end-to-end. Neither is set on
-production deployments.
+No env-var gate — these mount unconditionally.
+
+The client-visible **`/poc/quote` and `/poc/3d-test` pages** are still kept
+for local dev, gated behind Vite's `import.meta.env.DEV` in `client/src/App.jsx`
+(the routes physically disappear from production builds via dead-code
+elimination). Components in `client/src/pages/poc/QuotePage.jsx` are also
+imported by the merged `/get-quote` flow, so the code lives on regardless of
+route visibility.
 
 ## API Endpoints
 
