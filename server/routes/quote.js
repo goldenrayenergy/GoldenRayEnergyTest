@@ -201,6 +201,9 @@ router.get('/resume/:id', async (req, res) => {
     if (!/^[0-9a-f-]{36}$/i.test(id)) {
       return res.status(400).json({ error: 'Invalid resume token.' });
     }
+    // NOTE: no `updated_at` — website_enquiries doesn't have that column
+    // (verified via Render Supabase logs after PR #7). If a future migration
+    // adds it, include it here + in the meta block below.
     const { data: enquiry, error } = await supabaseAdmin
       .from('website_enquiries')
       .select(`
@@ -209,7 +212,7 @@ router.get('/resume/:id', async (req, res) => {
         monthly_bill, coords_lat, coords_lng,
         submission_source, chosen_tier_id, system_kwp, panel_count,
         battery_kwh_chosen, ev_charger_included, tier_price, roof_source,
-        poc_design_json, created_at, updated_at
+        poc_design_json, created_at
       `)
       .eq('id', id)
       .maybeSingle();
@@ -312,7 +315,6 @@ router.get('/resume/:id', async (req, res) => {
       meta: {
         submission_source: enquiry.submission_source,
         created_at:        enquiry.created_at,
-        updated_at:        enquiry.updated_at,
       },
     });
   } catch (e) {
