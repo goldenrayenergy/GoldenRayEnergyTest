@@ -22,6 +22,7 @@
 //   5. Renders panels flush on the roof
 
 import { useEffect, useRef, useState } from 'react';
+import * as Cesium from 'cesium';
 import { publicApi } from '../../../services/api';
 import {
   computePanelGridOnSegment,
@@ -89,10 +90,13 @@ export default function CesiumSmokeTest() {
         if (cancelled) return;
         setAttribution(config.attribution);
 
-        // 2. Dynamic-import Cesium so the ~1.5MB library is code-split and
-        //    only loads when the user actually hits the 3D page.
+        // 2. Cesium is imported statically at the top of this file. See
+        //    Cesium3DView.jsx step 2 comment for the full rationale — TL;DR:
+        //    vite-plugin-cesium externalizes 'cesium' to the global
+        //    window.Cesium (loaded via <script> in the HTML), so a dynamic
+        //    import gave zero lazy-loading benefit AND tripped a TDZ bug in
+        //    the minified production bundle.
         setStatus('loading-cesium');
-        const Cesium = await import('cesium');
         if (cancelled) return;
 
         // Cesium needs a base URL for its static assets (widgets, workers).
