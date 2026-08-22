@@ -400,8 +400,8 @@ async function _analyse(req, res) {
   const aerialZoom      = 19;   // wide: property + neighbours (for "is this your house")
   const aerialTightZoom = 21;   // tight: fills frame with just the roof (for panel overlay)
   const aerialSize      = '640x480';
-  const aerialUrl       = `/api/poc/aerial/google?lat=${geo.latitude}&lng=${geo.longitude}&zoom=${aerialZoom}&size=${aerialSize}&marker=1`;
-  const aerialTightUrl  = `/api/poc/aerial/google?lat=${authoritativeCenter.latitude}&lng=${authoritativeCenter.longitude}&zoom=${aerialTightZoom}&size=${aerialSize}&marker=0`;
+  const aerialUrl       = `/api/aerial/google?lat=${geo.latitude}&lng=${geo.longitude}&zoom=${aerialZoom}&size=${aerialSize}&marker=1`;
+  const aerialTightUrl  = `/api/aerial/google?lat=${authoritativeCenter.latitude}&lng=${authoritativeCenter.longitude}&zoom=${aerialTightZoom}&size=${aerialSize}&marker=0`;
 
   // Divergence between Google Solar's guess and the ground-truth polygon —
   // if we have both and they're far apart, Google Solar analysed a different
