@@ -2199,8 +2199,8 @@ export function EnergyFlowOverlay({
               <div className="flex items-center gap-3">
                 <Loader2 className="w-6 h-6 animate-spin text-amber-300 flex-shrink-0" />
                 <div className="flex-1 text-left min-w-0">
-                  <div className="text-sm md:text-base font-bold text-amber-50 tabular-nums">
-                    Analysing your roof · {Math.floor((elapsedMs || 0) / 1000)}s
+                  <div className="text-sm md:text-base font-bold text-amber-50">
+                    Analysing your roof
                   </div>
                   <div className="text-xs md:text-sm text-amber-100/85 mt-0.5 truncate">
                     {ANALYSING_STEPS[Math.floor((elapsedMs || 0) / 2500) % ANALYSING_STEPS.length]}&hellip;

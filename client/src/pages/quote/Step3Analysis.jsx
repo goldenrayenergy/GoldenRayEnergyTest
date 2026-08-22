@@ -132,7 +132,7 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
 
       {status === 'analysing' && (
         <div className="mt-8 rounded-2xl border border-[#E3D9C4] bg-white p-6 md:p-8 text-sm text-[#8F887E]">
-          Analysing&nbsp;&hellip;&nbsp;{Math.floor(elapsedMs / 1000)}s. The overlay above shows what your system will do &mdash; you can click any of the four times-of-day.
+          Analysing&nbsp;&hellip; The overlay above shows what your system will do &mdash; you can click any of the four times-of-day.
         </div>
       )}
 

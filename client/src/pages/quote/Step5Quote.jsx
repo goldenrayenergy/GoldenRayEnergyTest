@@ -43,17 +43,23 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * @param {object}   props.chosenTier   — { id, tier }
  * @param {object}   props.contact
  * @param {function} props.onContactChange
- * @param {function} props.onSubmitted  — called with { enquiryId, contactId, projectId } after success
+ * @param {function} props.onSubmitted  — called with { enquiryId, contactId, projectId, shareToken } after success
+ * @param {object}   [props.submittedInitial]  — Bug 6A. When present, Step 5 renders the
+ *                                                confirmation view immediately on mount instead of
+ *                                                the contact form. Set by ResidentialWizard on
+ *                                                hydration from the persisted draft so back-nav
+ *                                                from a What Next CTA restores the confirmation.
  * @param {function} props.onBack
  */
 export default function Step5Quote({
   usage, address, analysis, design, chosenTier, contact,
   draftIds = null,
+  submittedInitial = null,
   onContactChange, onSubmitted, onBack,
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
-  const [submitted, setSubmitted] = useState(null);   // { enquiryId, contactId, projectId }
+  const [submitted, setSubmitted] = useState(submittedInitial);   // { enquiryId, contactId, projectId, shareToken }
 
   const tier = chosenTier?.tier;
   const tierId = chosenTier?.id;

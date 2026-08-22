@@ -50,7 +50,7 @@ const DRAFT_KEY = 'poc:quote:draft:v1';
 // Chosen 24h: covers "abandoned mid-flow yesterday, resumed this morning" but
 // not "bookmarked and returned in a week."
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
-function serialiseDraft({ stepIdx, usage, address, analysis, design, chosenTier, contact }) {
+function serialiseDraft({ stepIdx, usage, address, analysis, design, chosenTier, contact, submitted }) {
   try {
     const safe = {
       stepIdx,
@@ -78,6 +78,11 @@ function serialiseDraft({ stepIdx, usage, address, analysis, design, chosenTier,
         } : null,
       } : null,
       contact: contact || null,
+      // Bug 6A (2026-08-22) — post-submit IDs. When present, Step 5 renders
+      // the confirmation view instead of the contact form even after a full
+      // React remount (browser Back button from a What Next CTA, F5, etc).
+      // Cleared by clearDraft() on explicit "Start a new quote" or 24h TTL.
+      submitted: submitted || null,
       _savedAt: new Date().toISOString(),
     };
     return JSON.stringify(safe);
@@ -193,16 +198,20 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
   const [design, setDesign]       = useState(initial.design || null);
   const [chosenTier, setChosenTier] = useState(initial.chosenTier || null);
   const [contact, setContact]     = useState(initialContact);
+  // Bug 6A — post-submit IDs. Persisted to sessionStorage so back-nav from
+  // a What Next CTA (or F5) restores the confirmation view instead of an
+  // empty Step 1 form. Cleared only by "Start a new quote" or 24h TTL.
+  const [submitted, setSubmitted] = useState(initial.submitted || null);
 
   // Persist to sessionStorage whenever wizard state changes. Fires with a
   // short debounce so rapid state churn (e.g. typing in an input) doesn't
-  // hammer the storage API. Draft cleared explicitly at Step 5 submit.
+  // hammer the storage API. Draft NO LONGER cleared on submit — see Bug 6A.
   useEffect(() => {
     const t = setTimeout(() => {
-      writeDraft({ stepIdx, usage, address, analysis, design, chosenTier, contact });
+      writeDraft({ stepIdx, usage, address, analysis, design, chosenTier, contact, submitted });
     }, 400);
     return () => clearTimeout(t);
-  }, [stepIdx, usage, address, analysis, design, chosenTier, contact]);
+  }, [stepIdx, usage, address, analysis, design, chosenTier, contact, submitted]);
 
   // ── Phase B2 server-side draft (I2 + B4) ─────────────────────────────────
   // Whenever the customer types an email in the progressive-capture input
@@ -327,6 +336,7 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
     setDesign(null);
     setChosenTier(null);
     setContact({ firstName: '', lastName: '', email: '', phone: '' });
+    setSubmitted(null);   // Bug 6A — Start-fresh must wipe post-submit IDs too
     setDraftIds({ enquiryId: null, contactId: null });
     setDraftState('idle');
     analysedAddressKeyRef.current = null;
@@ -447,11 +457,18 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
             chosenTier={chosenTier}
             contact={contact}
             draftIds={draftIds}     /* Phase B2 — upsert same enquiry row (partial → new) */
+            /* Bug 6A — hoist submitted IDs into wizard so they persist across
+               React remounts (back-nav from What Next CTAs, F5, etc). */
+            submittedInitial={submitted}
             onContactChange={setContact}
-            onSubmitted={() => {
-              // Draft is done — clear sessionStorage so a fresh page load
-              // starts clean, not with the just-submitted quote pre-hydrated.
-              clearDraft();
+            onSubmitted={(payload) => {
+              // Bug 6A — save IDs to wizard state (auto-persists to
+               // sessionStorage via the writeDraft effect). Do NOT clearDraft
+               // on submit anymore — the customer's confirmation should
+               // survive back-nav from a "Book a site survey" / "Refer a
+               // friend" / etc CTA. Cleared when they explicitly hit
+               // "Start a new quote for another property" OR after 24h TTL.
+              setSubmitted(payload);
             }}
             onBack={goBack}
           />
