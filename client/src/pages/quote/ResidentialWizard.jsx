@@ -44,6 +44,12 @@ function addressKey(a) {
 // Full server-side draft persistence + magic-link resume comes with I3 in a
 // later ticket — this handles the same-session case only.
 const DRAFT_KEY = 'poc:quote:draft:v1';
+// Drafts older than this are treated as stale and discarded on load. Same-day
+// returns still restore. Multi-day returns start fresh (roof analysis needs to
+// be current anyway, and stale tier pricing can drift with catalogue updates).
+// Chosen 24h: covers "abandoned mid-flow yesterday, resumed this morning" but
+// not "bookmarked and returned in a week."
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 function serialiseDraft({ stepIdx, usage, address, analysis, design, chosenTier, contact }) {
   try {
     const safe = {
@@ -85,7 +91,17 @@ function readDraft() {
     const raw = window.sessionStorage?.getItem(DRAFT_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object') return parsed;
+    if (!parsed || typeof parsed !== 'object') return null;
+    // Phase E bug-2b (2026-08-21) — discard drafts older than DRAFT_TTL_MS so
+    // customers returning after a day don't get stale state + stale prices.
+    if (parsed._savedAt) {
+      const age = Date.now() - new Date(parsed._savedAt).getTime();
+      if (Number.isFinite(age) && age > DRAFT_TTL_MS) {
+        clearDraft();
+        return null;
+      }
+    }
+    return parsed;
   } catch { /* corrupt or blocked */ }
   return null;
 }
@@ -283,20 +299,73 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
     setStepIdx((i) => Math.max(i - 1, 0));
   }, [stepIdx, onBack]);
 
+  // ── Phase E bug-2a (2026-08-21) — explicit "start fresh" escape hatch ──
+  // Draft persistence is great for accidental refresh recovery but bad for
+  // customers who want to abandon the current quote and start over. Also
+  // helps sales/demo scenarios where you're clicking through with different
+  // addresses. Wiping is destructive so we always confirm.
+  const [startFreshModal, setStartFreshModal] = useState(false);
+  const confirmStartFresh = useCallback(() => {
+    clearDraft();
+    setUsage({ bill: null, monthlySpend: null, annualKwh: null, tab: intent === 'estimate' ? 'spend' : intent === 'manual_table' ? 'kwh' : 'bills' });
+    setAddress(null);
+    setAnalysis(null);
+    setDesign(null);
+    setChosenTier(null);
+    setContact({ firstName: '', lastName: '', email: '', phone: '' });
+    setDraftIds({ enquiryId: null, contactId: null });
+    setDraftState('idle');
+    analysedAddressKeyRef.current = null;
+    setReanalyseModal(false);
+    setFarthestStep(0);
+    setStepIdx(0);
+    setStartFreshModal(false);
+    // For resume flow (initial state came from the server), also navigate
+    // to a clean /get-quote URL so the router doesn't try to re-hydrate
+    // from the same magic-link token.
+    if (isResume && typeof window !== 'undefined') {
+      window.location.href = '/get-quote';
+    }
+  }, [intent, isResume]);
+
   return (
     <div className="max-w-4xl mx-auto">
-      {/* Step rail — visual progress + jump-back hitboxes for completed
-          steps. Also allows FORWARD jumps up to `farthestStep` so the resume
-          flow (Phase B2 I3, 2026-08-21) can hydrate + let customers skip
-          re-doing steps they've already done. Backward is unconstrained. */}
-      <StepRail
-        current={stepIdx}
-        farthest={farthestStep}
-        onJump={(idx) => {
-          if (idx === stepIdx) return;
-          if (idx < stepIdx || idx <= farthestStep) setStepIdx(idx);
-        }}
-      />
+      {/* Step rail row — includes a subtle "Start fresh" escape on the right.
+          Shown whenever the customer has ANY meaningful state to lose. This
+          intentionally covers Step 1 too — as soon as a customer uploads a
+          bill, sets a slider, or types an email in the header input, they
+          should be able to abandon and start over. Only genuinely-empty
+          fresh visits hide the link. Confirmation modal fires before wiping. */}
+      <div className="flex items-center justify-between gap-3">
+        <StepRail
+          current={stepIdx}
+          farthest={farthestStep}
+          onJump={(idx) => {
+            if (idx === stepIdx) return;
+            if (idx < stepIdx || idx <= farthestStep) setStepIdx(idx);
+          }}
+        />
+        {(
+          stepIdx > 0 ||
+          usage?.bill ||
+          Number.isFinite(usage?.monthlySpend) ||
+          Number.isFinite(usage?.annualKwh) ||
+          address ||
+          chosenTier ||
+          (contact.email || '').trim().length > 0 ||
+          (contact.firstName || '').trim().length > 0 ||
+          draftIds.enquiryId
+        ) && (
+          <button
+            type="button"
+            onClick={() => setStartFreshModal(true)}
+            className="text-[11px] text-[#8F887E] hover:text-[#D9531E] underline decoration-dotted underline-offset-2 whitespace-nowrap"
+            aria-label="Discard current quote and start a fresh one"
+          >
+            Start a fresh quote
+          </button>
+        )}
+      </div>
 
       {/* I2 progressive email capture (Phase B2, 2026-08-20). Header-level
           "save my progress" input — customers who bail before Step 5 still
@@ -379,11 +448,26 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
       <span className="hidden">{JSON.stringify({ usage, address, analysis, design, chosenTier, contact, utm })}</span>
 
       {/* F5 re-analyse safety modal (2026-08-20). Only mounts when the
-          customer changed the address AFTER an analysis had been run. */}
+          customer changed the address AFTER an analysis had been run.
+          Labels updated 2026-08-21 (Phase E bug-2c) — old copy was
+          confusing because "Cancel — keep current" sounded like the
+          customer's new address change would be discarded, and
+          "Yes — re-analyse" didn't make it obvious that the new address
+          would be committed. Also added a "start over" escape. */}
       {reanalyseModal && (
         <ReanalyseAddressModal
           onConfirm={confirmReanalyse}
           onCancel={() => setReanalyseModal(false)}
+          onStartFresh={() => { setReanalyseModal(false); setStartFreshModal(true); }}
+        />
+      )}
+
+      {/* Start-fresh confirm modal (Phase E bug-2a, 2026-08-21). Fires from
+          the header "Start a fresh quote" link + from the F5 modal's escape. */}
+      {startFreshModal && (
+        <StartFreshConfirmModal
+          onConfirm={confirmStartFresh}
+          onCancel={() => setStartFreshModal(false)}
         />
       )}
     </div>
@@ -418,9 +502,13 @@ function ProgressiveEmailInput({ value, onChange, state }) {
   );
 }
 
-// F5 (2026-08-20) — modal shown before wiping analysis + tier state when
-// customer changes address mid-flow. Prevents "I lost my quote" surprise.
-function ReanalyseAddressModal({ onConfirm, onCancel }) {
+// F5 (2026-08-20, labels revised 2026-08-21 Phase E bug-2c) — modal shown
+// before wiping analysis + tier state when the customer changes their
+// address mid-flow. The revised labels commit to the customer's likely
+// intent ("use this new address") vs the old confusing "re-analyse" wording,
+// and add a "start fresh" escape for customers who want to blow away
+// everything, not just the address.
+function ReanalyseAddressModal({ onConfirm, onCancel, onStartFresh }) {
   return (
     <div className="fixed inset-0 z-[9999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
@@ -430,13 +518,13 @@ function ReanalyseAddressModal({ onConfirm, onCancel }) {
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-xs uppercase tracking-widest text-amber-700 font-bold">
-              Re-analyse roof?
+              New address detected
             </div>
             <h3 className="font-serif text-xl mt-1 text-[#1A1614]">
-              You&apos;ve changed your address.
+              Use this new address?
             </h3>
             <p className="mt-2 text-sm text-[#55504A]">
-              Continuing will re-analyse this new roof (~5&ndash;30&nbsp;seconds) and reset your battery + EV picks and chosen tier. Your bill data + contact info are kept.
+              We&apos;ll re-run the roof analysis (~5&ndash;30&nbsp;seconds) and reset your battery + EV picks and chosen tier. Your bill data + contact info stay.
             </p>
           </div>
         </div>
@@ -446,7 +534,7 @@ function ReanalyseAddressModal({ onConfirm, onCancel }) {
             onClick={onCancel}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-[#E3D9C4] text-sm text-[#55504A] hover:bg-[#F4EEE1]"
           >
-            Cancel &mdash; keep current
+            &larr; Back to old address
           </button>
           <div className="flex-1" />
           <button
@@ -454,7 +542,66 @@ function ReanalyseAddressModal({ onConfirm, onCancel }) {
             onClick={onConfirm}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#D9531E] text-white text-sm font-bold hover:bg-[#B84418] transition"
           >
-            Yes &mdash; re-analyse &rarr;
+            Yes, use this new address &rarr;
+          </button>
+        </div>
+        {onStartFresh && (
+          <div className="mt-3 text-center">
+            <button
+              type="button"
+              onClick={onStartFresh}
+              className="text-[11px] text-[#8F887E] hover:text-[#D9531E] underline decoration-dotted underline-offset-2"
+            >
+              Or start a completely fresh quote instead
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Phase E bug-2a (2026-08-21) — sibling to ReanalyseAddressModal. Fires from
+// the header "Start a fresh quote" link (and from the F5 modal's escape).
+// Destroys sessionStorage draft + resets every wizard state slot back to
+// initial. For a resume-flow session (came from a magic-link) we also
+// navigate to /get-quote so React Router doesn't try to re-hydrate from
+// the resume payload the parent page loaded from the server.
+function StartFreshConfirmModal({ onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-[9999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-full bg-red-100 grid place-items-center flex-shrink-0">
+            <AlertTriangle className="w-5 h-5 text-red-700" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs uppercase tracking-widest text-red-700 font-bold">
+              Discard current quote?
+            </div>
+            <h3 className="font-serif text-xl mt-1 text-[#1A1614]">
+              Start a completely fresh quote?
+            </h3>
+            <p className="mt-2 text-sm text-[#55504A]">
+              Your address, roof analysis, tier pick, and contact details will all be cleared. You can&apos;t undo this.
+            </p>
+          </div>
+        </div>
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-[#E3D9C4] text-sm text-[#55504A] hover:bg-[#F4EEE1]"
+          >
+            No, keep my progress
+          </button>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-red-600 text-white text-sm font-bold hover:bg-red-700 transition"
+          >
+            Yes, start fresh &rarr;
           </button>
         </div>
       </div>
