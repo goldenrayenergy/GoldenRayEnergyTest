@@ -18,6 +18,7 @@
 // Server counterpart: server/routes/threed.js → GET /api/threed/tileset-config
 
 import { useEffect, useRef, useState } from 'react';
+import * as Cesium from 'cesium';
 import { publicApi } from '../../../services/api';
 import {
   computePanelGridOnSegment,
@@ -862,11 +863,17 @@ export default function Cesium3DView({
         const { data: cfg } = await publicApi.get('/threed/tileset-config');
         if (cancelled) return;
         setAttribution(cfg.attribution || '');
-        if (import.meta.env.DEV) console.log('[Cesium3DView] step 2 — dynamic-importing Cesium');
+        if (import.meta.env.DEV) console.log('[Cesium3DView] step 2 — Cesium namespace ready');
 
-        // 2. Dynamic-import Cesium (~1.5 MB gzipped) so it only loads on
-        //    pages that actually need it.
-        const Cesium = await import('cesium');
+        // 2. Cesium is imported statically at the top of this file. We used to
+        //    do `await import('cesium')` here, but vite-plugin-cesium marks
+        //    'cesium' as external and swaps it for the global `window.Cesium`
+        //    (loaded via <script src="/cesium/Cesium.js"> injected into the
+        //    HTML), so a dynamic import gave zero lazy-loading benefit AND
+        //    tripped a TDZ bug when Rollup + externalGlobals + terser collapsed
+        //    the local `const Cesium` and the rewritten global into the same
+        //    scope (produced `const p = await Promise.resolve(p)` in the
+        //    minified bundle — self-reference in the RHS → TDZ throw).
         cesiumRef.current = Cesium;
         if (cancelled) return;
         if (import.meta.env.DEV) console.log('[Cesium3DView] step 3 — creating viewer');
