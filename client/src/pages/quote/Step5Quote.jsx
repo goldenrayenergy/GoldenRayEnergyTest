@@ -28,7 +28,7 @@ import { useState, useCallback } from 'react';
 import {
   ChevronLeft, Loader2, AlertTriangle, CheckCircle, Printer,
   Calendar, MessageCircle, DollarSign, Users, Phone,
-  Mail, CalendarPlus, ExternalLink,
+  Mail, CalendarPlus, ExternalLink, Plus,
 } from 'lucide-react';
 import { publicApi } from '../../services/api';
 
@@ -94,11 +94,11 @@ export default function Step5Quote({
 
       const designPayload = {
         chosenTierId: tierId,
-        systemKwp:    tier?.system_size_kwp || tier?.kwp || null,
+        systemKwp:    tier?.panel?.total_kwp || tier?.system_size_kwp || tier?.kwp || null,
         panelCount:   tier?.panel?.count || tier?.panels || null,
         batteryKwh:   tier?.battery?.usable_kwh || tier?.battery_kwh || null,
         evIncluded:   !!tier?.wattpilot_included,
-        tierPrice:    tier?.pricing?.total_incl_gst || tier?.price || null,
+        tierPrice:    tier?.price_inc_gst || tier?.pricing?.total_incl_gst || tier?.price || null,
         roofSource:   analysis?.solar_source || analysis?.roof?.source || null,
         lat:          address?.latitude,
         lng:          address?.longitude,
@@ -175,7 +175,7 @@ export default function Step5Quote({
             </div>
             <div className="text-[#8F887E] text-sm">
               {tier.panel?.count || tier.panels || '?'} panels &middot;
-              {' '}{tier.system_size_kwp || tier.kwp || '?'} kWp
+              {' '}{tier.panel?.total_kwp || tier.system_size_kwp || tier.kwp || '?'} kWp
               {tier.battery?.usable_kwh > 0 && ` · ${tier.battery.usable_kwh} kWh battery`}
               {tier.wattpilot_included && ' · EV charger'}
             </div>
@@ -274,10 +274,29 @@ function ConfirmationView({ submitted, contact, tier, address, design, onPrint }
         <p className="text-[#55504A]">
           One of our installers will call you within <strong>1 business day</strong> to walk through the proposal and schedule a site survey.
         </p>
-        <p className="text-[11px] text-emerald-700 mt-2 font-mono">
-          Ref: <strong>{(submitted.enquiryId || '').toString().slice(0, 8)}</strong>
-          {submitted.projectId && <> · Project: <strong>{submitted.projectId.slice(0, 8)}</strong></>}
-        </p>
+        {/* A — Reference card. Prominent (not tiny 11px) because these are the
+            IDs the customer quotes when calling us. Print-visible. */}
+        <div className="mt-5 pt-4 border-t border-emerald-200">
+          <div className="text-[10px] uppercase tracking-widest text-emerald-700 font-semibold mb-1.5">
+            Your reference — mention this if you call us
+          </div>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 font-mono">
+            <div>
+              <span className="text-xs text-[#8F887E] mr-1.5">Ref</span>
+              <span className="text-lg md:text-xl font-bold text-emerald-800 tracking-wider">
+                {(submitted.enquiryId || '').toString().slice(0, 8).toUpperCase()}
+              </span>
+            </div>
+            {submitted.projectId && (
+              <div>
+                <span className="text-xs text-[#8F887E] mr-1.5">Project</span>
+                <span className="text-lg md:text-xl font-bold text-emerald-800 tracking-wider">
+                  {submitted.projectId.slice(0, 8).toUpperCase()}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Tier recap */}
@@ -287,10 +306,10 @@ function ConfirmationView({ submitted, contact, tier, address, design, onPrint }
             Your proposal
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Stat label="System size" value={`${tier.system_size_kwp || tier.kwp || '?'} kWp`} />
+            <Stat label="System size" value={`${tier.panel?.total_kwp || tier.system_size_kwp || tier.kwp || '?'} kWp`} />
             <Stat label="Panels"      value={`${tier.panel?.count || tier.panels || '?'}`} />
             <Stat label="Battery"     value={tier.battery?.usable_kwh > 0 ? `${tier.battery.usable_kwh} kWh` : 'None'} />
-            <Stat label="Total price" value={tier.pricing?.total_incl_gst ? `$${Math.round(tier.pricing.total_incl_gst).toLocaleString('en-NZ')}` : '—'} />
+            <Stat label="Total price" value={(tier.price_inc_gst || tier.pricing?.total_incl_gst) ? `$${Math.round(tier.price_inc_gst || tier.pricing.total_incl_gst).toLocaleString('en-NZ')}` : '—'} />
             {savings25yr && <Stat label="25-yr savings" value={`$${Math.round(savings25yr).toLocaleString('en-NZ')}`} />}
             {paybackYrs  && <Stat label="Payback"       value={`${paybackYrs} yrs`} />}
             <Stat label="EV charger"  value={tier.wattpilot_included ? 'Included' : 'Not included'} />
@@ -313,7 +332,8 @@ function ConfirmationView({ submitted, contact, tier, address, design, onPrint }
             />
           </div>
 
-          <div className="mt-4 pt-4 border-t border-[#E3D9C4] flex flex-wrap gap-3">
+          {/* C — Action row hidden when printing; buttons on paper are useless. */}
+          <div className="mt-4 pt-4 border-t border-[#E3D9C4] flex flex-wrap gap-3 print:hidden">
             {submitted.shareToken && (
               <a
                 href={`/p/${submitted.shareToken}`}
@@ -332,14 +352,15 @@ function ConfirmationView({ submitted, contact, tier, address, design, onPrint }
               <Printer className="w-4 h-4" /> Print / save this page
             </button>
           </div>
-          <div className="mt-2 text-[11px] text-[#8F887E]">
+          <div className="mt-2 text-[11px] text-[#8F887E] print:hidden">
             Email doesn&apos;t arrive within a few minutes? Check spam, or reply to <strong>info@goldenrayenergy.nz</strong> and we&apos;ll resend.
           </div>
         </div>
       )}
 
-      {/* I4 next-step CTAs */}
-      <div className="mt-6">
+      {/* I4 next-step CTAs. Hidden from print — these are digital actions;
+          on paper they're just noise. */}
+      <div className="mt-6 print:hidden">
         <div className="text-xs uppercase tracking-widest text-[#8F887E] font-semibold mb-3">
           What next?
         </div>
@@ -374,9 +395,28 @@ function ConfirmationView({ submitted, contact, tier, address, design, onPrint }
             color="purple"
           />
         </div>
+
+        {/* B — Start-a-new-quote CTA. Full-width row below the grid so it
+            reads as "one more property to quote?", not another equal option. */}
+        <a
+          href="/get-quote?fresh=1"
+          className="mt-3 block rounded-xl border-2 border-dashed border-[#8F887E]/40 bg-white hover:bg-[#F4EEE1] hover:border-[#D9531E] p-4 transition group"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-[#F4EEE1] group-hover:bg-white grid place-items-center flex-shrink-0 transition">
+              <Plus className="w-4 h-4 text-[#8F887E] group-hover:text-[#D9531E]" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-bold text-[#1A1614]">Start a new quote for another property</div>
+              <div className="text-xs text-[#55504A] mt-0.5">
+                Wipes this quote and starts fresh from Step 1. Your reference above stays saved with us.
+              </div>
+            </div>
+          </div>
+        </a>
       </div>
 
-      <div className="mt-8 text-center text-xs text-[#8F887E]">
+      <div className="mt-8 text-center text-xs text-[#8F887E] print:hidden">
         Questions before we call? <a href="tel:+6499999999" className="text-[#D9531E] font-semibold"><Phone className="inline w-3 h-3" /> Give us a ring</a>
         {' '}or reply to the confirmation email.
       </div>

@@ -175,7 +175,9 @@ export default function GetQuotePage() {
 
   return (
     <div className="bg-gray-50 dark:bg-brand-dark font-body min-h-screen">
-      <WebsiteNav />
+      <div className="print:hidden">
+        <WebsiteNav />
+      </div>
 
       <main className="pt-12 pb-16 px-4 md:px-10">
         {/* max-w-3xl for the legacy wizard's step components (they're
@@ -328,7 +330,9 @@ export default function GetQuotePage() {
         </div>
       </main>
 
-      <WebsiteFooter />
+      <div className="print:hidden">
+        <WebsiteFooter />
+      </div>
     </div>
   );
 }
