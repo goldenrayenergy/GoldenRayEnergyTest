@@ -142,6 +142,20 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
   // the server row the customer left behind, potentially days ago on a
   // different device. If we let the local draft win we'd stomp the good
   // rehydration with stale/empty state.
+  // `?fresh=1` on the URL means the customer just hit "Start a new quote for
+  // another property" from Step 5 (or elsewhere). Wipe any stale draft
+  // BEFORE the hydration read so we start from empty state, not the old
+  // quote we just finished. Guard behind `typeof window` so SSR / test
+  // envs without a window don't crash. One-shot: after wiping, we don't
+  // strip the query param — a page refresh with ?fresh=1 present would
+  // re-wipe, which is the intended behaviour anyway.
+  if (typeof window !== 'undefined') {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.has('fresh')) clearDraft();
+    } catch { /* URL parse noise — ignore, worst case is a stale draft stays. */ }
+  }
+
   const draft = useRef(null);
   if (draft.current === null) draft.current = resumeInitialState || readDraft();
   const initial = draft.current || {};
@@ -336,7 +350,7 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
           bill, sets a slider, or types an email in the header input, they
           should be able to abandon and start over. Only genuinely-empty
           fresh visits hide the link. Confirmation modal fires before wiping. */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 print:hidden">
         <StepRail
           current={stepIdx}
           farthest={farthestStep}
@@ -359,7 +373,7 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
           <button
             type="button"
             onClick={() => setStartFreshModal(true)}
-            className="text-[11px] text-[#8F887E] hover:text-[#D9531E] underline decoration-dotted underline-offset-2 whitespace-nowrap"
+            className="text-sm font-semibold text-[#8F887E] hover:text-[#D9531E] underline underline-offset-4 whitespace-nowrap print:hidden"
             aria-label="Discard current quote and start a fresh one"
           >
             Start a fresh quote
