@@ -27,12 +27,35 @@
 import { useState, useCallback } from 'react';
 import {
   ChevronLeft, Loader2, AlertTriangle, CheckCircle, Printer,
-  Calendar, MessageCircle, DollarSign, Users, Phone,
+  Calendar, MessageCircle, DollarSign, Phone, Users,
   Mail, CalendarPlus, ExternalLink, Plus,
 } from 'lucide-react';
 import { publicApi } from '../../services/api';
+import { getReferralCode } from '../../lib/referralAttribution';
+import ReferralPanel from './ReferralPanel';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// GoldenRay business WhatsApp — matches WhatsAppAssistant.jsx's WA_NUMBER.
+// Kept as an in-file constant (not imported) so this component stays
+// self-contained and the sales handover copy lives with the CTA it belongs to.
+const GR_WA_NUMBER = '6421839356';
+
+// WhatsApp deep-link pre-filled with the customer's Ref, tier label, and
+// address so sales can pull up the enquiry the moment the message arrives.
+// Falls back to a generic "just got a quote" if any field is missing —
+// don't emit the labels themselves when the values are blank (avoids
+// "Ref:  · Tier:  · Address:" landing in someone's inbox).
+function buildWhatsAppLink(submitted, contact, tier) {
+  const parts = [];
+  if (contact?.firstName) parts.push(`Hi, this is ${contact.firstName}.`);
+  parts.push(`I just got a solar quote and have a couple of questions.`);
+  const ref = submitted?.enquiryId ? submitted.enquiryId.slice(0, 8).toUpperCase() : null;
+  if (ref) parts.push(`Ref: ${ref}`);
+  if (tier?.label) parts.push(`Tier: ${tier.label}`);
+  const msg = encodeURIComponent(parts.join('\n'));
+  return `https://wa.me/${GR_WA_NUMBER}?text=${msg}`;
+}
 
 /**
  * @param {object}   props
@@ -109,6 +132,11 @@ export default function Step5Quote({
         lat:          address?.latitude,
         lng:          address?.longitude,
         fullPayload:  { design, chosenTierId: tierId, usage: { tab: usage?.tab } },
+        // Referral attribution (Phase 3, 2026-08-22). Reads from sessionStorage
+        // → cookie fallback via the helper. Sent even if null so leadService
+        // can distinguish "no referral" from "field never populated" for
+        // debugging. Server fraud check runs regardless.
+        referralCodeUsed: getReferralCode(),
       };
 
       const { data } = await publicApi.post('/quote/submit-with-design', {
@@ -261,6 +289,13 @@ function ConfirmationView({ submitted, contact, tier, address, design, onPrint }
                    || tier?.payback_yrs
                    || tier?.payback_years;
 
+  // Phase 3 Session 2 (2026-08-22) — inline referral panel toggled by
+  // the "Refer a friend" CTA below. Kept as local state (not persisted)
+  // because reopening the panel on back-nav is cheap (endpoint returns
+  // the code either way) and the user's expectation for a panel toggle
+  // is that it starts closed on each visit.
+  const [showReferral, setShowReferral] = useState(false);
+
   return (
     <div>
       <div className="rounded-2xl border-2 border-emerald-500 bg-gradient-to-br from-emerald-50 to-white p-6 md:p-8 shadow-lg shadow-emerald-500/10">
@@ -371,36 +406,72 @@ function ConfirmationView({ submitted, contact, tier, address, design, onPrint }
           What next?
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Book Site Survey — Phase 2 shipped 2026-08-22. /book-survey
+              embeds the Cal.com widget so the customer picks a real slot
+              that syncs to Owner's Google Calendar. Cal.com handles the
+              whole booking lifecycle (calendar sync, reminders,
+              reschedule, cancel). Zero backend on our side. */}
           <NextStepCTA
             icon={Calendar}
             title="Book a site survey now"
-            desc="Skip the callback wait — pick a time our tech can visit."
-            action="/get-quote?type=residential&intent=callback"
+            desc="Pick a time our tech can visit — usually available within a week."
+            action="/book-survey"
             color="orange"
           />
+          {/* Financing — public /financing page (not the /finance admin
+              portal). Uses the existing <SolarFinance> component (4 NZ
+              product cards + eligibility check + application form). */}
           <NextStepCTA
             icon={DollarSign}
             title="See financing options"
-            desc="$0 upfront finance available. Check what you qualify for."
-            action="/finance"
+            desc="$0 upfront finance available. Talk to us about payment plans."
+            action="/financing"
             color="green"
           />
+          {/* WhatsApp — real business number (from WhatsAppAssistant.jsx),
+              pre-filled with the customer's Ref so sales can look them up
+              instantly. `encodeURIComponent` guards against " " / " " / "&"
+              in the tier label or address ever landing in the query string. */}
           <NextStepCTA
             icon={MessageCircle}
             title="Chat with an installer"
             desc="Quick questions about the proposal? WhatsApp us."
-            action="https://wa.me/64220000000"
+            action={buildWhatsAppLink(submitted, contact, tier)}
             color="emerald"
             external
           />
-          <NextStepCTA
-            icon={Users}
-            title="Refer a friend"
-            desc="You save $500 when a friend installs. So do they."
-            action="/refer"
-            color="purple"
-          />
+          {/* Refer a Friend — Phase 3 shipped 2026-08-22. Clicking opens
+              the ReferralPanel inline below the grid (not a link away)
+              so the customer stays on their confirmation screen. Panel
+              fetches from GET /api/referrals/status?token=<shareToken>
+              which auto-generates the referral code on first call. */}
+          <button
+            type="button"
+            onClick={() => setShowReferral((v) => !v)}
+            className={`text-left block rounded-xl border-2 p-4 transition hover:shadow-md hover:-translate-y-0.5 ${showReferral ? 'border-purple-600 bg-purple-100' : 'border-purple-500 bg-purple-50 text-purple-700'}`}
+            aria-expanded={showReferral}
+          >
+            <div className="flex items-start gap-3">
+              <Users className="w-5 h-5 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold">Refer a friend, save $250</div>
+                <div className="text-xs text-[#55504A] mt-0.5">
+                  {showReferral ? 'Close referral panel' : 'You save $250 when a friend installs. So do they.'}
+                </div>
+              </div>
+            </div>
+          </button>
         </div>
+
+        {/* Referral panel — renders inline below the grid, only when the CTA
+            above is toggled on. shareToken from submitted state is the auth
+            handle. Hidden from print via the panel's own print:hidden class. */}
+        {showReferral && (
+          <ReferralPanel
+            shareToken={submitted?.shareToken}
+            onClose={() => setShowReferral(false)}
+          />
+        )}
 
         {/* B — Start-a-new-quote CTA. Full-width row below the grid so it
             reads as "one more property to quote?", not another equal option. */}

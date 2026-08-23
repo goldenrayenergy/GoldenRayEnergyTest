@@ -8,6 +8,8 @@ const PmApp = lazy(() => import('./pm/PmApp'));
 // Website pages
 import WebsitePage from './pages/WebsitePage';
 import FinancePage from './pages/FinancePage';
+import FinancingPage from './pages/FinancingPage';
+import BookSurveyPage from './pages/BookSurveyPage';
 import LoginPage from './pages/LoginPage';
 import SolarPackagesPage from './pages/SolarPackagesPage';
 import SolarPackageDetailPage from './pages/SolarPackageDetailPage';
@@ -53,6 +55,7 @@ import CompaniesPage from './pages/portal/CompaniesPage';
 import ReportsPage from './pages/portal/ReportsPage';
 import AdminPage from './pages/portal/AdminPage';
 import EnquiriesPage from './pages/portal/EnquiriesPage';
+import ReferralsPage from './pages/portal/ReferralsPage';
 import EnquiryDetailPage from './pages/portal/EnquiryDetailPage';
 import ProjectsPage from './pages/portal/ProjectsPage';
 import ProjectDetailPage from './pages/portal/ProjectDetailPage';
@@ -81,6 +84,17 @@ export default function App() {
     <Routes>
       <Route path="/" element={<WebsitePage />} />
       <Route path="/finance" element={<AdminRoute><FinancePage /></AdminRoute>} />
+      {/* Public financing info page — Phase 1 of Step-5 What-Next rebuild
+          (2026-08-22). Distinct from /finance which is the admin
+          applications inbox. Step 5's "See financing options" CTA points
+          here so customers get real content, not the login screen. */}
+      <Route path="/financing" element={<FinancingPage />} />
+      {/* Public site-survey booking — Phase 2 of Step-5 What-Next rebuild
+          (2026-08-22). Embeds Cal.com's inline widget for the goldenrayenergy
+          /sitesurvey event type. Cal.com handles the whole booking lifecycle
+          (calendar sync, confirmation email, reminders, reschedule). Our
+          backend is untouched — this route just delivers the widget. */}
+      <Route path="/book-survey" element={<BookSurveyPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/solar-packages" element={<SolarPackagesPage />} />
       <Route path="/solar-packages/:slug" element={<SolarPackageDetailPage />} />
@@ -156,6 +170,11 @@ export default function App() {
         <Route path="contacts" element={<ContactsPage />} />
         <Route path="enquiries" element={<EnquiriesPage />} />
         <Route path="enquiries/:id" element={<EnquiryDetailPage />} />
+        {/* Referral program admin — Phase 3 (2026-08-22). Public routes
+            for customers live at /api/referrals/status + /generate; the
+            admin CRUD here fetches from /api/referrals/admin (requires
+            portal session, enforced server-side). */}
+        <Route path="referrals" element={<ReferralsPage />} />
         <Route path="companies" element={<CompaniesPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="admin" element={<AdminPage />} />

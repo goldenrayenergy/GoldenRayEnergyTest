@@ -23,6 +23,7 @@ import {
 import { publicApi } from '../services/api';
 import WebsiteNav from '../components/website/WebsiteNav';
 import WebsiteFooter from '../components/website/WebsiteFooter';
+import { captureReferralFromUrl } from '../lib/referralAttribution';
 import AddressAutocomplete from '../components/ui/AddressAutocomplete';
 // Phase B1 ticket B1.1 (2026-08-20) — residential customers branch into the
 // merged 5-step wizard after picking the intent tile on Step 1. Commercial /
@@ -38,6 +39,18 @@ const fmtSign = n => (n >= 0 ? '+' : '') + fmt$(n);
 export default function GetQuotePage() {
   const [searchParams] = useSearchParams();
   const prefilledPackage = searchParams.get('package');
+
+  // Referral attribution — Phase 3 Session 2 (2026-08-22).
+  // Runs ONCE per mount. captureReferralFromUrl() reads ?ref=CODE from
+  // the current URL and persists to sessionStorage + a 30-day cookie so
+  // the code survives F5 + tab-close + wizard-hydration. If the URL has
+  // no ref, existing stored attribution is preserved (referrer's link
+  // clicked yesterday still credits today). Step 5's submit reads back
+  // from those stores via getReferralCode() and includes the code in
+  // design.referralCodeUsed for the server-side attribution.
+  useEffect(() => {
+    captureReferralFromUrl();
+  }, []);
 
   // QR-campaign attribution — captured from URL params set by /qr/:slug redirect.
   // Echoed back to the server on form-submit so the lead can be tied to its

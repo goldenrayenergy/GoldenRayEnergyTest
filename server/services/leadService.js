@@ -27,6 +27,7 @@ import { geocodeAddress } from './googleSolar/geocoder.js';
 import { reserveQuota } from './googleSolar/quotaTracker.js';
 import { generateProposalPDF } from './pdfService.js';                 // Phase B4
 import { buildCallbackHoldIcs, formatNztLabel } from './icsService.js';// Phase B4
+import { attributeReferral } from './referralService.js';              // Phase 3 (2026-08-22)
 
 // ── Cadence catalog (moved from routes/quote.js) ───────────────────────────
 // Multi-touch follow-up cadence per customer type. Residential leads convert
@@ -584,6 +585,12 @@ export async function createOrUpdateLead({ form, design = null, skipRoofAnalysis
       coords_lat:           typeof design.lat === 'number' ? design.lat : null,
       coords_lng:           typeof design.lng === 'number' ? design.lng : null,
       poc_design_json:      design.fullPayload        || null,
+      // Referral attribution (Phase 3, 2026-08-22) — raw code captured on
+      // /get-quote?ref= landing. Stored even if the code fails the referral
+      // lookup so we retain the breadcrumb for debugging. The authoritative
+      // link is `referrals.referred_enquiry_id` inserted by attributeReferral
+      // below, AFTER this enquiry row exists.
+      referral_code_used:   design.referralCodeUsed   || null,
     });
   }
 
@@ -694,6 +701,45 @@ export async function createOrUpdateLead({ form, design = null, skipRoofAnalysis
     });
     projectId  = project?.projectId  || null;
     shareToken = project?.shareToken || null;
+  }
+
+  // ── Referral attribution — Phase 3 (2026-08-22) ────────────────────────
+  // If the friend arrived at /get-quote?ref=CODE, the client passed the
+  // code in design.referralCodeUsed. Run attribution (fraud check + cap
+  // enforcement + insert into `referrals`) BUT do not block the customer's
+  // submit if it fails — bad code / DB glitch / whatever, the enquiry row
+  // is already durable and referral_code_used has been stored on it so an
+  // admin can back-fill later. Fire-and-forget style, with the project_id
+  // stitched in immediately after so the install-complete trigger can find
+  // the referral by projects_v2 lookup.
+  if (design?.referralCodeUsed && enquiry?.id) {
+    Promise.resolve().then(async () => {
+      try {
+        const result = await attributeReferral(supabaseAdmin, {
+          referralCodeText: design.referralCodeUsed,
+          enquiryId:        enquiry.id,
+          contactId:        contact.id,
+        });
+        if (result.attributed && projectId) {
+          // Backfill the project link so the completion trigger can locate
+          // this referral without a second lookup path.
+          const { error: linkErr } = await supabaseAdmin
+            .from('referrals')
+            .update({ referred_project_id: projectId })
+            .eq('id', result.id);
+          if (linkErr) {
+            console.warn('[leadService] referral project-link failed (non-fatal):', linkErr.message);
+          }
+        }
+        if (!result.attributed) {
+          console.log(`[leadService] referral not attributed: ${result.reason} (enquiry ${enquiry.id})`);
+        } else {
+          console.log(`[leadService] referral attributed (${result.status}, id=${result.id})`);
+        }
+      } catch (e) {
+        console.error('[leadService] referral attribution threw (non-fatal):', e?.message || e);
+      }
+    }).catch(err => console.error('[leadService] referral dispatch threw:', err?.message || err));
   }
 
   // ── 3. Follow-up cadence tasks (Phase 7.3 type-aware) ────────────────────

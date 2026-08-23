@@ -21,6 +21,7 @@ const NAV = [
   { header: 'Data Hub', items: [
     { to: '/portal/enquiries', label: 'Website Enquiries', icon: Inbox },
     { to: '/portal/trade-requests', label: 'Trade Quote Requests', icon: ShoppingCart },
+    { to: '/portal/referrals', label: 'Referrals', icon: Users },
     { to: '/portal/contacts', label: 'Contacts', icon: Users },
     { to: '/portal/companies', label: 'Companies', icon: Building2 },
     { to: '/portal/products', label: 'Products', icon: Package },
