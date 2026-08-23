@@ -22,6 +22,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { ChevronLeft, AlertTriangle, Mail, CheckCircle, Loader2 } from 'lucide-react';
 import { publicApi } from '../../services/api';
+import { clearReferralCode } from '../../lib/referralAttribution';
 import Step1Usage from './Step1Usage';
 import Step2House from './Step2House';
 import Step3Analysis from './Step3Analysis';
@@ -337,6 +338,9 @@ export default function ResidentialWizard({ intent = null, utm = null, resumeIni
     setChosenTier(null);
     setContact({ firstName: '', lastName: '', email: '', phone: '' });
     setSubmitted(null);   // Bug 6A — Start-fresh must wipe post-submit IDs too
+    clearReferralCode();  // Phase 3 (2026-08-22) — new quote shouldn't be
+                          // credited to the referrer of the previous quote.
+                          // Wipes sessionStorage + expires the cookie.
     setDraftIds({ enquiryId: null, contactId: null });
     setDraftState('idle');
     analysedAddressKeyRef.current = null;

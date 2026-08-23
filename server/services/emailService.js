@@ -292,6 +292,47 @@ export async function sendDraftSavedEmail({ form, resumeUrl }) {
   });
 }
 
+// ── Phase 3 (2026-08-22) — referral credit unlocked email ───────────────
+// Sent to the referrer when their friend's install completes → their $250
+// credit unlocks. Prompts the referrer to reply with their postal address
+// so admin can post a cheque. Non-blocking (fire-and-forget) — an email
+// failure never rolls back the credit unlock in the DB.
+export async function sendReferralCreditUnlockedEmail({ referrerName, referrerEmail, creditCents, expiresAt }) {
+  if (!referrerEmail) {
+    console.log('Referral credit unlocked: no referrer email, skipping');
+    return null;
+  }
+  const friendly = (referrerName || '').split(' ')[0] || 'there';
+  const dollars  = Math.round((creditCents || 0) / 100).toLocaleString('en-NZ');
+  const expires  = expiresAt ? new Date(expiresAt).toLocaleDateString('en-NZ', { day: '2-digit', month: 'long', year: 'numeric' }) : null;
+
+  const body = `
+    <p style="font-size:14px">Kia ora <strong>${friendly}</strong>,</p>
+    <p style="color:#4b5563;font-size:13px">Great news — your friend just had their solar system installed, so the <strong>$${dollars} referral credit</strong> you earned is ready to be paid out.</p>
+
+    <div style="background:linear-gradient(135deg,#f5f3ff 0%,#ede9fe 100%);border:2px solid #a78bfa;border-radius:10px;padding:20px;text-align:center;margin:20px 0">
+      <div style="font-size:11px;color:#7c3aed;font-weight:700;letter-spacing:0.15em;text-transform:uppercase">Credit unlocked</div>
+      <div style="font-size:36px;color:#1e1b4b;font-weight:800;margin-top:4px">$${dollars}</div>
+      ${expires ? `<div style="font-size:11px;color:#6b7280;margin-top:6px">Available to claim until <strong>${expires}</strong></div>` : ''}
+    </div>
+
+    <p style="color:#4b5563;font-size:13px"><strong>To collect your credit</strong>, just reply to this email with the postal address where we should send the cheque. We'll post it out within 5 business days of receiving your reply.</p>
+
+    <p style="color:#4b5563;font-size:13px">Prefer a bank transfer instead? Reply with your account number and we'll do that instead — same 5-business-day turnaround.</p>
+
+    <p style="color:#4b5563;font-size:12px;background:#fef3c7;border-left:3px solid #f59e0b;padding:10px 14px;margin:20px 0;border-radius:0 6px 6px 0"><strong>Heads up:</strong> The credit expires 6 months from today. Reply anytime before ${expires || 'the deadline'} and we'll process it — no need to rush.</p>
+
+    <p style="color:#4b5563;font-size:13px">Thanks for spreading the word about solar. It genuinely helps get more Kiwi homes off the grid.</p>
+    <p style="font-size:13px;margin-top:18px">Ngā mihi,<br><strong>The ${COMPANY.name} team</strong></p>`;
+
+  return send({
+    to: referrerEmail,
+    subject: `Your $${dollars} referral credit is ready — reply with your address`,
+    html: wrap({ title: 'Referral credit unlocked', body }),
+  });
+}
+
+
 // ── Phase B4 (2026-08-21) — customer proposal delivery email ─────────────
 // Sent from leadService.createOrUpdateLead after the merged /get-quote
 // residential flow completes /submit-with-design and we have a chosen tier

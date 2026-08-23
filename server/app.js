@@ -45,6 +45,7 @@ import legacySubmitRoutes from './routes/legacy-submit.js';
 import pmRoutes from './routes/pm/index.js';
 import publicProjectRoutes from './routes/public-projects.js';
 import qrRoutes from './routes/qr.js';
+import referralRoutes from './routes/referrals.js';
 
 dotenv.config({ path: '../.env' });
 
@@ -157,6 +158,10 @@ app.use('/api/config', configRoutes);
 app.use('/api/quote', quoteRoutes);
 app.use('/api/otp', otpRoutes);
 app.use('/api/finance', financeRoutes);
+// Referrals (Phase 3, 2026-08-22). Public /status + /generate use share_token
+// auth; /admin/* sub-routes require portal session (enforced inside the router
+// via `router.use(authenticate)` at the top of the admin block).
+app.use('/api/referrals', referralRoutes);
 app.use('/api/enquiries', enquiryRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/overrides', overrideRoutes);
@@ -201,6 +206,43 @@ app.use((err, req, res, next) => {
 // the function and waste billing time.
 if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
   app.listen(PORT, () => console.log(`⚡ GoldenRay API running on port ${PORT}`));
+
+  // ── Referral expiry sweep (Phase 3, 2026-08-22) ────────────────────────
+  // Marks referrals as 'expired' once their credit_expires_at (6 months
+  // after unlock) has passed. Runs every 6 hours — sub-daily cadence so
+  // an expiry never lags more than a quarter-day, but not so frequent that
+  // it thrashes the DB. Kept in-process (setInterval) rather than an
+  // external cron (Render Cron Jobs) so the whole feature ships in one
+  // codebase. If we ever need proper cron-style guarantees (survive
+  // process restarts, don't skip beats), migrate to Render Cron.
+  //
+  // First invocation is deferred 60s so server boot isn't slowed by an
+  // immediate DB call while other init is still finishing.
+  import('./services/referralService.js')
+    .then(({ expireStaleReferrals }) => import('./config/supabase.js')
+      .then(({ supabaseAdmin }) => {
+        if (!supabaseAdmin) {
+          console.log('[referral-expiry] supabaseAdmin unavailable — sweep disabled');
+          return;
+        }
+        const sweep = async () => {
+          try {
+            const result = await expireStaleReferrals(supabaseAdmin);
+            if (result.error) {
+              console.error('[referral-expiry] sweep error:', result.error?.message || result.error);
+            } else if (result.expired > 0) {
+              console.log(`[referral-expiry] marked ${result.expired} referral(s) expired`);
+            }
+          } catch (e) {
+            console.error('[referral-expiry] sweep threw:', e?.message || e);
+          }
+        };
+        setTimeout(sweep, 60_000);                 // first run 60s after boot
+        setInterval(sweep, 6 * 60 * 60 * 1000);    // then every 6 hours
+        console.log('⏰ Referral expiry sweep scheduled (every 6h, first run in 60s)');
+      })
+    )
+    .catch((e) => console.error('[referral-expiry] setup failed:', e?.message || e));
 }
 
 export default app;
