@@ -324,15 +324,32 @@ export function composeThreeTiers({
   // tier 2 tier card shows "EV-ready").
   const tier2HasEv = !!billAnalysis?.tier2_ev_enabled;
 
+  // PR-D-2 fix (2026-08-24): per-tier battery kWh override (Bug 11).
+  // When design.js sent `tier_battery_kwh_override: [0, tier2Val, tier3Val]`
+  // use each tier's own value; otherwise fall back to the legacy
+  // shared `recBat` and `recBat + 2.76` seeds. This is what breaks the
+  // implicit "tier 3 = tier 2 + 2.76" coupling — each tier is now
+  // independent when the customer customises it.
+  const perTierBattOverride = Array.isArray(billAnalysis?.tier_battery_kwh_override)
+    && billAnalysis.tier_battery_kwh_override.length === 3
+      ? billAnalysis.tier_battery_kwh_override.map(v => Number.isFinite(v) ? Number(v) : null)
+      : null;
+  const tier2Batt = perTierBattOverride && perTierBattOverride[1] != null && perTierBattOverride[1] >= 0
+    ? perTierBattOverride[1]
+    : recBat;
+  const tier3Batt = perTierBattOverride && perTierBattOverride[2] != null && perTierBattOverride[2] >= 0
+    ? perTierBattOverride[2]
+    : recBat + 2.76;
+
   const tierInputs = [
-    { kwp: tierKwp.t1, batt: null,         hasEv: false,
+    { kwp: tierKwp.t1, batt: null,      hasEv: false,
       label: labels.tier_1 || (sizeMode === 'tiered_sizes' ? `Starter ${tierKwp.t1} kW` : 'Solar only'),
       isRecommended: false },
-    { kwp: tierKwp.t2, batt: recBat,       hasEv: tier2HasEv,
-      label: labels.tier_2 || (sizeMode === 'tiered_sizes' ? `Right-size ${tierKwp.t2} kW` : `Solar + ${recBat} kWh battery${tier2HasEv ? ' + EV-ready' : ''}`),
+    { kwp: tierKwp.t2, batt: tier2Batt, hasEv: tier2HasEv,
+      label: labels.tier_2 || (sizeMode === 'tiered_sizes' ? `Right-size ${tierKwp.t2} kW` : `Solar + ${tier2Batt} kWh battery${tier2HasEv ? ' + EV-ready' : ''}`),
       isRecommended: true },
-    { kwp: tierKwp.t3, batt: recBat + 2.76, hasEv: tier3HasEv,
-      label: labels.tier_3 || (sizeMode === 'tiered_sizes' ? `Future-proof ${tierKwp.t3} kW` : `Solar + ${(recBat+2.76).toFixed(1)} kWh battery${tier3HasEv ? ' + EV-ready' : ''}`),
+    { kwp: tierKwp.t3, batt: tier3Batt, hasEv: tier3HasEv,
+      label: labels.tier_3 || (sizeMode === 'tiered_sizes' ? `Future-proof ${tierKwp.t3} kW` : `Solar + ${tier3Batt.toFixed(1)} kWh battery${tier3HasEv ? ' + EV-ready' : ''}`),
       isRecommended: false },
   ];
 
@@ -509,13 +526,28 @@ function relayoutShorter(tier) {
 function repairTier(tier, catalogue, ctx) {
   tier.repairs = [];
   let val = inspectOneTier(tier, catalogue, ctx);
+  // Bug 6 fix (2026-08-24): the battery snap-below-target case is not a
+  // hard_fail (validator sees a legal system), so we ALSO check the
+  // tier's own snap flag as a repair trigger. When set, try stepping up
+  // the inverter — bigger inverters typically have more matrix-approved
+  // battery pairings, unlocking the customer's target capacity.
+  let batteryUpgradeAttempts = 0;
   let attempts = 0;
-  while (!val.valid && attempts < 16) {
+  while ((!val.valid || (tier.system_overrides.battery?.snapped_below_target && batteryUpgradeAttempts < 2)) && attempts < 16) {
     const rules = (val.hard_fails || []).map(f => `${f.rule} ${f.message || ''}`).join(' | ');
     const inv = catalogue.INVERTERS?.[tier.system_overrides.inverter?.sku];
     const dcac = inv?.ac_kw ? arrayDcKwOf(catalogue, tier.system_overrides) / inv.ac_kw : 0;
     let acted = false;
+    const batterySnapped = !!tier.system_overrides.battery?.snapped_below_target;
 
+    // Repair paths tried in engineering priority order — DC/AC oversizing
+    // and Voc envelope are engineering-CRITICAL failures (the system
+    // literally won't work); battery snap-below-target is only a
+    // CAPACITY-optimization miss (the system works, just holds less than
+    // the customer asked). Handle criticals first with `if`s guarded by
+    // `!acted`, then battery. Prior version used `else if` which made the
+    // Voc branch unreachable whenever the tier also had a snapped battery
+    // — 6 tiers went from ok → blocked in test-composer-phase3-repair.
     if (/oversizing|DC\/AC|max DC/i.test(rules) && dcac > 1.20) {
       // Array genuinely too big for the inverter → step up (keep coverage).
       const bigger = nextLargerInverter(catalogue, tier, ctx.phase);
@@ -523,21 +555,51 @@ function repairTier(tier, catalogue, ctx) {
         tier.system_overrides.inverter = { sku: bigger.sku };
         tier.repairs.push(`inverter → ${bigger.sku} (DC/AC ${dcac.toFixed(2)})`);
         if (tier.system_overrides.battery?.sku) {
-          const bat = selectBattery({ targetUsableKwh: tier.system_overrides.battery.kwh || 0,
+          const bat = selectBattery({ targetUsableKwh: tier.system_overrides.battery.target_kwh || tier.system_overrides.battery.kwh || 0,
             inverter: { ...bigger, sku: bigger.sku }, catalogue,
             COMPATIBILITY: ctx.COMPATIBILITY, BMS_RULES: ctx.BMS_RULES });
           if (bat.sku) {
             tier.system_overrides.battery = { sku: bat.sku, module_count: bat.module_count,
-              kwh: +(+bat.total_usable_kwh).toFixed(2) };
+              kwh: +(+bat.total_usable_kwh).toFixed(2),
+              snapped_below_target: !!bat.snapped_below_target,
+              target_kwh: bat.target_usable_kwh };
             tier.repairs.push(`battery → ${bat.sku}`);
           }
         }
         acted = true;
       }
-    } else if (/Voc|shorten series|Vmp/i.test(rules)) {
+    }
+    if (!acted && /Voc|shorten series|Vmp/i.test(rules)) {
       // String voltage out of window → re-layout into shorter strings.
       acted = relayoutShorter(tier);
       if (acted) tier.repairs.push(`shorten strings → ${tier.system_overrides.string_design.groups[0].panels_per_string}/string`);
+    }
+    if (!acted && batterySnapped && batteryUpgradeAttempts < 2) {
+      // Bug 6 fix: battery snapped below customer's target → try a bigger
+      // inverter with a wider matrix. Capped at 2 attempts so we don't
+      // walk the entire inverter catalogue if no larger unit ever accepts
+      // the target pack size.
+      batteryUpgradeAttempts++;
+      const bigger = nextLargerInverter(catalogue, tier, ctx.phase);
+      if (bigger) {
+        const originalTarget = tier.system_overrides.battery.target_kwh || tier.system_overrides.battery.kwh;
+        const bat = selectBattery({ targetUsableKwh: originalTarget,
+          inverter: { ...bigger, sku: bigger.sku }, catalogue,
+          COMPATIBILITY: ctx.COMPATIBILITY, BMS_RULES: ctx.BMS_RULES });
+        if (bat.sku && !bat.snapped_below_target) {
+          // Bigger inverter unlocked the full target — swap both.
+          tier.system_overrides.inverter = { sku: bigger.sku };
+          tier.system_overrides.battery  = { sku: bat.sku, module_count: bat.module_count,
+            kwh: +(+bat.total_usable_kwh).toFixed(2),
+            snapped_below_target: false,
+            target_kwh: bat.target_usable_kwh };
+          tier.repairs.push(`inverter → ${bigger.sku} (unlock battery target ${originalTarget} kWh)`);
+          tier.repairs.push(`battery → ${bat.sku} × ${bat.module_count}`);
+          acted = true;
+        }
+        // If the bigger inverter STILL snapped, fall through — the outer
+        // loop will re-enter and try one more step-up (limited to 2).
+      }
     }
 
     if (!acted) break;  // no applicable strategy (or exhausted) → stop, will block

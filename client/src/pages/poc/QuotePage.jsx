@@ -2920,6 +2920,15 @@ function CustomiseSystemCard({
   onEvChange,
   designing,
   onShowEnergyFlow,
+  /* PR-E fix (2026-08-24): panel-count slider (Bug 4). All 4 props
+     optional so any existing caller without panel wiring keeps working
+     — the slider just doesn't render. */
+  panelsMax,
+  panelsRecommended,
+  customPanels,
+  onPanelsChange,
+  viewingTierLabel,
+  viewingTierIdx,
 }) {
   // Effective values for display (falls back to recommendation defaults)
   const effectiveBattery = Number.isFinite(customBatteryKwh)
@@ -2957,12 +2966,29 @@ function CustomiseSystemCard({
     const v = Number(e.target.value);
     if (Number.isFinite(v) && v >= 0) onEvChange(v > 0 ? v : 0);
   };
+  // PR-E fix (2026-08-24): panel-count slider values. When onPanelsChange
+  // isn't provided we don't render the slider at all (backwards compat).
+  const panelSliderEnabled = typeof onPanelsChange === 'function';
+  const panelsMinResolved = 4;   // minimum viable system
+  const panelsMaxResolved = Number.isFinite(panelsMax) && panelsMax > panelsMinResolved
+    ? Math.round(panelsMax)
+    : 40;   // fallback when roof-cap unknown
+  const effectivePanels = Number.isFinite(customPanels) && customPanels > 0
+    ? Math.round(customPanels)
+    : (Number.isFinite(panelsRecommended) ? Math.round(panelsRecommended) : panelsMinResolved);
+  const handlePanelsSlider = (e) => {
+    const v = Number(e.target.value);
+    if (Number.isFinite(v) && v >= panelsMinResolved) onPanelsChange(v);
+  };
+
   const handleResetToRecommended = () => {
     onBatteryChange(null);
     onEvChange(null);
+    if (panelSliderEnabled) onPanelsChange(null);
   };
 
-  const hasCustomised = Number.isFinite(customBatteryKwh) || customEvKmPerDay !== null;
+  const hasCustomised = Number.isFinite(customBatteryKwh) || customEvKmPerDay !== null
+    || Number.isFinite(customPanels);
 
   return (
     <div className="mt-4 rounded-2xl border border-[#E3D9C4] bg-white p-4 md:p-5 shadow-sm">
@@ -3001,6 +3027,48 @@ function CustomiseSystemCard({
           )}
         </div>
       </div>
+
+      {/* PR-E fix (2026-08-24): panel-count slider (Bug 4). Full-width row
+          above the battery+EV grid so it reads as the fundamental sizing
+          knob — battery + EV are add-ons layered on top. Only renders
+          when the parent provides onPanelsChange (backwards compat with
+          older callers that don't wire this yet). */}
+      {panelSliderEnabled && (
+        <div className="mb-4 pb-4 border-b border-[#E3D9C4]">
+          <div className="flex items-baseline justify-between mb-2 gap-2 flex-wrap">
+            <label className="text-[10px] uppercase tracking-wider text-[#8B8377] font-mono font-semibold">
+              Solar panels {viewingTierLabel ? <span className="normal-case text-[#D9531E]/70">({viewingTierLabel})</span> : null}
+            </label>
+            <span className="text-[10px] font-mono text-[#8B8377]">
+              min {panelsMinResolved} &middot; roof max {panelsMaxResolved}
+            </span>
+          </div>
+          <div className="flex items-baseline gap-1 mb-2">
+            <div className="font-serif font-bold text-2xl text-[#1A1614] tabular-nums leading-none">
+              {effectivePanels}
+            </div>
+            <span className="text-sm text-[#8B8377]">panels</span>
+          </div>
+          <input
+            type="range"
+            min={panelsMinResolved}
+            max={panelsMaxResolved}
+            step={1}
+            value={effectivePanels}
+            onChange={handlePanelsSlider}
+            className="w-full accent-[#D9531E] cursor-pointer"
+            aria-label="Number of solar panels"
+          />
+          <div className="mt-1 text-[10px] font-mono text-[#8B8377]">
+            {Number.isFinite(panelsRecommended)
+              ? `${panelsRecommended} recommended for your usage`
+              : 'Drag to size the array up or down'}
+            {Number.isFinite(customPanels)
+              && Math.round(customPanels) !== Math.round(panelsRecommended || 0)
+              && <span className="ml-2 text-[#D9531E]">&mdash; customised from recommendation</span>}
+          </div>
+        </div>
+      )}
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* Battery slider */}
@@ -3157,7 +3225,22 @@ function RoofAtAGlanceStrip({ roof, recommendedTier }) {
 // props (`onBookOverride`, `onTierChosenOverride`) let the wizard intercept
 // the "Book site visit" flow and route it to its own Step 5 contact form
 // instead of POC's inline lead drawer.
-export function QuoteStage({ analysis, design, material, bill, excludedSegments, onToggleSegment, designing, onBack, onReset, onRoofPlacementChange, customBatteryKwh, customEvKmPerDay, setCustomBatteryKwh, setCustomEvKmPerDay, onBookOverride, bookCtaLabel, stickyCommitBar = false }) {
+export function QuoteStage({
+  analysis, design, material, bill, excludedSegments, onToggleSegment,
+  designing, onBack, onReset, onRoofPlacementChange,
+  customBatteryKwh, customEvKmPerDay, setCustomBatteryKwh, setCustomEvKmPerDay,
+  /* PR-D-2 fix (2026-08-24): tier-aware customisation props (Bug 11).
+     When these are provided (from Step4System's per-tier state), the
+     Customise card reads/writes for `viewingTierIdx` — sliding on tier
+     2's card no longer restacks tier 3. When ABSENT (older callers or
+     the standalone /poc/quote page), we fall back to the legacy scalar
+     props above so existing usage keeps working. */
+  customByTier, getCustomBatteryKwh, getCustomEvKmPerDay,
+  setCustomBatteryKwhForTier, setCustomEvKmPerDayForTier,
+  /* PR-E fix (2026-08-24): panel-count per-tier customisation (Bug 4). */
+  getCustomPanels, setCustomPanelsForTier,
+  onBookOverride, bookCtaLabel, stickyCommitBar = false,
+}) {
   const { aerial, coords, roof, formattedAddress } = analysis;
   const { tiers, recommended_index, derived_annual_kwh, bill_analysis, region,
           fallback_used, fallback_reason, warnings } = design;
@@ -3294,16 +3377,18 @@ export function QuoteStage({ analysis, design, material, bill, excludedSegments,
       />
 
       {/* Tier-preview badge — appears when user is comparing a
-          non-recommended tier via a tier-card click. Provides a
-          persistent reminder that the 3D shows Tier X while the
-          numbers in the StatusStrip stay tied to the recommendation.
-          "Reset to recommended" button flips back with one click. */}
+          non-recommended tier via a tier-card click. Shows which tier is
+          being previewed + a one-click reset to the recommendation.
+          PR-D fix (2026-08-24): removed "Numbers below still reflect
+          the recommendation" caveat — BillShrinkHero + SavingsJourney +
+          TwentyFiveYearSavingsChart + SeasonalGeneration + ThreeScenario
+          now all update per-tier (Bugs 7 + 8). */}
       {isPreviewingNonRecommended && (
         <div className="mt-4 flex items-start gap-3 px-4 py-2.5 rounded-xl bg-[#D9531E]/[0.08] border border-[#D9531E]/25 text-sm">
           <Award className="w-4 h-4 text-[#D9531E] flex-shrink-0 mt-0.5" />
           <div className="flex-1 text-[#1A1614]">
-            Previewing <strong>{viewingTier?.name || `Tier ${viewingTierIdx + 1}`}</strong> on the 3D
-            <span className="text-[#8B8377]"> &middot; recommended is {recommended?.name || `Tier ${recommended_index + 1}`}. Numbers below still reflect the recommendation.</span>
+            Previewing <strong>{viewingTier?.name || `Tier ${viewingTierIdx + 1}`}</strong>
+            <span className="text-[#8B8377]"> &middot; recommended is {recommended?.name || `Tier ${recommended_index + 1}`}.</span>
           </div>
           <button
             type="button"
@@ -3349,15 +3434,54 @@ export function QuoteStage({ analysis, design, material, bill, excludedSegments,
       {/* Customise System (Phase 2, 2026-08-19) — customer drags battery
           slider + toggles EV to see all 3 tiers restack live. Server
           re-runs sizing math with new loads and re-renders 3D. */}
+      {/* PR-D-2 fix (2026-08-24): Customise card operates on the tier the
+          customer is CURRENTLY VIEWING (viewingTierIdx) — Bug 11. When
+          Step4System provides the tier-aware handlers, use those (slider
+          moves write only to the viewed tier). Fall back to the legacy
+          scalar handlers when tier-aware ones aren't provided. */}
       <CustomiseSystemCard
         batteryBounds={design.battery_bounds}
         recommendedBatteryKwh={design.bill_analysis?.recommended_battery_kwh}
-        customBatteryKwh={customBatteryKwh}
-        customEvKmPerDay={customEvKmPerDay}
-        onBatteryChange={setCustomBatteryKwh}
-        onEvChange={setCustomEvKmPerDay}
+        customBatteryKwh={
+          typeof getCustomBatteryKwh === 'function'
+            ? getCustomBatteryKwh(viewingTierIdx)
+            : customBatteryKwh
+        }
+        customEvKmPerDay={
+          typeof getCustomEvKmPerDay === 'function'
+            ? getCustomEvKmPerDay(viewingTierIdx)
+            : customEvKmPerDay
+        }
+        onBatteryChange={
+          typeof setCustomBatteryKwhForTier === 'function'
+            ? (v) => setCustomBatteryKwhForTier(viewingTierIdx, v)
+            : setCustomBatteryKwh
+        }
+        onEvChange={
+          typeof setCustomEvKmPerDayForTier === 'function'
+            ? (v) => setCustomEvKmPerDayForTier(viewingTierIdx, v)
+            : setCustomEvKmPerDay
+        }
         designing={designing}
         onShowEnergyFlow={() => setEnergyFlowOpen(true)}
+        viewingTierLabel={viewingTier?.label || `Tier ${viewingTierIdx + 1}`}
+        viewingTierIdx={viewingTierIdx}
+        /* PR-E fix (2026-08-24): panel-count slider bounds + tier-scoped
+           value + change handler. Bounds come from the design response:
+           roof_max_panels caps the top, tier's recommended count anchors
+           the middle. Change handler writes only to viewingTierIdx. */
+        panelsMax={design?.roof_max_panels || design?.bill_analysis?.roof_max_panels || null}
+        panelsRecommended={viewingTier?.panel?.count || null}
+        customPanels={
+          typeof getCustomPanels === 'function'
+            ? getCustomPanels(viewingTierIdx)
+            : null
+        }
+        onPanelsChange={
+          typeof setCustomPanelsForTier === 'function'
+            ? (v) => setCustomPanelsForTier(viewingTierIdx, v)
+            : undefined
+        }
       />
 
       {/* 3-tier recommendation row — MOVED to below 3D (iteration 6).
@@ -3413,17 +3537,22 @@ export function QuoteStage({ analysis, design, material, bill, excludedSegments,
       {/* F2 BillShrinkHero — full-width year-1 money moment. Was cramped
           at 520px in a drawer; here it has room. Iteration 6: taller
           bars, springier animation, "SAVED" badge, glow, NZ comparison
-          chips. */}
+          chips.
+          PR-D fix (2026-08-24): pass viewingTierIdx so the "before &
+          after" figures update when the customer switches tier cards
+          (Bug 7). */}
       <div className="mt-6">
-        <BillShrinkHero design={design} />
+        <BillShrinkHero design={design} viewingTierIdx={viewingTierIdx} />
       </div>
 
       {/* Interactive year-1→25 journey explorer. Complement to F2:
           F2 answers "year 1 savings" viscerally; this answers "and over
           the long haul?" interactively. Customer drags year slider,
-          watches cumulative savings + payback marker respond. */}
+          watches cumulative savings + payback marker respond.
+          PR-D fix (2026-08-24): pass viewingTierIdx so the savings
+          projection matches the selected card (Bug 8). */}
       <div className="mt-6">
-        <SavingsJourneyExplorer design={design} />
+        <SavingsJourneyExplorer design={design} viewingTierIdx={viewingTierIdx} />
       </div>
 
       {/* Building / shift / fallback banners — moved BELOW status strip,
@@ -3496,9 +3625,9 @@ export function QuoteStage({ analysis, design, material, bill, excludedSegments,
       </Drawer>
 
       <Drawer open={openDrawer === 'savings'} onClose={closeDrawer} title="Savings deep dive" subtitle="Seasonal shape, 25-yr trajectory, 3 scenarios" wide>
-        <SeasonalGenerationChart design={design} />
-        <TwentyFiveYearSavingsChart design={design} />
-        <ThreeScenarioTable design={design} />
+        <SeasonalGenerationChart design={design} viewingTierIdx={viewingTierIdx} />
+        <TwentyFiveYearSavingsChart design={design} viewingTierIdx={viewingTierIdx} />
+        <ThreeScenarioTable design={design} viewingTierIdx={viewingTierIdx} />
       </Drawer>
 
       <Drawer open={openDrawer === 'impact'} onClose={closeDrawer} title="Environmental impact" subtitle="What your system offsets each year">
@@ -4136,8 +4265,12 @@ function PlanePickerCard({ segments, excludedSegments, onToggleSegment, designin
 // system cost. Turns the abstract 25-year projection into something the
 // customer can PLAY with, which is stickier than a static chart.
 // Falls back gracefully if cashflow data isn't available.
-function SavingsJourneyExplorer({ design }) {
-  const cashflow = design?.financials?.cashflow;
+function SavingsJourneyExplorer({ design, viewingTierIdx }) {
+  // PR-D fix (2026-08-24): per-tier cashflow (Bug 8).
+  const tierFin = Number.isFinite(viewingTierIdx)
+    ? design?.tiers?.[viewingTierIdx]?.financials
+    : null;
+  const cashflow = (tierFin || design?.financials)?.cashflow;
   const systemCost = Number(design?.tiers?.[design?.recommended_index]?.price_inc_gst);
 
   const data = Array.isArray(cashflow) ? cashflow.slice(0, 25) : [];
@@ -4336,8 +4469,12 @@ function SavingsJourneyExplorer({ design }) {
 //
 // No chart library — SVG hand-drawn to keep bundle small and styling
 // under our full control (matches the cream/orange palette).
-function TwentyFiveYearSavingsChart({ design }) {
-  const cashflow = design?.financials?.cashflow;
+function TwentyFiveYearSavingsChart({ design, viewingTierIdx }) {
+  // PR-D fix (2026-08-24): per-tier cashflow (Bug 8 companion — drawer view).
+  const tierFin = Number.isFinite(viewingTierIdx)
+    ? design?.tiers?.[viewingTierIdx]?.financials
+    : null;
+  const cashflow = (tierFin || design?.financials)?.cashflow;
   const systemCost = Number(design?.tiers?.[design?.recommended_index]?.price_inc_gst);
   if (!Array.isArray(cashflow) || cashflow.length === 0) return null;
 
@@ -4462,8 +4599,14 @@ function TwentyFiveYearSavingsChart({ design }) {
 //
 // Silently omits if the server couldn't compute financials (same guard
 // pattern as F1/F3/F6 → tariff missing, catalogue mismatch, etc.).
-function BillShrinkHero({ design }) {
-  const fin = design?.financials?.expected;
+function BillShrinkHero({ design, viewingTierIdx }) {
+  // PR-D fix (2026-08-24): read from viewingTier's own financials when
+  // available (Bug 7). Falls back to design.financials for backwards
+  // compat with any caller that hasn't been passed viewingTierIdx yet.
+  const tierFin = Number.isFinite(viewingTierIdx)
+    ? design?.tiers?.[viewingTierIdx]?.financials
+    : null;
+  const fin = (tierFin || design?.financials)?.expected;
   const oldBill    = Number(fin?.yr1_old_bill);
   const newBill    = Number(fin?.yr1_new_bill);
   const cum25      = Number(fin?.cum_25yr_savings);
@@ -4735,9 +4878,15 @@ function BillShrinkHero({ design }) {
 // Bar tint scales blue (winter, cool) → orange (summer, warm) so the
 // season story is visible even at a glance. No chart library — SVG
 // hand-drawn to match F3.
-function SeasonalGenerationChart({ design }) {
-  const months = design?.financials?.monthly_generation_kwh;
-  const source = design?.financials?.monthly_source;
+function SeasonalGenerationChart({ design, viewingTierIdx }) {
+  // PR-D fix (2026-08-24): per-tier seasonal generation shape scales with
+  // the tier's yr1 generation, so it too varies per card.
+  const tierFin = Number.isFinite(viewingTierIdx)
+    ? design?.tiers?.[viewingTierIdx]?.financials
+    : null;
+  const fin = tierFin || design?.financials;
+  const months = fin?.monthly_generation_kwh;
+  const source = fin?.monthly_source;
   if (!Array.isArray(months) || months.length !== 12) return null;
 
   const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -4851,8 +5000,12 @@ function SeasonalGenerationChart({ design }) {
 // hard rule that every proposal shows three-scenario financials — extended
 // here to the POC so exploratory customers see the range, not just a
 // single point estimate that reads as over-promise.
-function ThreeScenarioTable({ design }) {
-  const scenarios = design?.financials?.scenarios_summary;
+function ThreeScenarioTable({ design, viewingTierIdx }) {
+  // PR-D fix (2026-08-24): per-tier scenarios (Cons/Exp/Opt table).
+  const tierFin = Number.isFinite(viewingTierIdx)
+    ? design?.tiers?.[viewingTierIdx]?.financials
+    : null;
+  const scenarios = (tierFin || design?.financials)?.scenarios_summary;
   if (!Array.isArray(scenarios) || scenarios.length !== 3) return null;
 
   const toneOf = (key) =>

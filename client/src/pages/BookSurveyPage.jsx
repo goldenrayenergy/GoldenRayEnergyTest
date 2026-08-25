@@ -75,6 +75,12 @@ export default function BookSurveyPage() {
       },
       hideEventTypeDetails: false,
       layout: 'month_view',
+      // Bug 10 fix (2026-08-24): force 12-hour format with AM/PM. Without
+      // this Cal.com falls back to browser locale detection which for
+      // en-NZ is system-setting dependent — some customers saw 13:00,
+      // others saw 1:00 with no AM/PM label. NZ residential customers
+      // mostly think in 12h; owner can switch to 24 if that changes.
+      timeFormat: 12,
     });
 
     // 8s failsafe — if the Cal.com iframe hasn't rendered into our

@@ -576,24 +576,38 @@ function extractCustomerName(text) {
   if (!text) return null;
   const head = text.slice(0, 3000);
 
+  // Bug 1 fix (2026-08-24): all 5 patterns now use Unicode letter classes
+  // (\p{L} / \p{Lu} / \p{Ll}) + the `u` flag so names with diacritics,
+  // macrons, and non-ASCII letters are accepted. Previously the ASCII-only
+  // [A-Z][A-Za-z]+ classes silently rejected valid NZ names — María,
+  // Nguyễn, Wiremu-Rāwiri, Rāhui — leaving account_holder null.
+  //
+  // Also relaxed:
+  //   • hyphenated first names (Anne-Marie, Wiremu-Rāwiri) — added \-
+  //     inside the letter class of every pattern
+  //   • labelled-name min length dropped from 4 → 2 chars so 2-letter
+  //     first names (Li, Wu) reach the isNameNoise gate
+  //   • title-case line pattern (#4) now accepts hyphens mid-word
+
   // 1. Title prefix — case-INSENSITIVE, accepts single-word surnames too:
   //   "MR SUNIL REDDY VADICHERLA"  (Mercury all-caps, 3-word name)
   //   "Mr M Javed"                 (Contact mixed-case, middle initial + 1-word surname)
   //   "Mrs Sarah Wong"             (2-word name)
-  const titled = head.match(/\b(Mr|Mrs|Ms|Miss|Dr)\.?\s+((?:[A-Z]\.?\s+)?[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,4})\b/i);
+  //   "Mr Wiremu-Rāwiri"           (hyphenated + macron)
+  const titled = head.match(/\b(Mr|Mrs|Ms|Miss|Dr)\.?\s+((?:\p{L}\.?\s+)?\p{L}[\p{L}\-']*(?:\s+\p{L}[\p{L}\-']*){0,4})\b/iu);
   if (titled && !isNameNoise(titled[2])) return titled[2].replace(/\s+/g, ' ').trim();
 
   // 2. Labelled account holder (Contact + some Mercury)
   for (const re of [
-    /Account\s+(?:name|holder)[\s:]+([A-Z][A-Za-z\s\-'\.]{4,60}?)(?=\s*\n|\s+\d|\s*[,:])/i,
-    /(?:Statement|Bill)\s+(?:to|prepared\s+for)[\s:]+([A-Z][A-Za-z\s\-']{4,60}?)(?=\s*\n|\s+\d|\s*[,:])/i,
+    /Account\s+(?:name|holder)[\s:]+(\p{L}[\p{L}\s\-'\.]{2,60}?)(?=\s*\n|\s+\d|\s*[,:])/iu,
+    /(?:Statement|Bill)\s+(?:to|prepared\s+for)[\s:]+(\p{L}[\p{L}\s\-']{2,60}?)(?=\s*\n|\s+\d|\s*[,:])/iu,
   ]) {
     const m = head.match(re);
     if (m && !isNameNoise(m[1])) return m[1].replace(/\s+/g, ' ').trim();
   }
 
   // 3. "Dear FirstName" — cover letter style
-  const dear = head.match(/Dear\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})\b/);
+  const dear = head.match(/Dear\s+(\p{L}[\p{L}\-']*(?:\s+\p{L}[\p{L}\-']*){0,2})\b/u);
   if (dear && !isNameNoise(dear[1])) return dear[1].replace(/\s+/g, ' ').trim();
 
   // 4. Title-case name line (Ecotricity pattern: "Faraz Ahmed" with no title):
@@ -608,7 +622,7 @@ function extractCustomerName(text) {
   for (let i = 0; i < Math.min(lines.length, 60) - 1; i++) {
     const line = lines[i];
     const next = lines[i + 1] || '';
-    if (!/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$/.test(line)) continue;
+    if (!/^\p{Lu}[\p{Ll}\-']+(?:\s+\p{Lu}[\p{Ll}\-']+){1,2}$/u.test(line)) continue;
     if (line.length < 6 || line.length > 50) continue;
     if (isNameNoise(line)) continue;
     if (!looksLikeAddressFragment(next)) continue;
@@ -619,7 +633,7 @@ function extractCustomerName(text) {
   //    First non-noise caps line in first 35 lines that's 2-4 words.
   for (let i = 0; i < Math.min(lines.length, 40); i++) {
     const line = lines[i];
-    if (!/^[A-Z][A-Z\s'\-&]+$/.test(line)) continue;
+    if (!/^\p{Lu}[\p{Lu}\s'\-&]+$/u.test(line)) continue;
     if (line.length < 6 || line.length > 60) continue;
     const wordCount = line.split(/\s+/).length;
     if (wordCount < 2 || wordCount > 5) continue;

@@ -139,13 +139,23 @@ console.log('\n══════ Battery selector ══════');
 }
 
 {
-  console.log('\n── target > max possible (50 kWh) → cannot_meet_target ──');
+  // Bug 6 fix (2026-08-24): selectBattery no longer hard-fails on oversize
+  // asks. When no valid+matrix-approved module count meets the customer's
+  // target, it snaps DOWN to the largest available count and flags
+  // `snapped_below_target: true`. Rationale: better UX to under-shoot by
+  // a couple modules than to reject the customer entirely with a scary
+  // "cannot_meet_target" error and no battery info at all. The old
+  // behavior left the tier with stale/null battery data (see QA bug
+  // 2026-08-24: "battery capacity does not update, inverter changes but
+  // battery info remains").
+  console.log('\n── target > max possible (50 kWh) → snap-below-target ──');
   const r = selectBattery({
     targetUsableKwh: 50, inverter: INVERTER_GEN24P,
     catalogue: CATALOGUE, COMPATIBILITY, BMS_RULES,
   });
-  console.log(`  reason: ${r.reason_code}`);
-  assert('cannot_meet_target on oversize ask', r.reason_code === 'cannot_meet_target');
+  console.log(`  reason_code: ${r.reason_code} · snapped: ${r.snapped_below_target} · picked: ${r.total_usable_kwh} kWh`);
+  assert('50kWh oversize → selected with snapped_below_target', r.reason_code === 'selected' && r.snapped_below_target === true);
+  assert('50kWh oversize → picked capacity below target', r.total_usable_kwh > 0 && r.total_usable_kwh < 50);
 }
 
 console.log(`\n──── Summary ────`);

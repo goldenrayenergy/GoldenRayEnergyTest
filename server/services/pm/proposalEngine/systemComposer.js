@@ -110,7 +110,15 @@ export function composeSystem({
         sku: batResult.sku,
         module_count: batResult.module_count,
         kwh: r2(batResult.total_usable_kwh),
+        // Bug 6 fix (2026-08-24): propagate the snap flag through so tier
+        // rendering can decide to show a "smaller than you asked" callout.
+        // Also serves as repairTier's trigger to try a bigger inverter.
+        snapped_below_target: !!batResult.snapped_below_target,
+        target_kwh: batResult.target_usable_kwh,
       };
+      if (batResult.snapped_below_target) {
+        warnings.push({ code: 'battery_snapped_below_target', message: batResult.reason });
+      }
     } else {
       warnings.push({ code: 'battery_' + batResult.reason_code, message: batResult.reason });
     }
