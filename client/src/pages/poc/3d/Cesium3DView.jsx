@@ -1473,12 +1473,23 @@ export default function Cesium3DView({
   // with the selected tier's config. Runs whenever `showBattery` or
   // `showEv` props change. Guarded on viewer readiness — the main effect
   // creates the entities on first render; this effect just flips .show.
+  //
+  // Bug 3 fix (2026-08-24): must call viewer.scene.requestRender() after
+  // mutating entity.show or Cesium's on-demand render mode (the default in
+  // this codebase) will keep displaying the previous frame — customer
+  // switches tier cards but the 3D scene never repaints. Every other
+  // useEffect in this file that mutates entities calls requestRender()
+  // (see lines 414, 760, 1046, 1507, 1612, 1638, 1678); this one was the
+  // only miss.
   useEffect(() => {
     const g = groundHardwareRef.current;
     if (!g) return undefined;
     if (g.batteryBox) g.batteryBox.show = !!showBattery;
     if (g.evPedestal) g.evPedestal.show = !!showEv;
     if (g.car)        g.car.show        = !!showEv;
+    if (viewerRef.current && !viewerRef.current.isDestroyed()) {
+      viewerRef.current.scene.requestRender();
+    }
     return undefined;
   }, [showBattery, showEv, status]);
 

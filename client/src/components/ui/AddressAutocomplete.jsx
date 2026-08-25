@@ -30,10 +30,26 @@ function parseSelection(item) {
   // Postcode: prefer the structured field, fall back to extracting a 4-digit
   // NZ postcode from display_name (OSM data is sometimes incomplete on the
   // structured side but consistent in the formatted string).
+  //
+  // Bug 2 fix (2026-08-24): validate the extracted value against the shared
+  // NZ postcode range (0110-9893) so we never persist a 4-digit sequence
+  // that isn't a real postcode. Also relaxed the country-suffix guard —
+  // OSM display_name sometimes ends with just "New Zealand" without a
+  // comma, sometimes with "NZ" only. Try both: the strict lookahead first
+  // (highest confidence), then a looser 4-digit match near end-of-string
+  // if that fails, then range-validate the result.
   let postcode = a.postcode || '';
   if (!postcode && item.display_name) {
-    const m = item.display_name.match(/\b(\d{4})\b(?=[,\s]+(?:New\s+Zealand|Aotearoa))/i);
-    if (m) postcode = m[1];
+    const strict = item.display_name.match(/\b(\d{4})\b(?=[,\s]+(?:New\s+Zealand|Aotearoa|NZ))/i);
+    const loose  = strict ? null : item.display_name.match(/\b(\d{4})\b(?=[^\d]*$)/);
+    postcode = (strict?.[1] || loose?.[1] || '');
+  }
+  // Range-validate: strip anything that's syntactically 4 digits but not a
+  // real NZ postcode (0000-0109, 9894-9999). Better to return '' than a
+  // fake value that downstream validators would accept.
+  if (postcode) {
+    const n = Number(postcode);
+    if (!(n >= 110 && n <= 9893)) postcode = '';
   }
 
   return {

@@ -24,6 +24,7 @@ import { publicApi } from '../services/api';
 import WebsiteNav from '../components/website/WebsiteNav';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 import { captureReferralFromUrl } from '../lib/referralAttribution';
+import { normaliseNzPostcode } from '../lib/postcode';
 import AddressAutocomplete from '../components/ui/AddressAutocomplete';
 // Phase B1 ticket B1.1 (2026-08-20) — residential customers branch into the
 // merged 5-step wizard after picking the intent tile on Step 1. Commercial /
@@ -1040,7 +1041,7 @@ function EstimateResidential({ estimate, update }) {
             ['mercury','Mercury'],['genesis','Genesis'],['contact','Contact'],['meridian','Meridian'],
             ['electric_kiwi','Electric Kiwi'],['powershop','Powershop'],['frank','Frank Energy'],['flick','Flick Electric'],
           ]} />
-        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', v.replace(/\D/g, '').slice(0, 4))} placeholder="1010" inputMode="numeric" maxLength={4} />
+        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', normaliseNzPostcode(v))} placeholder="1010" inputMode="numeric" maxLength={4} />
         <SelectInput label="Household size" value={estimate.household} onChange={v => update('household', v)}
           options={[['1-2','1-2 people'],['3-4','3-4 people'],['5+','5+ people']]} />
         <SelectInput label="Battery interest" value={estimate.battery_interest} onChange={v => update('battery_interest', v)}
@@ -1082,7 +1083,7 @@ function EstimateOffGrid({ estimate, update }) {
             ['independence','Want full independence'],
             ['existing_disconnect','Disconnecting from grid'],
           ]} />
-        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', v.replace(/\D/g, '').slice(0, 4))} placeholder="1010" inputMode="numeric" maxLength={4} />
+        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', normaliseNzPostcode(v))} placeholder="1010" inputMode="numeric" maxLength={4} />
       </div>
 
       <div>
@@ -1130,7 +1131,7 @@ function EstimateCommercial({ estimate, update }) {
             ['seasonal','Seasonal / variable'],
           ]} />
         <TextInput label="Roof / site area (sqm)" value={estimate.site_area_sqm} onChange={v => update('site_area_sqm', v.replace(/\D/g, '').slice(0, 6))} placeholder="500" inputMode="numeric" />
-        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', v.replace(/\D/g, '').slice(0, 4))} placeholder="1010" inputMode="numeric" maxLength={4} />
+        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', normaliseNzPostcode(v))} placeholder="1010" inputMode="numeric" maxLength={4} />
       </div>
 
       <EstimateNote>
@@ -1170,7 +1171,7 @@ function EstimatePPA({ estimate, update }) {
             ['small-team','2-3 stakeholders'],
             ['board','Board / formal approval needed'],
           ]} />
-        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', v.replace(/\D/g, '').slice(0, 4))} placeholder="1010" inputMode="numeric" maxLength={4} />
+        <TextInput label="Postcode" value={estimate.postcode} onChange={v => update('postcode', normaliseNzPostcode(v))} placeholder="1010" inputMode="numeric" maxLength={4} />
       </div>
 
       <EstimateNote>

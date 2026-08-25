@@ -55,8 +55,39 @@ export default function Step4System({
   const [designError, setDesignError]           = useState(null);
   const [roofRenderedPanels, setRoofRenderedPanels] = useState(null);
   const roofFitAppliedRef                        = useRef(false);
-  const [customBatteryKwh, setCustomBatteryKwh]  = useState(null);
-  const [customEvKmPerDay, setCustomEvKmPerDay]  = useState(null);
+  // PR-D-2 fix (2026-08-24): per-tier customisation state so sliding on
+  // one tier's card doesn't restack the OTHER tier (Bug 11). Shape:
+  //   { 2: { battery_kwh: X, ev_km_per_day: Y }, 3: { ... } }
+  // Only tiers 2 and 3 have battery/EV; tier 1 is solar-only. Any tier
+  // with no entry falls back to the engine-recommended defaults on that
+  // tier (recBat for t2, recBat + 2.76 for t3). Nulling a slider back
+  // to "recommended" is a Delete on the tier entry.
+  const [customByTier, setCustomByTier] = useState({});   // {}, {2:{}}, etc.
+  // Convenience getters/setters aligned with what QuoteStage +
+  // CustomiseSystemCard already expect. viewingTierIdx flows in from
+  // QuoteStage so the card reads/writes the currently-viewed tier.
+  const getCustomBatteryKwh = useCallback(
+    (tierIdx) => customByTier[tierIdx]?.battery_kwh ?? null,
+    [customByTier],
+  );
+  const getCustomEvKmPerDay = useCallback(
+    (tierIdx) => customByTier[tierIdx]?.ev_km_per_day ?? null,
+    [customByTier],
+  );
+  const setCustomBatteryKwhForTier = useCallback((tierIdx, value) => {
+    setCustomByTier(prev => ({ ...prev, [tierIdx]: { ...(prev[tierIdx] || {}), battery_kwh: value } }));
+  }, []);
+  const setCustomEvKmPerDayForTier = useCallback((tierIdx, value) => {
+    setCustomByTier(prev => ({ ...prev, [tierIdx]: { ...(prev[tierIdx] || {}), ev_km_per_day: value } }));
+  }, []);
+  // PR-E fix (2026-08-24): panel-count per-tier state (Bug 4).
+  const getCustomPanels = useCallback(
+    (tierIdx) => customByTier[tierIdx]?.panels_target ?? null,
+    [customByTier],
+  );
+  const setCustomPanelsForTier = useCallback((tierIdx, value) => {
+    setCustomByTier(prev => ({ ...prev, [tierIdx]: { ...(prev[tierIdx] || {}), panels_target: value } }));
+  }, []);
   const [excludedSegments, setExcludedSegments]  = useState(() => new Set());
   const toggleSegment = useCallback((idx) => {
     setExcludedSegments(prev => {
@@ -123,6 +154,22 @@ export default function Step4System({
         : (analysis?.roof?.system_yield?.source || null);
 
       const recommendedPanelWatts = designRef.current?.tiers?.[designRef.current?.recommended_index]?.panel?.watts || 595;
+      // PR-D-2 fix (2026-08-24): per-tier customisation. Send arrays of 3
+      // (tier 1, 2, 3) so the composer sees each tier's individual target
+      // instead of a single shared scalar. null slots keep engine defaults
+      // for that tier. Legacy scalar `battery_kwh`/`ev_km_per_day` kept
+      // (nulled here) purely so any stray consumer that reads them
+      // doesn't NPE — the composer prefers the array when present.
+      const t2Battery = getCustomBatteryKwh(2);
+      const t3Battery = getCustomBatteryKwh(3);
+      const t2Ev      = getCustomEvKmPerDay(2);
+      const t3Ev      = getCustomEvKmPerDay(3);
+      const t1Panels  = getCustomPanels(0);   // tier 1 (solar only)
+      const t2Panels  = getCustomPanels(1);
+      const t3Panels  = getCustomPanels(2);
+      const anyCustomBattery = t2Battery != null || t3Battery != null;
+      const anyCustomEv      = t2Ev != null || t3Ev != null;
+      const anyCustomPanels  = t1Panels != null || t2Panels != null || t3Panels != null;
       const { data } = await publicApi.post('/design/compose', {
         annual_kwh: annualKwh,
         postcode:   bill.service_postcode || null,
@@ -132,8 +179,14 @@ export default function Step4System({
         bill_context: billContext,
         roof_max_panels: Number.isFinite(roofRenderedPanels) && roofRenderedPanels > 0 ? roofRenderedPanels : null,
         panel_watts:     recommendedPanelWatts,
-        battery_kwh:     Number.isFinite(customBatteryKwh) ? customBatteryKwh : null,
-        ev_km_per_day:   Number.isFinite(customEvKmPerDay) ? customEvKmPerDay : null,
+        battery_kwh:     null,
+        ev_km_per_day:   null,
+        battery_kwh_by_tier:    anyCustomBattery ? [null, t2Battery, t3Battery] : null,
+        ev_km_per_day_by_tier:  anyCustomEv      ? [null, t2Ev,      t3Ev]      : null,
+        // PR-E fix (2026-08-24): per-tier panel-count override (Bug 4).
+        // Uses same idx convention as the other _by_tier arrays: [t1, t2, t3].
+        // null slots keep engine defaults for that tier.
+        panels_target_by_tier:  anyCustomPanels  ? [t1Panels, t2Panels, t3Panels] : null,
       });
       onDesignChange({ ...data, derived_annual_kwh: annualKwh });
     } catch (e) {
@@ -142,7 +195,7 @@ export default function Step4System({
       setDesigning(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bill, analysis, excludedSegments, customBatteryKwh, customEvKmPerDay, roofRenderedPanels, onDesignChange]);
+  }, [bill, analysis, excludedSegments, customByTier, roofRenderedPanels, onDesignChange, getCustomBatteryKwh, getCustomEvKmPerDay, getCustomPanels]);
 
   // ── Initial compose on mount (skipped if design already cached) ────────
   useEffect(() => {
@@ -170,7 +223,7 @@ export default function Step4System({
     const t = setTimeout(() => composeDesign(), 800);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customBatteryKwh, customEvKmPerDay]);
+  }, [customByTier]);
 
   // ── Fix C · one-shot roof-fit recompose ────────────────────────────────
   useEffect(() => {
@@ -260,10 +313,22 @@ export default function Step4System({
       onBack={onBack}
       onReset={() => { /* not applicable in wizard — back handles it */ }}
       onRoofPlacementChange={setRoofRenderedPanels}
-      customBatteryKwh={customBatteryKwh}
-      customEvKmPerDay={customEvKmPerDay}
-      setCustomBatteryKwh={setCustomBatteryKwh}
-      setCustomEvKmPerDay={setCustomEvKmPerDay}
+      /* PR-D-2 fix (2026-08-24): per-tier customisation state (Bug 11).
+         QuoteStage's CustomiseSystemCard operates on `viewingTierIdx`,
+         so we pass tier-aware getters + setters instead of two scalars.
+         All 4 props kept as-is to avoid a QuoteStage signature churn. */
+      customBatteryKwh={getCustomBatteryKwh(2)}         /* tier 2 slider default */
+      customEvKmPerDay={getCustomEvKmPerDay(2)}         /* tier 2 EV default */
+      customByTier={customByTier}                        /* full map for CustomiseSystemCard */
+      getCustomBatteryKwh={getCustomBatteryKwh}
+      getCustomEvKmPerDay={getCustomEvKmPerDay}
+      setCustomBatteryKwh={(v) => setCustomBatteryKwhForTier(2, v)}   /* legacy scalar setter → tier 2 */
+      setCustomEvKmPerDay={(v) => setCustomEvKmPerDayForTier(2, v)}   /* legacy scalar setter → tier 2 */
+      setCustomBatteryKwhForTier={setCustomBatteryKwhForTier}
+      setCustomEvKmPerDayForTier={setCustomEvKmPerDayForTier}
+      /* PR-E fix (2026-08-24): panel-count getters + setters (Bug 4). */
+      getCustomPanels={getCustomPanels}
+      setCustomPanelsForTier={setCustomPanelsForTier}
       onBookOverride={handleBookOverride}
       bookCtaLabel="Get this quote"
       stickyCommitBar

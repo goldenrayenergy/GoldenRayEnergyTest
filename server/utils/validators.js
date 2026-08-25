@@ -17,8 +17,9 @@ const EMAIL_REGEX = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 // Accepts: +64 21 839 356 · 021-839356 · 0800123456 · etc.
 const PHONE_REGEX = /^[0-9+\-\s\(\)]{7,20}$/;
 
-// NZ postcode — exactly 4 digits.
-const NZ_POSTCODE_REGEX = /^[0-9]{4}$/;
+// NZ postcode — delegated to the shared helper so client + server never
+// diverge. See server/utils/postcode.js for the range check (0110-9893).
+import { isValidNzPostcode } from './postcode.js';
 
 // ── Atomic validators ────────────────────────────────────────────────────
 
@@ -33,8 +34,8 @@ export function isPhone(v) {
 }
 
 export function isNZPostcode(v) {
-  if (v == null || v === '') return true;
-  return NZ_POSTCODE_REGEX.test(String(v).trim());
+  if (v == null || v === '') return true;   // empty is fine, .required catches it
+  return isValidNzPostcode(v);
 }
 
 export function isNonNeg(v) {

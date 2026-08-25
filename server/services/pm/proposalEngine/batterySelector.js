@@ -150,12 +150,35 @@ export function selectBattery({
     // the matrix (null), fall back to the BMS-rule-only choice (legacy — never
     // worse). This stops the composer proposing sub-minimum stacks like HVM 8.3
     // on a single-phase Primo (Fronius excludes it) — it sizes up to HVM 11.0.
-    const chosenCount = rule.valid_module_counts.find(c => {
+    let chosenCount = rule.valid_module_counts.find(c => {
       if (c < minModules) return false;
       const approved = matrixApproves(inverter, b.series, c * b.module_kwh);
       return approved === null ? true : approved;
     });
-    if (!chosenCount) continue;  // can't satisfy target within approved pairings
+    let snappedBelowTarget = false;
+
+    // Bug 6 fix (2026-08-24): if no valid count meets the target within the
+    // current inverter's matrix, don't hard-fail — fall back to the LARGEST
+    // valid+approved count BELOW the target. Better UX to under-shoot by
+    // ~2.76 kWh than to reject the customer with a scary error. Records
+    // `snapped_below_target` on the return shape so downstream can display
+    // "we set you to 16.56 kWh (your 19.32 target isn't compatible with
+    // your current inverter — pick a larger one to reach it)." Guarded on
+    // a minimum of 4 modules so we don't downgrade to an absurdly small
+    // stack that wouldn't function as a battery system.
+    if (!chosenCount) {
+      const validApproved = [...rule.valid_module_counts]
+        .filter(c => {
+          const approved = matrixApproves(inverter, b.series, c * b.module_kwh);
+          return approved === null ? true : approved;
+        })
+        .sort((a, b) => b - a);   // largest first
+      if (validApproved.length > 0 && validApproved[0] >= 4) {
+        chosenCount = validApproved[0];
+        snappedBelowTarget = true;
+      }
+    }
+    if (!chosenCount) continue;  // still nothing → skip this battery
 
     const totalNominalKwh = chosenCount * b.module_kwh;
     const totalUsableKwh  = totalNominalKwh * dod;
@@ -169,7 +192,12 @@ export function selectBattery({
     // §3.12 mixed-vendor penalty: small score deduction (rep still sees option)
     const mixedVendor = inverter.brand && b.brand && inverter.brand !== b.brand;
 
+    // Bug 6 fix: snap-below-target penalty. When we had to reduce capacity
+    // below what the customer asked for, prefer other batteries (if any)
+    // that DID meet the target. Only applies if this candidate snapped
+    // AND scored contains a non-snapped alternative.
     let score = -dollarsPerUsableKwh + headroom * 50 + (mixedVendor ? -10 : 0);
+    if (snappedBelowTarget) score -= 25;
 
     scored.push({
       ...b,
@@ -180,6 +208,7 @@ export function selectBattery({
       headroom,
       dod_factor: dod,
       mixed_vendor: mixedVendor,
+      snapped_below_target: snappedBelowTarget,
       score,
     });
   }
@@ -210,6 +239,16 @@ export function selectBattery({
   if (best.mixed_vendor) {
     reasonParts.push(`— mixed-vendor (§3.12 disclosure required)`);
   }
+  // Bug 6 fix (2026-08-24): loud reason string when we snapped below the
+  // customer's requested target. Downstream reasons.battery gets echoed
+  // into tier warnings so the client can surface the gap in a friendly
+  // callout.
+  if (best.snapped_below_target) {
+    reasonParts.push(
+      `— snapped down from ${r2(targetUsableKwh)} kWh target ` +
+      `(no larger battery pack is matrix-approved for the current inverter)`
+    );
+  }
 
   return {
     sku: best.sku,
@@ -219,6 +258,9 @@ export function selectBattery({
     total_nominal_kwh: r2(best.total_nominal_kwh),
     dod_factor: best.dod_factor,
     dollars_per_usable_kwh: r0(best.dollars_per_usable_kwh),
+    // Bug 6 fix: caller uses this to decide whether to fire the
+    // "inverter step-up" repair in threeTierComposer.repairTier.
+    snapped_below_target: !!best.snapped_below_target,
     reason_code: 'selected',
     reason: reasonParts.join(' '),
     target_usable_kwh: r2(targetUsableKwh),
