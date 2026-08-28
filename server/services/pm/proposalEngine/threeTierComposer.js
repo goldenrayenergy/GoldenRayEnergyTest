@@ -341,6 +341,16 @@ export function composeThreeTiers({
     ? perTierBattOverride[2]
     : recBat + 2.76;
 
+  // Bug 2 fix (2026-08-26): per-tier EXACT panel-count override. When the
+  // customer used the panels slider, the request carried an exact integer
+  // count per tier. We honour it via composeSystem's `panelsExact` param
+  // so selectPanel skips the kWp round-trip. Null slots keep the
+  // recommendation path (kwp-driven ceil) for that tier.
+  const perTierPanelsExact = Array.isArray(billAnalysis?.tier_panels_exact_override)
+    && billAnalysis.tier_panels_exact_override.length === 3
+      ? billAnalysis.tier_panels_exact_override.map(v => Number.isFinite(v) && v >= 1 ? Math.floor(v) : null)
+      : null;
+
   const tierInputs = [
     { kwp: tierKwp.t1, batt: null,      hasEv: false,
       label: labels.tier_1 || (sizeMode === 'tiered_sizes' ? `Starter ${tierKwp.t1} kW` : 'Solar only'),
@@ -355,11 +365,13 @@ export function composeThreeTiers({
 
   const warnings = [];
   let anyFallback = false;
-  const tiers = tierInputs.map(t => {
+  const tiers = tierInputs.map((t, tierIdx) => {
+    const panelsExactForTier = perTierPanelsExact ? perTierPanelsExact[tierIdx] : null;
     const composed = composeSystem({
       targetDcKwp: t.kwp, phase,
       targetBatteryUsableKwh: t.batt, hasEv: t.hasEv,
       region, catalogue, COMPATIBILITY, BMS_RULES,
+      panelsExact: panelsExactForTier,
     });
 
     // If panel + inverter both resolved, accept the result (even with warnings).

@@ -21,6 +21,11 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { AlertTriangle, ChevronLeft } from 'lucide-react';
 import { publicApi } from '../../services/api';
 import { QuoteStage } from '../poc/QuotePage.jsx';
+import {
+  TIER_SOLAR_ONLY,
+  TIER_SOLAR_BATTERY,
+  TIER_SOLAR_BATTERY_EV,
+} from '../../lib/tierIndex';
 
 /**
  * @param {object}   props
@@ -56,13 +61,17 @@ export default function Step4System({
   const [roofRenderedPanels, setRoofRenderedPanels] = useState(null);
   const roofFitAppliedRef                        = useRef(false);
   // PR-D-2 fix (2026-08-24): per-tier customisation state so sliding on
-  // one tier's card doesn't restack the OTHER tier (Bug 11). Shape:
-  //   { 2: { battery_kwh: X, ev_km_per_day: Y }, 3: { ... } }
-  // Only tiers 2 and 3 have battery/EV; tier 1 is solar-only. Any tier
-  // with no entry falls back to the engine-recommended defaults on that
-  // tier (recBat for t2, recBat + 2.76 for t3). Nulling a slider back
-  // to "recommended" is a Delete on the tier entry.
-  const [customByTier, setCustomByTier] = useState({});   // {}, {2:{}}, etc.
+  // one tier's card doesn't restack the OTHER tier (Bug 11). Bug 1 fix
+  // (2026-08-26): canonicalised on 0-indexed tier keys via TIER_INDEX
+  // constants — previously reads mixed 0-indexed writes with human-numbered
+  // (2/3) reads and dropped every tier-3 customisation into tier-2's slot.
+  // Shape:
+  //   { [TIER_SOLAR_BATTERY]: { battery_kwh: X, ev_km_per_day: Y, panels_target: N },
+  //     [TIER_SOLAR_BATTERY_EV]: { ... } }
+  // Only tiers with battery/EV render those sliders; the panels slider is
+  // available for every tier. Any tier with no entry falls back to the
+  // engine-recommended defaults on that tier.
+  const [customByTier, setCustomByTier] = useState({});
   // Convenience getters/setters aligned with what QuoteStage +
   // CustomiseSystemCard already expect. viewingTierIdx flows in from
   // QuoteStage so the card reads/writes the currently-viewed tier.
@@ -154,19 +163,17 @@ export default function Step4System({
         : (analysis?.roof?.system_yield?.source || null);
 
       const recommendedPanelWatts = designRef.current?.tiers?.[designRef.current?.recommended_index]?.panel?.watts || 595;
-      // PR-D-2 fix (2026-08-24): per-tier customisation. Send arrays of 3
-      // (tier 1, 2, 3) so the composer sees each tier's individual target
-      // instead of a single shared scalar. null slots keep engine defaults
-      // for that tier. Legacy scalar `battery_kwh`/`ev_km_per_day` kept
-      // (nulled here) purely so any stray consumer that reads them
-      // doesn't NPE — the composer prefers the array when present.
-      const t2Battery = getCustomBatteryKwh(2);
-      const t3Battery = getCustomBatteryKwh(3);
-      const t2Ev      = getCustomEvKmPerDay(2);
-      const t3Ev      = getCustomEvKmPerDay(3);
-      const t1Panels  = getCustomPanels(0);   // tier 1 (solar only)
-      const t2Panels  = getCustomPanels(1);
-      const t3Panels  = getCustomPanels(2);
+      // Bug 1 fix (2026-08-26): reads canonicalised on 0-indexed TIER_*
+      // constants, matching the 0-indexed viewingTierIdx used by the
+      // Customise-card writes. Payload arrays are indexed [tier0, tier1,
+      // tier2] with null slots meaning "engine default for that tier."
+      const t2Battery = getCustomBatteryKwh(TIER_SOLAR_BATTERY);
+      const t3Battery = getCustomBatteryKwh(TIER_SOLAR_BATTERY_EV);
+      const t2Ev      = getCustomEvKmPerDay(TIER_SOLAR_BATTERY);
+      const t3Ev      = getCustomEvKmPerDay(TIER_SOLAR_BATTERY_EV);
+      const t1Panels  = getCustomPanels(TIER_SOLAR_ONLY);
+      const t2Panels  = getCustomPanels(TIER_SOLAR_BATTERY);
+      const t3Panels  = getCustomPanels(TIER_SOLAR_BATTERY_EV);
       const anyCustomBattery = t2Battery != null || t3Battery != null;
       const anyCustomEv      = t2Ev != null || t3Ev != null;
       const anyCustomPanels  = t1Panels != null || t2Panels != null || t3Panels != null;
@@ -316,14 +323,17 @@ export default function Step4System({
       /* PR-D-2 fix (2026-08-24): per-tier customisation state (Bug 11).
          QuoteStage's CustomiseSystemCard operates on `viewingTierIdx`,
          so we pass tier-aware getters + setters instead of two scalars.
-         All 4 props kept as-is to avoid a QuoteStage signature churn. */
-      customBatteryKwh={getCustomBatteryKwh(2)}         /* tier 2 slider default */
-      customEvKmPerDay={getCustomEvKmPerDay(2)}         /* tier 2 EV default */
-      customByTier={customByTier}                        /* full map for CustomiseSystemCard */
+         Bug 1 fix (2026-08-26): legacy scalar props canonicalised on
+         TIER_SOLAR_BATTERY (0-indexed) so a stray consumer that still
+         reads them gets tier-2's value (the previous default), not an
+         orphan customByTier[2] read that was landing in tier-3's slot. */
+      customBatteryKwh={getCustomBatteryKwh(TIER_SOLAR_BATTERY)}
+      customEvKmPerDay={getCustomEvKmPerDay(TIER_SOLAR_BATTERY)}
+      customByTier={customByTier}
       getCustomBatteryKwh={getCustomBatteryKwh}
       getCustomEvKmPerDay={getCustomEvKmPerDay}
-      setCustomBatteryKwh={(v) => setCustomBatteryKwhForTier(2, v)}   /* legacy scalar setter → tier 2 */
-      setCustomEvKmPerDay={(v) => setCustomEvKmPerDayForTier(2, v)}   /* legacy scalar setter → tier 2 */
+      setCustomBatteryKwh={(v) => setCustomBatteryKwhForTier(TIER_SOLAR_BATTERY, v)}
+      setCustomEvKmPerDay={(v) => setCustomEvKmPerDayForTier(TIER_SOLAR_BATTERY, v)}
       setCustomBatteryKwhForTier={setCustomBatteryKwhForTier}
       setCustomEvKmPerDayForTier={setCustomEvKmPerDayForTier}
       /* PR-E fix (2026-08-24): panel-count getters + setters (Bug 4). */

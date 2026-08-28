@@ -6,6 +6,10 @@ import dotenv from 'dotenv';
 import {
   otpLimiter, loginLimiter, submitLimiter, interactiveLimiter, defaultLimiter,
 } from './middleware/rateLimiters.js';
+// Path B follow-up (2026-08-27) — daily quote limit (3 unique addresses
+// per IP per NZ calendar day) applied to /api/roof/analyse. See
+// middleware/quoteRateLimit.js for policy details + admin bypass.
+import { quoteRateLimit, setAdminBypassCookie } from './middleware/quoteRateLimit.js';
 
 import authRoutes from './routes/auth.js';
 import leadRoutes from './routes/leads.js';
@@ -178,7 +182,17 @@ app.use('/api/bill-analysis', billAnalysisRoutes);
 // experimental spike. They now power the production /get-quote flow, so the
 // gate is gone and they always mount at their natural URLs.
 app.use('/api/bills',                billsRoutes);       // POST /extract (bill parse)
-app.use('/api/places',               placesRoutes);      // GET /autocomplete, /details
+app.use('/api/places',               placesRoutes);      // GET /autocomplete, /details, /reverse-geocode
+// Owner-only route to set the admin-bypass cookie. Bookmark
+//   /api/admin/enable-unlimited?token=<ADMIN_BYPASS_TOKEN>
+// in your browser, visit once, done — this browser gets unlimited quotes.
+app.get('/api/admin/enable-unlimited', setAdminBypassCookie);
+// Path B (2026-08-27) — daily quote rate limit applied to the analyse
+// endpoint ONLY. Sits BEFORE the route so it can reject before we hit
+// Google Solar / LiDAR (which are cost-bearing). Compose (/design)
+// and PVGIS-only calls stay unlimited — customer refining their own
+// quote is free.
+app.use('/api/roof/analyse',         quoteRateLimit);
 app.use('/api/roof',                 roofRoutes);        // POST /analyse; GET /linz-buildings, /osm-buildings
 app.use('/api/aerial',               aerialRouter);      // GET /google, /streetview, /tile
 app.use('/api/design',               designRoutes);      // POST /compose

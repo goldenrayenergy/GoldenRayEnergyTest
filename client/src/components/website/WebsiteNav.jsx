@@ -101,9 +101,15 @@ export default function WebsiteNav({ extras }) {
             <span>Browse solar systems</span>
           </Link>
 
-          {/* Buyer path — primary CTA (always visible) */}
+          {/* Buyer path — primary CTA (always visible).
+              Fix (2026-08-27): navigate with ?fresh=1 so a customer
+              clicking Get a Quote from anywhere on the site starts a
+              CLEAN wizard, not resuming yesterday's stale draft. Prior
+              behaviour restored the sessionStorage draft up to 24h old,
+              leading to "why am I on someone else's Step 4" reports.
+              (The TTL is also now 1h — see ResidentialWizard DRAFT_TTL_MS.) */}
           <Link
-            to="/get-quote"
+            to="/get-quote?fresh=1"
             className="hidden sm:inline-flex items-center gap-1.5 px-3 md:px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white text-xs md:text-sm font-bold transition shadow-md shadow-amber-500/30">
             <MessageSquare size={14} />
             <span>Get a quote</span>
@@ -175,7 +181,7 @@ export default function WebsiteNav({ extras }) {
               {/* Primary actions — Option 6: two clear paths first, everything else below */}
               <div className="p-5 space-y-2 bg-gradient-to-b from-amber-50 to-white dark:from-amber-500/10 dark:to-brand-dark">
                 <DrawerCTA to="/" icon={Home} label="Home" sub="Back to the main page" onClick={close} />
-                <DrawerCTA to="/get-quote" icon={MessageSquare} label="Get a quote" sub="4-step wizard · proposal in 24 hours" onClick={close} primary />
+                <DrawerCTA to="/get-quote?fresh=1" icon={MessageSquare} label="Get a quote" sub="4-step wizard · proposal in 24 hours" onClick={close} primary />
                 <DrawerCTA to="/solar-packages" icon={Search} label="Browse solar systems" sub="Compare 6 packages · learn how pricing works" onClick={close} />
                 <DrawerCTA to="/shop" icon={ShoppingBag} label="Trade Shop" sub="For NZ electricians — wholesale + delivery" onClick={close} />
                 <DrawerCTA onClickButton={() => { setFinanceOpen(true); close(); }} icon={DollarSign} label="Finance Options" sub="$0 upfront · Q Card · green loans" />

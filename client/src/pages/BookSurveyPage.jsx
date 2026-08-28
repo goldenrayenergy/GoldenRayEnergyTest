@@ -16,7 +16,7 @@
 // fails to load (network issue / adblocker).
 
 import { useEffect, useRef, useState } from 'react';
-import { Calendar, ExternalLink, CheckCircle2, Clock, MapPin } from 'lucide-react';
+import { Calendar, ExternalLink, CheckCircle2, Clock, MapPin, ChevronLeft } from 'lucide-react';
 import WebsiteNav from '../components/website/WebsiteNav';
 import WebsiteFooter from '../components/website/WebsiteFooter';
 
@@ -31,6 +31,13 @@ export default function BookSurveyPage() {
   // never resolves (adblocker, offline). Cal.com's own script sets
   // window.Cal — we listen for that as a heartbeat.
   const [scriptFailed, setScriptFailed] = useState(false);
+  // Round 4-rework followup (2026-08-26). Post-booking success state.
+  // Cal.com fires `bookingSuccessful` via its embed messaging API when
+  // the customer completes a booking — we listen and swap the widget
+  // for a clean "You're all booked" card with clear navigation options.
+  // Without this the customer was stranded on the Cal.com iframe with
+  // no visible way back into the Golden Ray site.
+  const [bookedInfo, setBookedInfo] = useState(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -63,10 +70,28 @@ export default function BookSurveyPage() {
     })(window, 'https://app.cal.com/embed/embed.js', 'init');
 
     window.Cal('init', CAL_NS, { origin: CAL_ORIGIN });
+    // Fix (2026-08-27) — pull notes/name/email from our own URL params
+    // and prefill them into Cal.com's booking form. Enables:
+    //   /book-survey?notes=Roof analysis failed for: 7 Kent Street
+    // to auto-populate the "Additional notes" field so the surveyor
+    // sees the address the customer was quoting for when they bailed
+    // to the survey path. Without this the surveyor gets a bare booking
+    // with just name + email and no context about which property.
+    const urlParams = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search)
+      : new URLSearchParams();
+    const prefill = {};
+    const notes = urlParams.get('notes');
+    const name  = urlParams.get('name');
+    const email = urlParams.get('email');
+    if (notes) prefill.notes = notes;
+    if (name)  prefill.name  = name;
+    if (email) prefill.email = email;
     window.Cal.ns[CAL_NS]('inline', {
       elementOrSelector: containerRef.current,
       calLink: CAL_LINK,
       layout: 'month_view',
+      config: Object.keys(prefill).length ? prefill : undefined,
     });
     window.Cal.ns[CAL_NS]('ui', {
       cssVarsPerTheme: {
@@ -82,6 +107,28 @@ export default function BookSurveyPage() {
       // mostly think in 12h; owner can switch to 24 if that changes.
       timeFormat: 12,
     });
+
+    // Round 4-rework followup: hook Cal.com's `bookingSuccessful` event.
+    // Fires when the customer completes the booking flow — we swap the
+    // widget for a native Golden Ray success card so the customer
+    // isn't stranded inside the Cal.com iframe.
+    try {
+      window.Cal.ns[CAL_NS]('on', {
+        action: 'bookingSuccessful',
+        callback: (e) => {
+          const detail = e?.detail?.data || {};
+          setBookedInfo({
+            startTime: detail?.booking?.startTime || null,
+            attendeeEmail: detail?.booking?.attendees?.[0]?.email || null,
+          });
+        },
+      });
+    } catch (err) {
+      // Non-fatal — if Cal.com's on() API isn't available, the customer
+      // still gets a confirmation email from Cal.com itself. They just
+      // won't see our native success card.
+      console.warn('[BookSurveyPage] failed to bind Cal.com bookingSuccessful event:', err?.message || err);
+    }
 
     // 8s failsafe — if the Cal.com iframe hasn't rendered into our
     // container by then, assume the embed script was blocked (adblocker
@@ -103,8 +150,23 @@ export default function BookSurveyPage() {
           request. Shows what happens after they pick a slot. */}
       <section className="pt-24 md:pt-28 pb-8 md:pb-12 px-4 md:px-16 bg-gradient-to-br from-amber-50 via-white to-orange-50 dark:from-amber-950/30 dark:via-brand-dark dark:to-orange-950/30">
         <div className="max-w-4xl mx-auto">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-100 dark:bg-orange-900/40 text-orange-800 dark:text-orange-300 text-xs font-bold uppercase tracking-widest mb-4">
-            <Calendar className="w-3.5 h-3.5" /> Book a site survey
+          {/* Fix (2026-08-27) — Back-to-Home now a proper pill button
+              with brand colours, not the previous tiny text link. Sits
+              above the "Book a site survey" chip so it's the first
+              interactive element the customer sees. A second copy
+              renders BELOW the Cal.com widget too (see bottom of this
+              file) so customers who scrolled deep to book have an
+              obvious exit after they're done. */}
+          <div className="flex flex-wrap items-center gap-3 mb-4">
+            <a
+              href="/"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border-2 border-[#D9531E] text-[#D9531E] hover:bg-[#D9531E] hover:text-white text-sm font-semibold transition"
+            >
+              <ChevronLeft className="w-4 h-4" /> Back to Golden Ray home
+            </a>
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-100 dark:bg-orange-900/40 text-orange-800 dark:text-orange-300 text-xs font-bold uppercase tracking-widest">
+              <Calendar className="w-3.5 h-3.5" /> Book a site survey
+            </div>
           </div>
           <h1 className="font-serif text-3xl md:text-5xl font-bold text-[#1A1614] dark:text-white tracking-tight">
             Pick a time that works for you.
@@ -123,38 +185,110 @@ export default function BookSurveyPage() {
         </div>
       </section>
 
-      {/* Cal.com embed. Container ref is what Cal.com's inline embed mounts
+      {/* Cal.com embed OR the post-booking success card (Round 4-rework
+          followup). Container ref is what Cal.com's inline embed mounts
           into. Height auto-adjusts as the widget navigates between month
           view / time picker / form. min-height prevents layout jitter. */}
       <section className="px-4 md:px-16 pb-16">
         <div className="max-w-5xl mx-auto">
-          {scriptFailed && (
-            <div className="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 dark:bg-amber-900/20 p-4 text-sm text-amber-900 dark:text-amber-200 flex items-start gap-3">
-              <div className="flex-1">
-                <div className="font-bold">Booking widget couldn't load.</div>
-                <div className="mt-0.5">
-                  Looks like an ad-blocker or network filter is stopping it.
-                  You can open the booking page directly instead:
+          {bookedInfo ? (
+            <BookingSuccessCard bookedInfo={bookedInfo} />
+          ) : (
+            <>
+              {scriptFailed && (
+                <div className="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 dark:bg-amber-900/20 p-4 text-sm text-amber-900 dark:text-amber-200 flex items-start gap-3">
+                  <div className="flex-1">
+                    <div className="font-bold">Booking widget couldn't load.</div>
+                    <div className="mt-0.5">
+                      Looks like an ad-blocker or network filter is stopping it.
+                      You can open the booking page directly instead:
+                    </div>
+                    <a
+                      href={CAL_FULL_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#D9531E] text-white text-sm font-semibold hover:bg-[#B84418] transition"
+                    >
+                      <ExternalLink className="w-4 h-4" /> Open booking page
+                    </a>
+                  </div>
                 </div>
+              )}
+              <div
+                ref={containerRef}
+                className="min-h-[600px] rounded-2xl border border-[#E3D9C4] dark:border-gray-800 bg-white dark:bg-brand-dark/50 overflow-hidden"
+              />
+              {/* Fix (2026-08-27) — Second "Back to home" affordance
+                  below the widget. Customer who scrolled deep into the
+                  calendar to pick a slot but changed their mind (or
+                  finished booking and Cal.com's own success view
+                  doesn't offer navigation) has an obvious exit. */}
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
                 <a
-                  href={CAL_FULL_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#D9531E] text-white text-sm font-semibold hover:bg-[#B84418] transition"
+                  href="/"
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-full border-2 border-[#D9531E] text-[#D9531E] hover:bg-[#D9531E] hover:text-white text-sm font-semibold transition"
                 >
-                  <ExternalLink className="w-4 h-4" /> Open booking page
+                  <ChevronLeft className="w-4 h-4" /> Back to Golden Ray home
+                </a>
+                <a
+                  href="/get-quote?fresh=1"
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-[#F4EEE1] hover:bg-[#EBE2CE] text-[#55504A] text-sm font-semibold transition"
+                >
+                  Start a fresh quote
                 </a>
               </div>
-            </div>
+            </>
           )}
-          <div
-            ref={containerRef}
-            className="min-h-[600px] rounded-2xl border border-[#E3D9C4] dark:border-gray-800 bg-white dark:bg-brand-dark/50 overflow-hidden"
-          />
         </div>
       </section>
 
       <WebsiteFooter />
+    </div>
+  );
+}
+
+// Post-booking success card — replaces the Cal.com widget once the
+// customer completes their booking. Gives them explicit next steps
+// (confirmation email is on the way from Cal.com; here are the paths
+// back into the Golden Ray site).
+function BookingSuccessCard({ bookedInfo }) {
+  const startDateStr = bookedInfo?.startTime
+    ? new Date(bookedInfo.startTime).toLocaleString('en-NZ', {
+        weekday: 'long', day: 'numeric', month: 'long',
+        hour: 'numeric', minute: '2-digit', hour12: true,
+      })
+    : null;
+  return (
+    <div className="rounded-2xl border-2 border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20 p-8 md:p-10 text-center">
+      <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-emerald-500 grid place-items-center">
+        <CheckCircle2 className="w-8 h-8 text-white" />
+      </div>
+      <h2 className="font-serif text-2xl md:text-3xl font-bold text-[#1A1614] dark:text-white">
+        You're all booked.
+      </h2>
+      {startDateStr && (
+        <p className="mt-2 text-lg text-emerald-900 dark:text-emerald-200 font-semibold">
+          {startDateStr}
+        </p>
+      )}
+      <p className="mt-3 text-sm text-[#55504A] dark:text-gray-300 max-w-md mx-auto">
+        A confirmation is on its way to your inbox — including a Google
+        Calendar invite and rescheduling link. See you soon.
+      </p>
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+        <a
+          href="/"
+          className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-[#D9531E] text-white text-sm font-semibold hover:bg-[#B84418] transition"
+        >
+          Back to Golden Ray home
+        </a>
+        <a
+          href="/get-quote?fresh=1"
+          className="inline-flex items-center gap-2 px-5 py-3 rounded-full border border-[#D9531E] text-[#D9531E] text-sm font-semibold hover:bg-orange-50 dark:hover:bg-orange-900/20 transition"
+        >
+          Start a fresh quote
+        </a>
+      </div>
     </div>
   );
 }

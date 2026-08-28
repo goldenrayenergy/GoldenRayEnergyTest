@@ -53,13 +53,21 @@ export function composeSystem({
   catalogue,
   COMPATIBILITY,
   BMS_RULES,
+  // Bug 2 fix (2026-08-26): when the customer picked an EXACT panel
+  // count via the Customise-card slider, pass it here so selectPanel
+  // uses it verbatim (no lossy panels→kWp→panels round-trip). When
+  // null, selectPanel falls back to the recommendation path driven by
+  // targetDcKwp. Composer still uses actualDcKwp downstream for
+  // inverter DC/AC math — that stays consistent because selectPanel
+  // now reports effective_target_kwp derived from the exact count.
+  panelsExact = null,
 }) {
   const warnings = [];
   const reasons  = {};
   const hasBattery = targetBatteryUsableKwh != null && targetBatteryUsableKwh > 0;
 
   // 1. Panel — highest-watt with full specs
-  const panelResult = selectPanel({ catalogue, targetKwp: targetDcKwp });
+  const panelResult = selectPanel({ catalogue, targetKwp: targetDcKwp, panelsExact });
   reasons.panel = panelResult.reason;
   if (panelResult.reason_code !== 'selected') {
     warnings.push({ code: 'panel_' + panelResult.reason_code, message: panelResult.reason });

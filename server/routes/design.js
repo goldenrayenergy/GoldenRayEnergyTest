@@ -470,20 +470,35 @@ router.post('/compose', async (req, res) => {
     // kwp using the client's `panel_watts` value + hard-cap at
     // roof_max_panels so a manipulated client can't overshoot the roof.
     // Overrides the engine's recommendation for that tier's kwp.
+    //
+    // Bug 2 fix (2026-08-26): we now also send the roof-capped INTEGER
+    // count per tier as `tier_panels_exact_override` so the composer can
+    // skip the panels→kWp→panels round-trip inside selectPanel (which
+    // silently over-panelled by 1 due to float compounding). tier_kwp_override
+    // stays populated for inverter DC/AC sizing math — it's the exact same
+    // kWp that panelsExact implies, so both stay in lockstep.
     const perTierPanels = Array.isArray(panels_target_by_tier) && panels_target_by_tier.length === 3
       ? panels_target_by_tier : null;
     const panelWattsForSizing = Number.isFinite(panel_watts) && panel_watts > 0 ? Number(panel_watts) : 595;
     const roofMaxCap = Number.isFinite(roof_max_panels) && roof_max_panels > 0 ? Number(roof_max_panels) : null;
-    function panelsToKwp(rawCount, fallbackKwp) {
-      if (rawCount == null) return fallbackKwp;
+    function cappedPanelCount(rawCount) {
+      if (rawCount == null) return null;
       const n = Number(rawCount);
-      if (!Number.isFinite(n) || n < 1) return fallbackKwp;
+      if (!Number.isFinite(n) || n < 1) return null;
       const capped = roofMaxCap != null ? Math.min(n, roofMaxCap) : n;
+      return Math.floor(capped);
+    }
+    function panelsToKwp(rawCount, fallbackKwp) {
+      const capped = cappedPanelCount(rawCount);
+      if (capped == null) return fallbackKwp;
       return +(capped * panelWattsForSizing / 1000).toFixed(3);
     }
     const tier1KwpOverride = perTierPanels ? panelsToKwp(perTierPanels[0], tier1Sizing.recommendedKw) : tier1Sizing.recommendedKw;
     const tier2KwpOverride = perTierPanels ? panelsToKwp(perTierPanels[1], tier2Sizing.recommendedKw) : tier2Sizing.recommendedKw;
     const tier3KwpOverride = perTierPanels ? panelsToKwp(perTierPanels[2], tier3Sizing.recommendedKw) : tier3Sizing.recommendedKw;
+    const tierPanelsExactOverride = perTierPanels
+      ? [cappedPanelCount(perTierPanels[0]), cappedPanelCount(perTierPanels[1]), cappedPanelCount(perTierPanels[2])]
+      : null;
 
     const anyCapExceeded  = tier1Sizing.wasCapExceeded || tier2Sizing.wasCapExceeded || tier3Sizing.wasCapExceeded;
     const anyRoofCapped   = tier1Sizing.wasRoofCapped  || tier2Sizing.wasRoofCapped  || tier3Sizing.wasRoofCapped;
@@ -499,6 +514,12 @@ router.post('/compose', async (req, res) => {
       // PR-E fix (2026-08-24): includes customer's panel-count override
       // (Bug 4) when provided — otherwise engine's recommendation.
       tier_kwp_override:       [tier1KwpOverride, tier2KwpOverride, tier3KwpOverride],
+      // Bug 2 fix (2026-08-26): exact roof-capped panel counts per tier
+      // when the customer used the panels slider. Composer forwards
+      // these to selectPanel via `panelsExact` so the count is used
+      // verbatim (no lossy panels→kWp→panels round-trip). Null slots
+      // keep the kwp-driven recommendation path for that tier.
+      tier_panels_exact_override: tierPanelsExactOverride,
       // PR-D-2 fix (2026-08-24): per-tier battery kWh target so the
       // composer sizes each tier's pack independently (Bug 11).
       // Composer reads this when present; falls back to `recBat` +

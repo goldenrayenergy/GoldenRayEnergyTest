@@ -155,14 +155,14 @@ export default function WebsitePage() {
             From single-family homes to large commercial sites, <span className="font-semibold text-orange-600 dark:text-orange-400">GoldenRay Energy NZ</span> designs, installs, and supports solar systems built around your usage — with transparent pricing and detailed proposals.
           </p>
           <div className="flex gap-2 md:gap-3 flex-wrap">
-            <Link to="/get-quote"><Button size="lg" icon={Zap}>Get Free Quote</Button></Link>
+            <Link to="/get-quote?fresh=1"><Button size="lg" icon={Zap}>Get Free Quote</Button></Link>
             <Button onClick={() => setFinanceModalOpen(true)} variant="success" size="lg" icon={DollarSign}>$0 Upfront Finance</Button>
             <a href="tel:+6421839356"><Button variant="dark" size="lg" icon={Phone}>+64 21 839 356</Button></a>
           </div>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-3 max-w-md">
             Two ways to engage:{' '}
             <a href="#path-selector" className="text-amber-600 hover:underline font-semibold">browse our packages</a> at your own pace, or{' '}
-            <Link to="/get-quote" className="text-amber-600 hover:underline font-semibold">walk through our 4-step quote wizard</Link>.
+            <Link to="/get-quote?fresh=1" className="text-amber-600 hover:underline font-semibold">walk through our 4-step quote wizard</Link>.
           </p>
           <div className="grid grid-cols-2 md:flex md:gap-12 gap-4 mt-10 md:mt-12">
             {[
@@ -218,7 +218,7 @@ export default function WebsitePage() {
 
             {/* Buyer path */}
             <Link
-              to="/get-quote"
+              to="/get-quote?fresh=1"
               className="group bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-500/10 dark:to-orange-500/10 rounded-3xl border-2 border-amber-300 dark:border-amber-400/50 hover:border-amber-500 hover:shadow-2xl hover:shadow-amber-200/40 transition p-6 md:p-7 flex flex-col">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-2xl mb-3">💬</div>
               <div className="text-[10px] font-extrabold tracking-widest text-amber-700 dark:text-amber-300 mb-2">I'M READY FOR A QUOTE</div>
@@ -339,7 +339,7 @@ export default function WebsitePage() {
           ))}
         </div>
         <div className="text-center mt-12">
-          <Link to="/get-quote"><Button size="lg" icon={TrendingUp}>Get a tailored quote</Button></Link>
+          <Link to="/get-quote?fresh=1"><Button size="lg" icon={TrendingUp}>Get a tailored quote</Button></Link>
         </div>
       </section>
 
@@ -354,7 +354,7 @@ export default function WebsitePage() {
           <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xl mx-auto mb-6">
             Pick whether you have bills handy, just want an estimate, or prefer a phone call — our 4-step wizard adapts to you, and a sales rep follows up within 24 hours.
           </p>
-          <Link to="/get-quote" className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-extrabold text-sm hover:opacity-90 transition shadow-md shadow-amber-500/30">
+          <Link to="/get-quote?fresh=1" className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-extrabold text-sm hover:opacity-90 transition shadow-md shadow-amber-500/30">
             Start my quote <ArrowRight size={14} />
           </Link>
           <p className="text-[11px] text-gray-400 mt-3">
