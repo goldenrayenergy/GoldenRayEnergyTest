@@ -28,6 +28,18 @@ import {
 // only loads on this route, not the whole /poc namespace.
 const Cesium3DView = lazy(() => import('./3d/Cesium3DView'));
 
+// Path B (2026-08-26) — 2D satellite fallback for addresses where
+// Cesium Photorealistic 3D Tiles are patchy (regional/hillside/rural).
+// QuoteStage switches to this when analysis returns render_mode='2d'.
+// Not lazy (it's tiny — no Cesium, just SVG + <img>).
+import { Aerial2DPanelView } from './2d/Aerial2DPanelView';
+
+// Fix (2026-08-27) — customer-facing address formatter that keeps
+// street + suburb + city (drops postcode + country). Replaces the
+// prior naive `.split(',')[0]` which left customers looking at a
+// heading like "Designed for 7 Kent Street." — ambiguous across cities.
+import { formatAddressForDisplay } from '../../lib/formatAddress';
+
 // Shared with the sidebar Solar Quality Score card — same colour ramp so
 // the "your roof rating" bar visually matches wherever we render it.
 import { gradientCssStops } from './3d/panelColorScale';
@@ -1334,6 +1346,33 @@ export function PreviewStage({ place, analysing, analysisError, pendingAnalysis,
   const [pin, setPin] = useState({ lat: initLat, lng: initLng });
   const dragged = pin.lat !== initLat || pin.lng !== initLng;
 
+  // Fix (2026-08-27) — pin-drag reverse-geocode. When the customer
+  // drops the pin, look up what address sits at the new position and
+  // warn if it differs from the originally-typed address. Catches the
+  // "accidentally moved to a neighbour's house" case that would
+  // otherwise silently quote for the wrong property.
+  const [reverseAddress, setReverseAddress] = useState(null);   // {formattedAddress, place_id, distanceM} | null
+  const [reverseLoading, setReverseLoading] = useState(false);
+  const reverseAbortRef = useRef(null);
+
+  // Layer 1 (2026-08-27) — parcel-check pin-drag gating.
+  // Fetches LINZ Parcels for the current pin position, so we know
+  // (a) whether the pin sits inside a legal property boundary, and
+  // (b) how far it is from that parcel's centroid. When confidence is
+  // 'low' (pin outside any parcel, or > 15m from parcel centroid) we
+  // block "Confirm this is my house" until the customer drags closer,
+  // OR they explicitly override with a secondary button. Prevents the
+  // 31A Hillview-type bug where Google Places geocodes the address
+  // 17m away from the actual house → Google Solar identifies wrong
+  // building → panels render on neighbour's roof.
+  const [parcelCheck, setParcelCheck] = useState(null);   // {offset_m, confidence, contains_query, parcel} | null
+  const [parcelChecking, setParcelChecking] = useState(false);
+  const [forcePinOverride, setForcePinOverride] = useState(false);
+  const parcelAbortRef = useRef(null);
+  // Small helper used in the confirm-button label — keeps the amber
+  // "Analyse pin at {addr}" label from wrapping to two lines.
+  const truncate = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + '…' : (s || ''));
+
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -1378,6 +1417,9 @@ export function PreviewStage({ place, analysing, analysisError, pendingAnalysis,
       marker.setLatLng(e.latlng);
       setPin({ lat: e.latlng.lat, lng: e.latlng.lng });
     });
+    // Reverse-geocode is wired via the useEffect on `pin` below (not
+    // here) so it debounces + cancels stale fetches correctly across
+    // both dragend and click sources.
 
     mapRef.current = map;
     markerRef.current = marker;
@@ -1396,7 +1438,84 @@ export function PreviewStage({ place, analysing, analysisError, pendingAnalysis,
       mapRef.current.setView([initLat, initLng], mapRef.current.getZoom());
     }
     setPin({ lat: initLat, lng: initLng });
+    setReverseAddress(null);
   };
+
+  // Fix (2026-08-27) — reverse-geocode on pin change, debounced 400ms.
+  // Cancels in-flight fetch on subsequent moves so the last drop wins.
+  // Ignores tiny nudges (< 3m) — customer fine-tuning position within
+  // the same rooftop shouldn't fire a network call.
+  useEffect(() => {
+    if (!dragged) { setReverseAddress(null); return undefined; }
+    const dLatM = (pin.lat - initLat) * 111_320;
+    const dLngM = (pin.lng - initLng) * 111_320 * Math.cos(initLat * Math.PI / 180);
+    const distFromOriginM = Math.sqrt(dLatM * dLatM + dLngM * dLngM);
+    if (distFromOriginM < 3) { setReverseAddress(null); return undefined; }
+
+    const t = setTimeout(async () => {
+      if (reverseAbortRef.current) {
+        try { reverseAbortRef.current.abort(); } catch { /* noop */ }
+      }
+      const controller = new AbortController();
+      reverseAbortRef.current = controller;
+      setReverseLoading(true);
+      try {
+        const url = `/api/places/reverse-geocode?lat=${pin.lat}&lng=${pin.lng}`;
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setReverseAddress({
+          formattedAddress: data.formattedAddress,
+          place_id:         data.place_id,
+          distanceM:        distFromOriginM,
+        });
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn('[PreviewStage] reverse-geocode failed:', err.message);
+          setReverseAddress(null);
+        }
+      } finally {
+        setReverseLoading(false);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pin.lat, pin.lng, dragged, initLat, initLng]);
+
+  // Layer 1 — parcel-check on every pin position change (debounced 400ms).
+  // Fires on initial mount too — the very first pin position is Google
+  // Places' geocode which is what we need to validate for gating.
+  useEffect(() => {
+    // Reset user override when pin actually moves — new position needs
+    // fresh confidence check, not a stale override.
+    setForcePinOverride(false);
+    const t = setTimeout(async () => {
+      if (parcelAbortRef.current) {
+        try { parcelAbortRef.current.abort(); } catch { /* noop */ }
+      }
+      const controller = new AbortController();
+      parcelAbortRef.current = controller;
+      setParcelChecking(true);
+      try {
+        const url = `/api/roof/parcel-check?lat=${pin.lat}&lng=${pin.lng}`;
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setParcelCheck(await res.json());
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn('[PreviewStage] parcel-check failed:', err.message);
+          setParcelCheck(null);
+        }
+      } finally {
+        setParcelChecking(false);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [pin.lat, pin.lng]);
+
+  // Derived: is the "Confirm" button blocked because placement confidence is low?
+  const placementLow = parcelCheck && parcelCheck.confidence === 'low';
+  const confirmBlocked = placementLow && !forcePinOverride;
 
   return (
     <div>
@@ -1442,6 +1561,29 @@ export function PreviewStage({ place, analysing, analysisError, pendingAnalysis,
               <CheckCircle className="w-3.5 h-3.5" /> You moved the pin &mdash; analysis will use your position, not the geocoded one.
             </div>
           )}
+          {/* Fix (2026-08-27) — pin-drag reverse-geocode warning.
+              When the customer drags to a different address, show what
+              the new pin coord resolves to so they can catch accidental
+              drops on a neighbour's roof BEFORE we quote for it. */}
+          {dragged && reverseLoading && (
+            <div className="mt-2 text-xs text-[#8F887E] flex items-center gap-1.5">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking the address at your new pin position&hellip;
+            </div>
+          )}
+          {dragged && reverseAddress && reverseAddress.formattedAddress &&
+           reverseAddress.formattedAddress.trim() !== (formattedAddress || '').trim() && (
+            <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                You&apos;ve moved the pin to <strong className="font-mono">{reverseAddress.formattedAddress}</strong> &mdash;
+                no longer your typed address. Confirm this is correct, or click <button
+                  type="button"
+                  onClick={resetPin}
+                  className="underline font-semibold hover:text-amber-950"
+                >Reset</button> to put the pin back.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Guidance panel */}
@@ -1481,16 +1623,70 @@ export function PreviewStage({ place, analysing, analysisError, pendingAnalysis,
           <X className="w-4 h-4" /> No, wrong address
         </button>
         <div className="flex-1" />
+        {/* Fix (2026-08-27) — pin-drag address propagation. Pass the
+            reverse-geocoded address up so the wizard's address state
+            reflects the pin position, not just the typed address.
+            Otherwise Step 4 would show "Designed for 7 Kent Street"
+            even though the customer pointed the pin at 12 Kent Street.
+            The button text also updates to force the customer to notice
+            they're confirming a DIFFERENT address than they typed. */}
         <button
-          onClick={() => onConfirm(pin)}
-          disabled={analysing}
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[#D9531E] text-white text-sm font-semibold hover:bg-[#B84418] transition shadow-lg shadow-orange-500/20 disabled:opacity-60 disabled:cursor-not-allowed"
+          onClick={() => onConfirm(pin, reverseAddress)}
+          disabled={analysing || confirmBlocked}
+          title={confirmBlocked ? 'Drag the pin onto your actual roof first (see banner above)' : ''}
+          className={`inline-flex items-center gap-2 px-6 py-3 rounded-full text-white text-sm font-semibold transition shadow-lg disabled:opacity-60 disabled:cursor-not-allowed ${
+            reverseAddress && reverseAddress.formattedAddress &&
+            reverseAddress.formattedAddress.trim() !== (formattedAddress || '').trim()
+              ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-500/20'
+              : 'bg-[#D9531E] hover:bg-[#B84418] shadow-orange-500/20'
+          }`}
         >
           {analysing
             ? <><Loader2 className="w-4 h-4 animate-spin" /> Analysing your roof&hellip;</>
-            : <><CheckCircle className="w-4 h-4" /> Confirm this is my house</>}
+            : reverseAddress && reverseAddress.formattedAddress &&
+              reverseAddress.formattedAddress.trim() !== (formattedAddress || '').trim()
+                ? <><CheckCircle className="w-4 h-4" /> Analyse pin at {truncate(reverseAddress.formattedAddress, 40)}</>
+                : <><CheckCircle className="w-4 h-4" /> Confirm this is my house</>}
         </button>
       </div>
+
+      {/* Layer 1 (2026-08-27) — pin-drag gating banner.
+          Shown when parcel-check returns 'low' confidence: pin is outside
+          any LINZ parcel OR > 15m from the containing parcel's centroid.
+          Prevents the Google-Places-wrong-address bug (e.g. Hillview 17m
+          offset → panels on neighbour). Second button gives an escape
+          hatch for confident customers ("I know it's here, analyse anyway"). */}
+      {placementLow && !forcePinOverride && (
+        <div className="mt-4 rounded-2xl border-2 border-amber-400 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-6 h-6 text-amber-700 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-amber-900">
+                We&apos;re not confident this is your exact house.
+              </div>
+              <div className="mt-1 text-sm text-amber-800">
+                {parcelCheck?.contains_query
+                  ? `The pin is ${parcelCheck.offset_m}m from the centre of the property boundary we found. Please drag the pin directly onto your actual roof so we analyse the correct building.`
+                  : `The pin isn't inside any property boundary we can find. This often happens on new subdivisions or when Google Maps places the pin on the road. Please drag it onto your actual roof.`}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setForcePinOverride(true)}
+                  className="text-sm text-amber-900 hover:text-amber-950 underline underline-offset-2 font-medium"
+                >
+                  I&apos;m sure the pin is on my roof — analyse anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {forcePinOverride && placementLow && (
+        <div className="mt-3 text-xs text-amber-800 flex items-center gap-1.5">
+          <CheckCircle className="w-3.5 h-3.5" /> Placement confidence overridden by you — a site visit will confirm exact panel placement.
+        </div>
+      )}
 
       {/* Loading-time engagement + post-completion CTA (Phase 3, 2026-08-19).
           Overlay is now a THREE-state UI: analysing (prominent status card +
@@ -3305,7 +3501,7 @@ export function QuoteStage({
       <div className="mb-4">
         <div className="text-xs uppercase tracking-widest text-[#D9531E] font-semibold">Step 4 &middot; Your quote</div>
         <h2 className="font-serif text-3xl md:text-4xl mt-2 tracking-tight">
-          Designed for {formattedAddress?.split(',')[0]}.
+          Designed for {formatAddressForDisplay(formattedAddress) || formattedAddress?.split(',')[0] || 'your property'}.
         </h2>
         <p className="mt-1 text-sm text-[#55504A]">
           Sized for <strong>{derived_annual_kwh.toLocaleString('en-NZ')} kWh/yr</strong>
@@ -3390,12 +3586,16 @@ export function QuoteStage({
             Previewing <strong>{viewingTier?.name || `Tier ${viewingTierIdx + 1}`}</strong>
             <span className="text-[#8B8377]"> &middot; recommended is {recommended?.name || `Tier ${recommended_index + 1}`}.</span>
           </div>
+          {/* Round 4-rework (2026-08-26): renamed from "Reset to recommended"
+              to avoid colliding with CustomiseSystemCard's Reset button,
+              which is what actually clears the customisation. This one
+              only switches the VIEWING tier back to the recommended card. */}
           <button
             type="button"
             onClick={() => setViewingTierIdx(recommended_index)}
             className="text-xs text-[#D9531E] hover:text-[#B84418] font-semibold whitespace-nowrap self-center"
           >
-            Reset to recommended
+            View recommended tier
           </button>
         </div>
       )}
@@ -3405,24 +3605,42 @@ export function QuoteStage({
           `recommendedTier` prop actually receives the currently
           VIEWED tier (viewingTier) so click-to-compare works. When
           viewingTierIdx === recommended_index (default) they're the
-          same object; only differs when user's actively comparing. */}
+          same object; only differs when user's actively comparing.
+          Path B (2026-08-26): server may recommend a 2D satellite
+          fallback for this address (regions where Cesium 3D Tiles
+          are patchy — Queenstown/Waikanae/rural). We check
+          analysis.render_mode and swap in Aerial2DPanelView when
+          'render_mode' is '2d'. Fallback defaults to 3D if the field
+          is absent (backwards-compat with older analyse responses). */}
       <div className={isPreviewingNonRecommended ? 'mt-3' : 'mt-4'}>
-        <Cesium3DPanelHero
-          coords={roof.authoritative_center || roof.google_center || coords}
-          segments={filteredSegments}
-          solarPanels={filteredSolarPanels}
-          building={roof.building}
-          panelTargetCount={viewingTier?.panel?.count || 0}
-          recommendedTier={viewingTier}
-          onPlacementChange={onRoofPlacementChange}
-          /* Tier UX Fix D (2026-08-20): 3D scene reflects the selected tier.
-             Solar-only tier hides ground hardware; Solar+Battery shows the
-             battery box; Solar+Battery+EV additionally shows the EV pedestal
-             and car. Reads viewingTier so it updates immediately on tier
-             click, without waiting for a compose round-trip. */
-          showBattery={!!(viewingTier?.battery && (viewingTier.battery.usable_kwh > 0 || viewingTier.battery.count > 0))}
-          showEv={!!viewingTier?.wattpilot_included}
-        />
+        {analysis?.render_mode === '2d' ? (
+          <Aerial2DPanelView
+            coords={roof.authoritative_center || roof.google_center || coords}
+            segments={filteredSegments}
+            solarPanels={filteredSolarPanels}
+            building={roof.building}
+            panelTargetCount={viewingTier?.panel?.count || 0}
+            recommendedTier={viewingTier}
+            onPlacementChange={onRoofPlacementChange}
+          />
+        ) : (
+          <Cesium3DPanelHero
+            coords={roof.authoritative_center || roof.google_center || coords}
+            segments={filteredSegments}
+            solarPanels={filteredSolarPanels}
+            building={roof.building}
+            panelTargetCount={viewingTier?.panel?.count || 0}
+            recommendedTier={viewingTier}
+            onPlacementChange={onRoofPlacementChange}
+            /* Tier UX Fix D (2026-08-20): 3D scene reflects the selected tier.
+               Solar-only tier hides ground hardware; Solar+Battery shows the
+               battery box; Solar+Battery+EV additionally shows the EV pedestal
+               and car. Reads viewingTier so it updates immediately on tier
+               click, without waiting for a compose round-trip. */
+            showBattery={!!(viewingTier?.battery && (viewingTier.battery.usable_kwh > 0 || viewingTier.battery.count > 0))}
+            showEv={!!viewingTier?.wattpilot_included}
+          />
+        )}
       </div>
 
       {/* Roof-at-a-glance strip — visible summary of the roof analysis +
@@ -3884,7 +4102,7 @@ export function Cesium3DPanelHero({ coords, segments, solarPanels, panelTargetCo
               ? Math.min(recommendedTier.panel.length_mm, recommendedTier.panel.width_mm) / 1000
               : null
           }
-          maxSegments={3}
+          maxSegments={3 /* 2026-08-27: tried 2 to concentrate visually, reverted because complex hip roofs (Newnham Terrace: 15.5+10.4m² N-facing faces) physically fit only ~10 panels on 2 faces, so a 14-panel tier silently dropped 4. The FIRST law: rendered count must match tier count. Multi-cluster look on hip roofs is real — physical installs DO use 3+ arrays there. */}
           height="60vh"
           onPlacementReady={handlePlacementReady}
           showBattery={showBattery}
@@ -3963,6 +4181,23 @@ export function Cesium3DPanelHero({ coords, segments, solarPanels, panelTargetCo
                 </span>
               </div>
             )}
+          </div>
+          {/* Layer 4 (2026-08-27) — customer-driven feedback loop.
+              If panel placement looks wrong to the customer, they can flag
+              it. Data feeds the admin's manual-polygon-override table for
+              known-bad addresses. Mailto keeps it dead-simple (no backend
+              endpoint) while still giving admin the address + context. */}
+          <div className="mt-3 pt-3 border-t border-[#F4EEE1] text-[10px] text-[#8F887E]">
+            Panels don&apos;t look right?{' '}
+            <a
+              href={`mailto:info@goldenrayenergy.nz?subject=Panel%20placement%20feedback&body=${encodeURIComponent(
+                `Location: ${coords?.latitude?.toFixed(6) || '?'}, ${coords?.longitude?.toFixed(6) || '?'}\nSystem: ${recommendedTier?.panel?.total_kwp || '—'} kWp / ${placement?.totalRendered ?? '—'} panels\nFaces: ${placement.perSegment.map(s => `${s.orientation} ${s.panels}`).join(', ')}\nBuilding source: ${building?.source || '?'}\n\nWhat looks wrong (please describe):\n\n`
+              )}`}
+              className="text-[#D9531E] hover:underline font-medium"
+            >
+              Tell us
+            </a>
+            {' — a site visit will confirm exact placement.'}
           </div>
         </div>
       )}

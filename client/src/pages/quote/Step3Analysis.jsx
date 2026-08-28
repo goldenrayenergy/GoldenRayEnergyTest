@@ -28,6 +28,7 @@ import { EnergyFlowOverlay, GoogleSolarReadCard } from '../poc/QuotePage.jsx';
 export default function Step3Analysis({ address, analysis, onChange, onContinue, onBack }) {
   const [analysing, setAnalysing]   = useState(false);
   const [error, setError]           = useState(null);
+  const [diagnostics, setDiagnostics] = useState(null);
   const [pending, setPending]       = useState(analysis || null);
   const [elapsedMs, setElapsedMs]   = useState(0);
   const firedRef = useRef(false);
@@ -73,11 +74,36 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
         setPending(data);
         onChange(data);
       } catch (e) {
+        // Fix (2026-08-27) — daily quote-limit 429 detection. Server
+        // sends { error, quotes_used_today, max_per_day, reset_at_iso,
+        // book_survey_url } when the customer's IP has already looked
+        // at MAX_ADDRESSES_PER_DAY distinct addresses today. Show a
+        // dedicated card (SiteSurveyFallback with rate-limit variant)
+        // instead of the generic "analysis failed" copy.
+        if (e.response?.status === 429) {
+          const body = e.response.data || {};
+          setError(body.error || 'You\'ve reached your daily quote limit.');
+          setDiagnostics({
+            source_pipeline:   'rate_limited',
+            fallback_reason:   'daily_quote_limit',
+            quotes_used_today: body.quotes_used_today,
+            max_per_day:       body.max_per_day,
+            reset_at_iso:      body.reset_at_iso,
+            book_survey_url:   body.book_survey_url,
+          });
+          return;
+        }
         const status = e.response?.status ? ` [HTTP ${e.response.status}]` : '';
         const bodyMsg = typeof e.response?.data === 'string'
           ? e.response.data.slice(0, 300)
           : (e.response?.data?.error || e.message || 'Roof analysis failed.');
         setError(`${bodyMsg}${status}`);
+        // Round 4 (2026-08-26) — capture roof_analysis_diagnostics so the
+        // fallback card can show which specific pipeline stage broke.
+        // Distinguishes "no data at this coord" (both_pipelines_failed)
+        // from "we had data but the algorithm rejected it" (LiDAR gate).
+        const diag = e.response?.data?.roof_analysis_diagnostics || null;
+        if (diag) setDiagnostics(diag);
       } finally {
         setAnalysing(false);
         clearInterval(iv);
@@ -101,12 +127,28 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
   }, [onContinue]);
 
   const handleOverlayClose = useCallback(() => {
-    // Skip on 'complete' commits (advance to Step 4). Skip on 'analysing'
-    // just dismisses the overlay but leaves analysis running. Skip on
-    // 'error' → the site-survey I1 fallback stays on-screen as body.
+    // 'complete' → advance to Step 4 (same as the CTA).
+    // 'analysing' → dismiss overlay, analysis keeps running in the background.
+    // 'error' path never opens the overlay (guarded on the `open` prop below),
+    // so the customer isn't trapped in a modal with no working close — they
+    // land straight on the in-page SiteSurveyFallback card, which has both
+    // "Book a site survey" and "Try a different address" (→ onBack).
     if (status === 'complete') onContinue();
-    // else: leave overlay dismissable but analysis continues (rare path)
   }, [status, onContinue]);
+
+  // Fix (2026-08-27) — state-aware heading + subtitle. The previous
+  // static "Reading your roof…" copy stayed on screen even after
+  // analysis failed, contradicting the yellow error card below and
+  // making customers think analysis was still running. Copy now
+  // matches the current status: analysing / complete / error.
+  const headingCopy = status === 'error'
+    ? { title: 'We couldn’t analyse this roof',
+        subtitle: 'The auto-analyser came back empty for this address. See what to do below — a technician visit is often the fastest path to a firm quote.' }
+    : status === 'complete'
+    ? { title: 'Your roof analysis is ready',
+        subtitle: 'We\'ve pulled roof geometry, sun-hours, and shading. Review below, then continue to see your quote.' }
+    : { title: 'Reading your roof…',
+        subtitle: 'We\'re pulling roof geometry, sun-hours, and shading from Google Solar or NZ LiDAR. Usually 5–30 seconds. Watch the animation while you wait.' };
 
   return (
     <div>
@@ -114,10 +156,10 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
         Step 3 &middot; Roof analysis
       </div>
       <h2 className="font-serif text-3xl md:text-4xl mt-3 tracking-tight text-[#1A1614]">
-        Reading your roof…
+        {headingCopy.title}
       </h2>
       <p className="mt-2 text-[#55504A] max-w-2xl">
-        We&apos;re pulling roof geometry, sun-hours, and shading from Google Solar or NZ LiDAR. Usually 5&ndash;30&nbsp;seconds. Watch the animation while you wait.
+        {headingCopy.subtitle}
       </p>
 
       {/* Body — under the celebration overlay. Once analysis is complete
@@ -126,7 +168,7 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
           can inspect the roof stats while the CTA pulses above them. */}
       {status === 'error' && (
         <div className="mt-8 rounded-2xl border border-[#E3D9C4] bg-white p-6 md:p-8">
-          <SiteSurveyFallback error={error} address={address} onBack={onBack} />
+          <SiteSurveyFallback error={error} diagnostics={diagnostics} address={address} onBack={onBack} />
         </div>
       )}
 
@@ -166,9 +208,14 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
         </button>
       </div>
 
-      {/* The star of the show — EnergyFlowOverlay drives engagement */}
+      {/* EnergyFlowOverlay drives engagement during analyse + celebration
+          on complete. NEVER opens on error — the celebration surface is the
+          wrong control for a failure, and prior versions latched the overlay
+          open with no working close on error (Bug 5, 2026-08-26). The
+          SiteSurveyFallback in the page body (above) owns the error recovery
+          UX with proper "Try a different address" + "Book a site survey" CTAs. */}
       <EnergyFlowOverlay
-        open={!!status}
+        open={!!status && status !== 'error'}
         onClose={handleOverlayClose}
         hasBattery
         hasEv
@@ -185,7 +232,13 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
 // ── I1 site-survey fallback ──────────────────────────────────────────────────
 // When roof analysis fails (Google Solar + LiDAR + OSM all whiff, timeout,
 // or 500), we don't lose the lead. Offer a site-survey booking instead.
-function SiteSurveyFallback({ error, address, onBack }) {
+function SiteSurveyFallback({ error, diagnostics, address, onBack }) {
+  // Round 4-rework (2026-08-26). Tech-detail is now hidden from customer
+  // by default and only rendered when `?debug=1` is in the URL — that
+  // section is a QA affordance, not something a real customer should
+  // see. Owner/admin can append `?debug=1` when reproducing an issue.
+  const showTechnicalDetail = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).has('debug');
   return (
     <div className="rounded-xl bg-amber-50 border border-amber-200 p-4">
       <div className="flex items-start gap-3">
@@ -195,13 +248,27 @@ function SiteSurveyFallback({ error, address, onBack }) {
             We couldn&apos;t analyse this roof automatically.
           </div>
           <div className="text-xs text-amber-800 mt-1">
-            This can happen for complex roofs, new-build addresses not yet in Google&apos;s dataset, or if all three providers timed out. No problem &mdash; a technician can survey it in person and give you an exact quote.
+            {friendlyDiagnostic(diagnostics)
+              || 'This can happen for complex roofs, new-build addresses not yet in Google’s dataset, or if all three providers timed out. No problem — a technician can survey it in person and give you an exact quote.'}
           </div>
-          {error && (
+          {showTechnicalDetail && error && (
             <details className="mt-2">
-              <summary className="text-xs text-amber-700 cursor-pointer">Technical detail</summary>
-              <div className="mt-1 text-[11px] font-mono text-amber-900/80 bg-amber-100/40 rounded p-2">
-                {error.slice(0, 300)}
+              <summary className="text-xs text-amber-700 cursor-pointer">Technical detail (debug mode)</summary>
+              <div className="mt-1 text-[11px] font-mono text-amber-900/80 bg-amber-100/40 rounded p-2 space-y-1">
+                <div>{error.slice(0, 300)}</div>
+                {diagnostics && (
+                  <div className="pt-1 border-t border-amber-200/60">
+                    <div>source_pipeline: {diagnostics.source_pipeline || 'n/a'}</div>
+                    <div>fallback_reason: {diagnostics.fallback_reason || 'n/a'}</div>
+                    {diagnostics.building_source && (
+                      <div>building: {diagnostics.building_source} ({diagnostics.building_match_type}, {diagnostics.building_distance_m}m)</div>
+                    )}
+                    {diagnostics.building_candidates && (
+                      <div>osm/linz candidates: {JSON.stringify(diagnostics.building_candidates)}</div>
+                    )}
+                    {diagnostics.lidar_error && <div>lidar_error: {diagnostics.lidar_error}</div>}
+                  </div>
+                )}
               </div>
             </details>
           )}
@@ -209,18 +276,29 @@ function SiteSurveyFallback({ error, address, onBack }) {
             <button
               type="button"
               onClick={() => {
-                // Book a site survey — take the customer to the legacy
-                // /get-quote wizard callback intent so a rep phones them.
-                // Passes the confirmed address as a URL param so the rep sees
-                // it in the CRM.
-                const params = new URLSearchParams({
-                  type: 'residential',
-                  intent: 'callback',
-                });
+                // Round 4-rework (2026-08-26): route to /book-survey
+                // (Cal.com booking page) instead of the legacy /get-quote
+                // callback intent, which was looping the customer back
+                // into the same failing quote flow. Address is passed as
+                // ?notes= so the surveyor sees WHERE the failed analysis
+                // was for — Cal.com's inline embed forwards `notes` into
+                // the booking metadata.
+                //
+                // Round 4-rework followup (2026-08-26): ALSO clear the
+                // sessionStorage wizard draft so that when the customer
+                // returns later (Home → Get Quote → Start Quote) they
+                // start from a clean slate instead of resuming the
+                // failed-address analysis they just escaped. Key comes
+                // from ResidentialWizard.jsx DRAFT_KEY constant.
+                try {
+                  window.sessionStorage?.removeItem('poc:quote:draft:v1');
+                } catch { /* non-fatal — sessionStorage disabled/denied */ }
+                const params = new URLSearchParams();
                 if (address?.formattedAddress) {
-                  params.set('address', address.formattedAddress);
+                  params.set('notes', `Roof analysis failed for: ${address.formattedAddress}`);
                 }
-                window.location.href = `/get-quote?${params.toString()}`;
+                const qs = params.toString();
+                window.location.href = `/book-survey${qs ? '?' + qs : ''}`;
               }}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#D9531E] text-white text-sm font-semibold hover:bg-[#B84418] transition"
             >
@@ -238,6 +316,37 @@ function SiteSurveyFallback({ error, address, onBack }) {
       </div>
     </div>
   );
+}
+
+// Round 4 (2026-08-26) — translate roof_analysis_diagnostics into a
+// customer-friendly sentence for the SiteSurveyFallback body. Falls back
+// to the generic copy when the reason isn't one we can explain nicely.
+function friendlyDiagnostic(d) {
+  if (!d) return null;
+  // Fix (2026-08-27) — rate-limit friendly copy.
+  if (d.fallback_reason === 'daily_quote_limit') {
+    return `You've explored ${d.quotes_used_today || d.max_per_day || 3} different addresses today. Come back tomorrow for more, or book a site survey now to talk to a real person about your best option.`;
+  }
+  if (d.fallback_reason === 'both_pipelines_failed') {
+    if (d.building_source == null && d.building_candidates
+        && (d.building_candidates.osm || 0) + (d.building_candidates.linz || 0) === 0) {
+      return 'We couldn’t find your building in our reference maps (OSM/LINZ have no polygon for this address yet — common for new subdivisions). A technician site survey is the fastest path to an accurate quote.';
+    }
+    // Option B (2026-08-27) — rural / remote coverage gap. LINZ LiDAR
+    // coverage exists for most NZ populated areas but has genuine gaps
+    // in remote regions (e.g. Hira, Rai Valley, some Marlborough Sounds
+    // + Fiordland). Google Solar also lacks imagery here. Nothing to
+    // analyse online — book a site survey.
+    if (/\d+\s*points?\s*above/i.test(d.lidar_error || '')
+        || /RANSAC detected no roof planes/i.test(d.lidar_error || '')) {
+      return 'This address is outside our automatic-analysis coverage — public roof-imagery data for this area isn’t detailed enough. A technician site visit is the accurate path to a quote here, and often faster than we can do online for rural properties.';
+    }
+    return 'Both roof-analysis providers came back empty for this coord. Try refining the address, or book a technician survey.';
+  }
+  if (d.fallback_reason === 'lidar_failed_reverted_to_stale_google') {
+    return 'The LiDAR fallback couldn’t detect roof planes for this address. We’re showing Google’s older imagery result — book a site survey to confirm on the current roof.';
+  }
+  return null;
 }
 
 // ── Result summary shown in overlay's completion card ──────────────────────

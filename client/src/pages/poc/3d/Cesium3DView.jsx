@@ -27,6 +27,7 @@ import {
   enrichSegmentsWithFaceDimensions,
 } from './panelGrid';
 import { addPanelEntities } from './cesiumPanelEntities';
+import { nzGeoidSeparationMetres } from '../../../lib/nzGeoid';
 // Legend swatch on the 3D view shares the same gradient as the sidebar
 // SolarQualityScoreCard so the two visualisations describe one scale.
 import { gradientCssStops, yieldToColor } from './panelColorScale';
@@ -1001,6 +1002,36 @@ export default function Cesium3DView({
           return;
         }
 
+        // Fix 10 debug overlay (2026-08-27) — draw the OSM/LINZ building
+        // polygon on the 3D scene when URL contains ?debug=polygon so we
+        // can visually diagnose whether the outline actually wraps the
+        // customer's visible roof or drifts onto neighbouring structures.
+        // Off by default so real customers never see it.
+        const debugPolygonOn =
+          typeof window !== 'undefined' && (
+            new URLSearchParams(window.location.search).get('debug') === 'polygon'
+            || window.localStorage?.getItem('gr-debug-polygon') === '1'
+          );
+        const ringDbg = building?.polygon?.[0];
+        if (debugPolygonOn && Array.isArray(ringDbg) && ringDbg.length >= 3) {
+          try {
+            const positions = ringDbg.map(([lng, lat]) =>
+              Cesium.Cartesian3.fromDegrees(lng, lat, 0));
+            viewer.entities.add({
+              id: '__osm_polygon_debug',
+              polyline: {
+                positions,
+                width: 5,
+                material: Cesium.Color.ORANGE.withAlpha(0.95),
+                clampToGround: true,
+              },
+            });
+            console.log(`[Fix 10 debug] OSM polygon drawn — ${ringDbg.length} vertices`);
+          } catch (e) {
+            console.warn(`[Fix 10 debug] polygon draw threw: ${e?.message || e}`);
+          }
+        }
+
         // 7. Enrich segments with real face dimensions derived from Google's
         //    OWN solarPanels[] (projected into each segment's roof-axis frame).
         //    This replaces the bbox-based dimension estimate that caused the
@@ -1008,13 +1039,19 @@ export default function Cesium3DView({
         //    real face, so their extent IS the real face's usable extent.
         const enriched = enrichSegmentsWithFaceDimensions(segments, solarPanels);
 
-        // Filter to viable segments (skip south-facing, too small, wrong pitch),
-        // then distribute the target count across the top N by area × orientation.
+        // Filter to viable segments (skip south-facing, too small, wrong pitch).
+        // Fix 9 (2026-08-27): pass ALL viable segments to distributePanels
+        // (was slice(0, maxSegments)=3). The new NZ-standard fill algorithm
+        // sorts internally by orientation priority (N first) and only
+        // consumes as many faces as it needs to place the target. Keeping
+        // a hard slice would starve the algorithm of the smaller N faces
+        // that outrank W/E for solar placement even when smaller.
+        // maxSegments prop kept as a safety upper bound (capped at 8).
         const viable = selectViableSegments(enriched);
         if (!viable.length) {
           throw new Error(`No viable roof segments (all ${enriched.length} were south-facing, too small, or wrong pitch).`);
         }
-        const topSegments = viable.slice(0, maxSegments);
+        const topSegments = viable.slice(0, Math.max(maxSegments, 8));
         // 2026-08-18 (V6 diagnostic fix) — pass REAL panel footprint to
         // distributePanels. Previously it used the hardcoded fallback
         // 1.65×0.99 = 1.63 m², which UNDER-estimates the space a modern
@@ -1025,7 +1062,13 @@ export default function Cesium3DView({
         const realFootprintLong  = Number.isFinite(panelLongM)  && panelLongM  > 0 ? panelLongM  : 1.65;
         const realFootprintShort = Number.isFinite(panelShortM) && panelShortM > 0 ? panelShortM : 0.99;
         const realFootprintM2    = realFootprintLong * realFootprintShort;
-        const allocations = distributePanels(topSegments, panelTargetCount, 3, realFootprintM2);
+        // Fix 9 (2026-08-27): minPerSeg bumped from 3 → 4 to match the
+        // Fronius MPPT string minimum (also referenced in AS/NZS 4777.1
+        // typical residential inverters). A "3-panel array" isn't a real
+        // MPPT string; below 4 the inverter can't operate. Combined with
+        // the orientation-first fill algorithm above, this gives us
+        // real-installer placement behaviour.
+        const allocations = distributePanels(topSegments, panelTargetCount, 4, realFootprintM2, realFootprintLong, realFootprintShort);
         if (!allocations.length) {
           throw new Error(`Panel distribution returned empty for ${topSegments.length} segments.`);
         }
@@ -1122,7 +1165,14 @@ export default function Cesium3DView({
           if (Number.isFinite(panelWatts) && panelWatts > 0) {
             segment._panelCapacityWatts = panelWatts;
           }
-          const segPanels = computePanelGridOnSegment(segment, effectivePanelLongM, effectivePanelShortM, count);
+          // Fix 10 (2026-08-27) — pass the building polygon (OSM/LINZ
+          // outline from the roof analyse endpoint) so panels get
+          // shifted + clipped to inside the roof. Fixes the "panels
+          // floating in the alley" bug on houses where Google Solar's
+          // segment center sits near a polygon edge (e.g. 10 Newnham).
+          const polygonRing = building?.polygon?.[0] || null;
+          const segPanels = computePanelGridOnSegment(
+            segment, effectivePanelLongM, effectivePanelShortM, count, polygonRing);
           if (!segPanels.length) continue;
 
           // SAVE original altitudes (Google Solar plane / LiDAR fitted plane
@@ -1229,25 +1279,86 @@ export default function Cesium3DView({
             console.log(`[Cesium3DView] partial-sample: ${sampledCount}/${segPanels.length} sampled, median delta ${partialDelta.toFixed(2)} m applied to ${segPanels.length - sampledCount} missing panels`);
           }
 
-          // Set each panel's altitude:
-          //   1. Per-panel mesh sample succeeded → use it (Cesium native frame)
-          //   2. Sample failed but we have a partial-delta from siblings → use it
-          //   3. All samples failed but centre-sample worked → use that delta
-          //   4. Nothing worked → leave plane altitude as-is (last-resort)
+          // Round 4 (2026-08-26) — Bug 7/8. Compute the NZ geoid separation
+          // ONCE per segment as the last-resort correction. When none of
+          // mesh sample / partial bridge / centre sample succeeded, the
+          // pre-fix code left altitude at raw MSL, which sits ~14-37 m
+          // below Cesium's ellipsoidal frame in NZ — panels appear on the
+          // sky / underground / floating over the wrong roof (Queenstown,
+          // Waikanae reports). Applying the coarse geoid table shrinks
+          // the last-resort error from ~30 m to ~3 m so panels at least
+          // sit near the mesh surface.
+          const segGeoidSep = nzGeoidSeparationMetres(
+            segment.center.latitude, segment.center.longitude,
+          );
+          let geoidFallbackUsed = false;
+
+          // Fix 8 (2026-08-27) — SEGMENT-UNIFORM altitude.
           //
-          // Even when staleMeshDetected=true we STILL use the mesh position
-          // (option: panels visibly on the stale surface, banner explains).
-          // Trying to override with roof-detection altitude fails because we
-          // can't reliably convert MSL → ellipsoidal without a geoid model.
-          segPanels.forEach((p, i) => {
+          // Previous behaviour: each panel used its OWN per-panel mesh
+          // sample when available. On real hip roofs the Cesium mesh
+          // isn't perfectly flat — texture noise + edge artifacts +
+          // photogrammetry wobble mean neighbouring samples differ by
+          // 5-20 cm even on a "flat" face. Result: neighbouring panels
+          // sat at slightly different heights, panels appeared warped /
+          // sliced / non-rectangular in the rendered scene (customer
+          // report on 10 Newnham Terrace Christchurch, 2026-08-27).
+          //
+          // Real solar panels install on flat rails on the roof —
+          // physical reality is a clean flat plane, not per-panel
+          // undulation. So we now compute ONE segment-wide altitude
+          // delta (median of all successful per-panel samples) and
+          // apply it uniformly to every panel on that segment. Panels
+          // form a clean geometric plane aligned with the mesh at
+          // the segment's centre-of-mass, matching how they'd
+          // physically install.
+          //
+          // Fallback chain (in priority order):
+          //   1. Median of successful per-panel samples on this segment
+          //   2. Centre-sample delta (from fallbackReference)
+          //   3. NZ geoid separation (for regions where mesh sampling
+          //      fully failed — Queenstown/Waikanae style)
+          //
+          // originalAltitudes[i] already encodes each panel's tilt +
+          // within-segment offset (v × sin(pitch)) — applying a UNIFORM
+          // delta preserves the panel-to-panel geometry of the tilted
+          // plane while snapping the whole thing into the mesh frame.
+          //
+          // Even when staleMeshDetected=true we STILL use the mesh
+          // position (panels visibly on stale surface, banner explains).
+          const successfulDeltas = [];
+          for (let i = 0; i < segPanels.length; i++) {
             if (Number.isFinite(meshHeights[i])) {
-              p.center.altitude = meshHeights[i];
-            } else if (partialDelta != null) {
-              p.center.altitude = originalAltitudes[i] + partialDelta;
-            } else if (fallbackReference) {
-              p.center.altitude = originalAltitudes[i] + fallbackReference.delta;
+              successfulDeltas.push(meshHeights[i] - originalAltitudes[i]);
             }
+          }
+          let uniformDelta = null;
+          let deltaSource = null;
+          if (successfulDeltas.length > 0) {
+            successfulDeltas.sort((a, b) => a - b);
+            uniformDelta = successfulDeltas[Math.floor(successfulDeltas.length / 2)];
+            deltaSource = 'segment-median';
+          } else if (fallbackReference) {
+            uniformDelta = fallbackReference.delta;
+            deltaSource = 'centre-sample';
+          } else {
+            uniformDelta = segGeoidSep;
+            deltaSource = 'nz-geoid';
+            geoidFallbackUsed = true;
+          }
+
+          segPanels.forEach((p, i) => {
+            p.center.altitude = originalAltitudes[i] + uniformDelta;
           });
+          if (successfulDeltas.length > 0) {
+            const spread = successfulDeltas[successfulDeltas.length - 1] - successfulDeltas[0];
+            if (spread > 0.5) {
+              console.log(`[Cesium3DView] segment-uniform altitude: az=${segment.azimuthDegrees?.toFixed(0)}°, median delta ${uniformDelta.toFixed(2)}m (raw sample spread was ${spread.toFixed(2)}m — flattened for clean geometry)`);
+            }
+          }
+          if (geoidFallbackUsed) {
+            console.warn(`[Cesium3DView] geoid-fallback: segment az=${segment.azimuthDegrees?.toFixed(0)}° at (${segment.center.latitude.toFixed(4)}, ${segment.center.longitude.toFixed(4)}) — applied ${segGeoidSep.toFixed(1)} m NZ geoid correction to raw MSL. Mesh sampling failed for every panel + centre — Cesium tiles likely still loading. Refresh may help.`);
+          }
 
           const anySampled = sampledCount > 0 || fallbackReference != null;
           const lift = anySampled ? 0.30 : 0.60;
@@ -1266,9 +1377,12 @@ export default function Cesium3DView({
               panels:          segPanels.length,
               meshSamplesHit:  sampledCount,
               meshSampleTotal: segPanels.length,
-              fallbackUsed:    sampledCount === 0 ? (fallbackReference ? 'centre-sample' : 'none')
-                               : partialDelta != null ? 'partial-sample-bridge'
-                               : null,
+              fallbackUsed:    deltaSource || (sampledCount === 0
+                                 ? (fallbackReference
+                                     ? 'centre-sample'
+                                     : (geoidFallbackUsed ? 'nz-geoid' : 'none'))
+                                 : (partialDelta != null ? 'partial-sample-bridge' : null)),
+              geoidCorrectionM: geoidFallbackUsed ? Number(segGeoidSep.toFixed(1)) : null,
               partialBridgeDeltaM: partialDelta != null ? Number(partialDelta.toFixed(2)) : null,
               staleMesh:       staleMeshDetected,
               meshVarianceM:   meshVarianceM != null ? Number(meshVarianceM.toFixed(2)) : null,

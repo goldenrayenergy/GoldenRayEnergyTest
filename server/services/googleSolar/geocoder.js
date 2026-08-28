@@ -161,6 +161,107 @@ export function createGeocoder({
         quality:          top.geometry.location_type || 'APPROXIMATE',
       };
     },
+
+    /**
+     * Reverse-geocode a lat/lng to a formatted address. Used by the
+     * pin-drag confirmation flow (2026-08-27) so that when the customer
+     * drags the map pin, we can show them the ACTUAL address at the pin
+     * position — catches accidental drops onto a neighbour's house.
+     *
+     * @param {number} latitude
+     * @param {number} longitude
+     * @returns {Promise<
+     *   { ok: true,  source: 'live'|'mock', formattedAddress: string, quality: string, place_id?: string }
+     * | { ok: false, source: 'live',        status, reason, error }
+     * >}
+     */
+    async reverseGeocode(latitude, longitude) {
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return { ok: false, source: 'live', status: 0, reason: 'invalid-coord', error: 'lat/lng must be finite numbers' };
+      }
+      if (!apiKey) {
+        // Dev fallback — canned response
+        return {
+          ok: true, source: 'mock',
+          formattedAddress: `${latitude.toFixed(6)}, ${longitude.toFixed(6)} (mock — no API key)`,
+          quality: 'APPROXIMATE',
+        };
+      }
+
+      const url = new URL(API_BASE);
+      url.searchParams.set('latlng', `${latitude},${longitude}`);
+      url.searchParams.set('key', apiKey);
+      url.searchParams.set('region', 'nz');
+      // result_type=street_address biases toward premise-level results
+      // over generic POI/postal_code entries, matching what the customer
+      // pin-drag flow needs — "what's at this rooftop coord?"
+      url.searchParams.set('result_type', 'street_address|premise|subpremise');
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let res;
+      try {
+        res = await fetchFn(url, {
+          method: 'GET',
+          headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
+          signal: controller.signal,
+        });
+      } catch (err) {
+        return { ok: false, source: 'live', status: 0, reason: 'network', error: `network: ${err?.message || String(err)}` };
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { ok: false, source: 'live', status: res.status, reason: `http-${res.status}`, error: text || res.statusText || `HTTP ${res.status}` };
+      }
+
+      let data;
+      try { data = await res.json(); }
+      catch (err) { return { ok: false, source: 'live', status: res.status, reason: 'bad-json', error: err?.message || String(err) }; }
+
+      // ZERO_RESULTS on a strict result_type filter is common — retry
+      // without the filter before giving up. Better a slightly-less-
+      // precise "route" or "locality" result than nothing.
+      if (data?.status === 'ZERO_RESULTS') {
+        const relaxedUrl = new URL(API_BASE);
+        relaxedUrl.searchParams.set('latlng', `${latitude},${longitude}`);
+        relaxedUrl.searchParams.set('key', apiKey);
+        relaxedUrl.searchParams.set('region', 'nz');
+        const controller2 = new AbortController();
+        const timer2 = setTimeout(() => controller2.abort(), timeoutMs);
+        try {
+          const res2 = await fetchFn(relaxedUrl, { method: 'GET', headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' }, signal: controller2.signal });
+          if (res2.ok) data = await res2.json();
+        } catch { /* fall through with original data */ }
+        finally { clearTimeout(timer2); }
+      }
+
+      if (data?.status !== 'OK') {
+        const REASON_MAP = {
+          ZERO_RESULTS: 'zero-results', OVER_QUERY_LIMIT: 'over-query-limit',
+          REQUEST_DENIED: 'request-denied', INVALID_REQUEST: 'invalid-request',
+          UNKNOWN_ERROR: 'unknown-error',
+        };
+        return {
+          ok: false, source: 'live', status: data?.status || 'unknown',
+          reason: REASON_MAP[data?.status] || 'unknown-error',
+          error: data?.error_message || data?.status || 'no results',
+        };
+      }
+
+      const top = Array.isArray(data.results) ? data.results[0] : null;
+      if (!top?.formatted_address) {
+        return { ok: false, source: 'live', status: 'OK', reason: 'zero-results', error: 'OK but no formatted_address in first result' };
+      }
+      return {
+        ok: true, source: 'live',
+        formattedAddress: top.formatted_address,
+        quality:          top.geometry?.location_type || 'APPROXIMATE',
+        place_id:         top.place_id || null,
+      };
+    },
   };
 }
 
@@ -173,6 +274,10 @@ function getGeocoder() {
 
 export async function geocodeAddress(address) {
   return getGeocoder().geocode(address);
+}
+
+export async function reverseGeocode(latitude, longitude) {
+  return getGeocoder().reverseGeocode(latitude, longitude);
 }
 
 // Test-only reset.
