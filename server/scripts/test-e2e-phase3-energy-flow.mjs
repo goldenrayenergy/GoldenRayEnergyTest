@@ -166,6 +166,11 @@ async function run() {
   });
 
   const page = await browser.newPage();
+  // Fix (2026-08-27) — set the admin-bypass cookie so this E2E doesn't
+  // get rate-limited by the /api/roof/analyse daily quota (3 unique
+  // addresses per IP). Without this the test fails when run repeatedly
+  // in the same day OR after any other test that consumed the quota.
+  await page.setCookie({ name: 'gr-admin-bypass', value: '1', domain: 'localhost', path: '/' });
 
   const consoleErrors = [];
   page.on('pageerror', err => { consoleErrors.push(err.message); console.error(`  [browser ERROR] ${err.message}`); });

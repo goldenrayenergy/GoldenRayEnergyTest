@@ -16,6 +16,7 @@
 
 import { Router } from 'express';
 import env from '../config/env.js';
+import { reverseGeocode } from '../services/googleSolar/geocoder.js';
 
 const router = Router();
 
@@ -123,6 +124,49 @@ router.get('/details', async (req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ error: `Places details threw: ${e.message}` });
+  }
+});
+
+// ── GET /reverse-geocode?lat=&lng= ─────────────────────────────────────
+// Fix (2026-08-27) — pin-drag confirmation. When the customer drags the
+// address pin on the Step 2 Leaflet map, the client posts here on drop
+// to fetch the ACTUAL address at the new pin position. Enables the UI
+// to show "You've moved the pin to 12 Kent Street — no longer 7 Kent
+// Street. Confirm this is correct, or drag the pin back."
+//
+// Preserves the same shape as /details so the client can swap the
+// address record cleanly.
+router.get('/reverse-geocode', async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ error: 'lat and lng required (numeric)' });
+  }
+  // Bound to NZ ish — reject wildly-out-of-range coords so callers can't
+  // burn our Geocoding quota with garbage. NZ mainland envelope with
+  // ~2° margin.
+  if (lat < -48 || lat > -32 || lng < 165 || lng > 180) {
+    return res.status(400).json({ error: 'lat/lng out of NZ bounds' });
+  }
+
+  try {
+    const result = await reverseGeocode(lat, lng);
+    if (!result.ok) {
+      return res.status(result.status === 'ZERO_RESULTS' ? 404 : 502).json({
+        error: `Reverse geocode ${result.reason}: ${result.error}`,
+        reason: result.reason,
+      });
+    }
+    return res.json({
+      formattedAddress: result.formattedAddress,
+      place_id:         result.place_id || null,
+      latitude:         lat,
+      longitude:        lng,
+      quality:          result.quality,
+      source:           result.source,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: `Reverse geocode threw: ${e.message}` });
   }
 });
 

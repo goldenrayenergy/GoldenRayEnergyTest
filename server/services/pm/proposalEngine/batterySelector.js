@@ -243,11 +243,27 @@ export function selectBattery({
   // customer's requested target. Downstream reasons.battery gets echoed
   // into tier warnings so the client can surface the gap in a friendly
   // callout.
+  //
+  // Round 4-rework (2026-08-26): only show the "snapped down from X" line
+  // when there's a MEANINGFUL gap (> 0.5 kWh) between what the customer
+  // asked and what they got. Otherwise the message reads as nonsense
+  // ("snapped down from 19.32 kWh to 19.32 kWh"). If the snap fired but
+  // the delivered capacity equals the ask within rounding tolerance,
+  // show a cleaner "at maximum matrix-approved capacity" message —
+  // still informative, without the confusing target/result equality.
   if (best.snapped_below_target) {
-    reasonParts.push(
-      `— snapped down from ${r2(targetUsableKwh)} kWh target ` +
-      `(no larger battery pack is matrix-approved for the current inverter)`
-    );
+    const gapKwh = Number(targetUsableKwh) - Number(best.total_usable_kwh);
+    if (gapKwh > 0.5) {
+      reasonParts.push(
+        `— snapped down from ${r2(targetUsableKwh)} kWh target ` +
+        `(no larger battery pack is matrix-approved for the current inverter)`
+      );
+    } else {
+      reasonParts.push(
+        `— at maximum matrix-approved capacity for the current inverter ` +
+        `(upgrade inverter to expand)`
+      );
+    }
   }
 
   return {

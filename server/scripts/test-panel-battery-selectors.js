@@ -86,6 +86,55 @@ console.log('\n══════ Panel selector ══════');
   assert('no_active_panels when empty', r.reason_code === 'no_active_panels');
 }
 
+// Bug 2 fix (2026-08-26): panelsExact bypasses the panels→kWp→panels
+// round-trip that silently over-panelled by 1 due to float compounding.
+// e.g. 23 × 595 W → 13.685 kWp; then 13.685 / 0.595 === 23.0000000000004
+// in JS → Math.ceil → 24. With panelsExact, we skip the ceil entirely
+// and use the customer's exact count.
+{
+  console.log('\n── panelsExact: 23 (previously snapped to 24) — should stay 23 ──');
+  const r = selectPanel({ catalogue: CATALOGUE, targetKwp: 13.685, panelsExact: 23 });
+  console.log(`  panels_needed: ${r.panels_needed} · target_kwp: ${r.target_kwp}`);
+  assert('panelsExact 23 stays 23', r.panels_needed === 23);
+  assert('effective_target_kwp derived from exact count', r.target_kwp === 13.69);
+}
+
+{
+  console.log('\n── panelsExact: 15 (previously snapped to 16) — should stay 15 ──');
+  const r = selectPanel({ catalogue: CATALOGUE, targetKwp: 15 * 0.595, panelsExact: 15 });
+  console.log(`  panels_needed: ${r.panels_needed}`);
+  assert('panelsExact 15 stays 15', r.panels_needed === 15);
+}
+
+{
+  console.log('\n── panelsExact: 27 (previously snapped to 28) — should stay 27 ──');
+  const r = selectPanel({ catalogue: CATALOGUE, targetKwp: 27 * 0.595, panelsExact: 27 });
+  console.log(`  panels_needed: ${r.panels_needed}`);
+  assert('panelsExact 27 stays 27', r.panels_needed === 27);
+}
+
+{
+  console.log('\n── panelsExact: null → falls back to targetKwp (recommendation path) ──');
+  const r = selectPanel({ catalogue: CATALOGUE, targetKwp: 10, panelsExact: null });
+  console.log(`  panels_needed: ${r.panels_needed} (10 kWp / 0.595 = 16.8 → 17)`);
+  assert('null panelsExact uses targetKwp ceil path', r.panels_needed === 17);
+}
+
+{
+  console.log('\n── panelsExact: 0 / negative → ignored, falls back to targetKwp ──');
+  const r0 = selectPanel({ catalogue: CATALOGUE, targetKwp: 10, panelsExact: 0 });
+  const rNeg = selectPanel({ catalogue: CATALOGUE, targetKwp: 10, panelsExact: -3 });
+  assert('panelsExact 0 → ignored, ceil path used', r0.panels_needed === 17);
+  assert('panelsExact -3 → ignored, ceil path used', rNeg.panels_needed === 17);
+}
+
+{
+  console.log('\n── panelsExact: 23.7 → floored to 23 (safety) ──');
+  const r = selectPanel({ catalogue: CATALOGUE, targetKwp: 15, panelsExact: 23.7 });
+  console.log(`  panels_needed: ${r.panels_needed}`);
+  assert('non-integer panelsExact floored to 23', r.panels_needed === 23);
+}
+
 // ── Battery selector ────────────────────────────────────────────────────────
 console.log('\n══════ Battery selector ══════');
 

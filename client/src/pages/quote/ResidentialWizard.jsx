@@ -45,12 +45,16 @@ function addressKey(a) {
 // Full server-side draft persistence + magic-link resume comes with I3 in a
 // later ticket — this handles the same-session case only.
 const DRAFT_KEY = 'poc:quote:draft:v1';
-// Drafts older than this are treated as stale and discarded on load. Same-day
-// returns still restore. Multi-day returns start fresh (roof analysis needs to
-// be current anyway, and stale tier pricing can drift with catalogue updates).
-// Chosen 24h: covers "abandoned mid-flow yesterday, resumed this morning" but
-// not "bookmarked and returned in a week."
-const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+// Drafts older than this are treated as stale and discarded on load.
+// Fix (2026-08-27): shortened from 24h → 1h. The prior 24h horizon led
+// to a real UX complaint — customer starts a quote today, comes back
+// tomorrow (server restart, next-day visit, etc.) and clicks "Get Quote"
+// expecting a fresh flow, but silently lands on yesterday's stale
+// analysis at Step 4. 1h TTL covers the legitimate "bathroom break /
+// coffee run" resume case while forcing anything older to start fresh.
+// The homepage/nav Get Quote links ALSO pass ?fresh=1 to guarantee a
+// clean start regardless of draft state (see WebsiteNav updates).
+const DRAFT_TTL_MS = 60 * 60 * 1000;
 function serialiseDraft({ stepIdx, usage, address, analysis, design, chosenTier, contact, submitted }) {
   try {
     const safe = {

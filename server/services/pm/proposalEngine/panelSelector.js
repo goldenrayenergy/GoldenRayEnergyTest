@@ -52,7 +52,7 @@ function summarizeAlt(c, targetKwp) {
   };
 }
 
-export function selectPanel({ catalogue, targetKwp }) {
+export function selectPanel({ catalogue, targetKwp, panelsExact = null }) {
   if (!catalogue?.PANELS) {
     return {
       sku: null, panel: null,
@@ -81,7 +81,26 @@ export function selectPanel({ catalogue, targetKwp }) {
   candidates.sort((a, b) => (b.watts - a.watts) || (a.dollars_per_kwp - b.dollars_per_kwp));
 
   const best = candidates[0];
-  const panelsNeeded = targetKwp ? Math.ceil(targetKwp / (best.watts / 1000)) : null;
+
+  // Bug 2 fix (2026-08-26): when the caller has an EXACT panel count in
+  // mind (customer dragged the panels slider), use it verbatim instead
+  // of round-tripping panels → targetKwp → ceil(kwp/kwpPerPanel), which
+  // silently over-panels by 1 due to float compounding
+  // (e.g. 23 × 595 W → 13.685 kWp; 13.685 / 0.595 === 23.00000000004
+  // in JS → Math.ceil → 24). targetKwp is still honoured when
+  // panelsExact isn't set (recommendation path).
+  const panelsExactSafe = Number.isFinite(panelsExact) && panelsExact >= 1
+    ? Math.floor(panelsExact)
+    : null;
+  const panelsNeeded = panelsExactSafe != null
+    ? panelsExactSafe
+    : (targetKwp ? Math.ceil(targetKwp / (best.watts / 1000)) : null);
+  // Report the ACTUAL target the count implies when panelsExact drove
+  // the count — otherwise downstream size checks (inverter DC/AC) see
+  // a stale higher targetKwp and pick the wrong inverter.
+  const effectiveTargetKwp = panelsExactSafe != null
+    ? +(panelsExactSafe * best.watts / 1000).toFixed(3)
+    : targetKwp;
 
   return {
     sku: best.sku,
@@ -89,11 +108,13 @@ export function selectPanel({ catalogue, targetKwp }) {
     reason_code: 'selected',
     reason: `Highest-wattage panel with full specs: ${best.name} (${best.watts}W) at ` +
             `$${r0(best.dollars_per_kwp)}/kWp.${
-              targetKwp ? ` Needs ~${panelsNeeded} panels for ${r2(targetKwp)} kWp target.` : ''
+              panelsExactSafe != null
+                ? ` Customer-set count: ${panelsExactSafe} panels (${r2(effectiveTargetKwp)} kWp).`
+                : (targetKwp ? ` Needs ~${panelsNeeded} panels for ${r2(targetKwp)} kWp target.` : '')
             }`,
-    target_kwp: targetKwp ? r2(targetKwp) : null,
+    target_kwp: effectiveTargetKwp ? r2(effectiveTargetKwp) : null,
     panels_needed: panelsNeeded,
     dollars_per_kwp: r0(best.dollars_per_kwp),
-    alternatives: candidates.slice(1, 1 + MAX_ALTERNATIVES).map(c => summarizeAlt(c, targetKwp)),
+    alternatives: candidates.slice(1, 1 + MAX_ALTERNATIVES).map(c => summarizeAlt(c, effectiveTargetKwp)),
   };
 }

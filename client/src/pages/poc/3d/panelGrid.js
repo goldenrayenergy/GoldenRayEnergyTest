@@ -112,7 +112,44 @@ export function pickGridDimensions(target, aspectPref = 1.6, maxCols = Infinity,
  *                  dimensions: {longM, shortM},
  *                  yieldEstEnergyKwh}>}
  */
-export function computePanelGridOnSegment(segment, panelLongM, panelShortM, targetCount) {
+// Ray-cast point-in-polygon test. polygonRing = [[lng, lat], ...].
+function pointInPolygon(lat, lng, ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return true;   // no polygon → don't filter
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    const intersect = ((yi > lat) !== (yj > lat)) &&
+      (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// Mean lat/lng of a polygon ring (simple average of vertices — good enough
+// for the shift heuristic; not the true area centroid).
+function polygonMeanLatLng(ring) {
+  if (!Array.isArray(ring) || !ring.length) return null;
+  let latSum = 0, lngSum = 0;
+  for (const [lng, lat] of ring) { latSum += lat; lngSum += lng; }
+  return { lat: latSum / ring.length, lng: lngSum / ring.length };
+}
+
+/**
+ * Compute the panel grid for a single roof segment.
+ *
+ * @param {object} segment       Google Solar segment (see file header)
+ * @param {number} panelLongM
+ * @param {number} panelShortM
+ * @param {number} targetCount
+ * @param {Array}  [polygonRing] OSM/LINZ building outline as [[lng,lat],…].
+ *                               When supplied, panels are shifted inward and
+ *                               any that still fall outside are dropped —
+ *                               prevents the "panels floating off the roof"
+ *                               bug on houses where Google Solar's segment
+ *                               center sits near a polygon edge.
+ */
+export function computePanelGridOnSegment(segment, panelLongM, panelShortM, targetCount, polygonRing) {
   if (!segment?.center?.latitude || !segment?.center?.longitude) return [];
   if (!Number.isFinite(panelLongM) || panelLongM <= 0) return [];
   if (!Number.isFinite(panelShortM) || panelShortM <= 0) return [];
@@ -194,6 +231,33 @@ export function computePanelGridOnSegment(segment, panelLongM, panelShortM, targ
     // 90% packing inside the face — leave a small setback from every edge.
     maxWidthAlongRidgeM   = segment._faceDimensions.widthAlongRidgeM   * 0.90;
     maxDepthAcrossSlopeM  = segment._faceDimensions.depthAcrossSlopeM  * 0.90;
+
+    // Fix 9 (2026-08-27, refined) — the caller (distributePanels) may
+    // ask for MORE panels than `_faceDimensions` accommodates when
+    // Pass 2 extends a large-area face's allocation beyond Google's
+    // suggested layout footprint. Real installers extend a contiguous
+    // string on a big roughly-square face rather than starting a tiny
+    // one on a dormer.
+    //
+    // GUARD (2026-08-27): only relax on ROUGHLY-SQUARE faces (aspect
+    // ratio < 1.5). Long-thin faces (aspect ≥ 1.5) already reflect the
+    // real face shape — Google's dims aren't conservative, they're
+    // accurate — so isotropic sqrt(area) expansion would push panels
+    // OFF the actual face. Long-thin case validated by
+    // test-panel-grid's "long-thin face caps at grid capacity" test.
+    const shortWithGap = panelShortM + GAP_METRES;
+    const longWithGap  = panelLongM  + GAP_METRES;
+    const currentGridCap =
+      Math.floor(maxWidthAlongRidgeM / longWithGap) *
+      Math.floor(maxDepthAcrossSlopeM / shortWithGap);
+    const faceAspect =
+      Math.max(maxWidthAlongRidgeM, maxDepthAcrossSlopeM) /
+      Math.max(0.1, Math.min(maxWidthAlongRidgeM, maxDepthAcrossSlopeM));
+    if (targetCount > currentGridCap && areaM2 > 0 && faceAspect < 1.5) {
+      const areaBound = 1.3 * Math.sqrt(areaM2);
+      maxWidthAlongRidgeM  = Math.max(maxWidthAlongRidgeM,  areaBound);
+      maxDepthAcrossSlopeM = Math.max(maxDepthAcrossSlopeM, areaBound);
+    }
   } else if (segment?.boundingBox?.sw && segment?.boundingBox?.ne) {
     // Google Solar bbox — LAST-RESORT approximation. bbox is lat/lng
     // axis-aligned and ALWAYS larger than the true rotated face (it's the
@@ -307,6 +371,72 @@ export function computePanelGridOnSegment(segment, panelLongM, panelShortM, targ
       });
     }
   }
+
+  // Polygon-clip pass (Fix 10 / 2026-08-27) — if a building outline was
+  // supplied, ensure every panel's lat/lng falls INSIDE it. Real bug on
+  // e.g. 10 Newnham Terrace Christchurch: Google Solar's segment center
+  // sat 1.6m from the south polygon edge, so the 4.4m half-width grid
+  // extended ~3m past the building outline, causing panels to float in
+  // the alleyway between houses. Two-step fix:
+  //
+  //   1. Compute mean displacement from OUTSIDE panels to INSIDE panels.
+  //      Shift ALL panel positions by that vector so the grid recentres
+  //      into the polygon interior. Iterate up to 3× (each pass typically
+  //      resolves 60-80% of the outside panels; 3 iterations is plenty).
+  //
+  //   2. Any panel that's STILL outside after shifting gets dropped —
+  //      UNLESS the segment centre itself was already outside the
+  //      polygon (Fix 10a / 2026-08-27 regression fix). When the whole
+  //      segment lives outside the parcel (e.g. 31A Hillview Auckland
+  //      where Google Solar identified 3 roof segments all outside the
+  //      customer's small LINZ parcel), clipping every panel drops the
+  //      entire render → the customer sees "17 panels" in the header
+  //      and an empty roof. Better to show the panels where Google
+  //      Solar put them than to show nothing at all. The customer can
+  //      see they're on a neighbouring roof + the survey confirms.
+  //
+  // When no polygon is supplied (LiDAR path uses a different validation
+  // via _faceDimensions, or the segment source didn't hand us one), this
+  // pass is a no-op and behavior is unchanged.
+  const segmentCentreInPolygon =
+    Array.isArray(polygonRing) && polygonRing.length >= 3 &&
+    pointInPolygon(centerLat, centerLng, polygonRing);
+  if (Array.isArray(polygonRing) && polygonRing.length >= 3 &&
+      results.length > 0 && segmentCentreInPolygon) {
+    const shiftIterations = 3;
+    for (let iter = 0; iter < shiftIterations; iter++) {
+      let insideLatSum = 0, insideLngSum = 0, insideN = 0;
+      let outsideLatSum = 0, outsideLngSum = 0, outsideN = 0;
+      for (const p of results) {
+        const inside = pointInPolygon(p.center.latitude, p.center.longitude, polygonRing);
+        if (inside) { insideLatSum += p.center.latitude; insideLngSum += p.center.longitude; insideN++; }
+        else        { outsideLatSum += p.center.latitude; outsideLngSum += p.center.longitude; outsideN++; }
+      }
+      if (outsideN === 0) break;   // all fit — done
+      let dLat, dLng;
+      if (insideN > 0) {
+        // Shift toward the inside-panel centroid — the polygon is
+        // "pulling" the grid in this direction.
+        dLat = (insideLatSum / insideN) - (outsideLatSum / outsideN);
+        dLng = (insideLngSum / insideN) - (outsideLngSum / outsideN);
+      } else {
+        // Every panel outside → shift toward the polygon centroid.
+        const cent = polygonMeanLatLng(polygonRing);
+        dLat = cent.lat - (outsideLatSum / outsideN);
+        dLng = cent.lng - (outsideLngSum / outsideN);
+      }
+      // Damped step (0.6) to reduce oscillation.
+      const damp = 0.6;
+      for (const p of results) {
+        p.center.latitude  += dLat * damp;
+        p.center.longitude += dLng * damp;
+      }
+    }
+    // Final filter: drop any panel still outside after shifting.
+    return results.filter(p =>
+      pointInPolygon(p.center.latitude, p.center.longitude, polygonRing));
+  }
+
   return results;
 }
 
@@ -499,72 +629,261 @@ export function selectViableSegments(segments, opts = {}) {
 }
 
 /**
- * Distribute a total target panel count across a set of segments,
- * proportional to each segment's yield-weighted area.
+ * Round 4 (2026-08-26) — Bug 6. Drop segments whose world-space footprints
+ * overlap heavily with another (higher-yield) segment already in the list.
  *
- * Prefers the PRIMARY face only if it can hold all target panels — a
- * multi-face install where 2 grids overlap physically (compact houses with
- * segments <10m apart) looks worse than a clean single-face grid. Only
- * spills to secondary faces when the primary genuinely can't fit target.
+ * WHY: RANSAC on complex roofs (hip, valley, dormered) can produce
+ * multiple planes that pass mergeSimilarSegments' tolerances (different
+ * enough in azimuth) but nonetheless project their panel grids onto
+ * overlapping physical footprints. When distributePanels then allocates
+ * panels to both, we visibly stack panels facing different directions
+ * on top of each other (the user's screenshot for Bug 6).
  *
- * We aim to keep each segment's install size at least 3 panels (fewer
- * panels than that isn't a real string on an MPPT) — if the proportional
- * math gives a segment <3, we drop that segment and re-distribute.
+ * HOW: for each pair of segments, estimate their world-space footprint
+ * rectangles from `_faceDimensions` + centre + azimuth, project both
+ * onto a shared local frame at the higher-ranked segment's centre, and
+ * check bounding-box overlap. If overlap fraction > `overlapPct` of
+ * the smaller segment's area, DROP the smaller one. Runs before
+ * distributePanels so allocation is on the deduped set.
+ *
+ * Silent on segments without _faceDimensions (no data to check) — those
+ * pass through unchanged. Preserves input order for ties.
  *
  * @param {Array}  segments      output of selectViableSegments()
- * @param {number} totalTarget   total panels across all segments
- * @param {number} [minPerSeg=3] min panels per segment (else segment dropped)
- * @param {number} [panelFootprintM2=1.65*0.99]  m² per panel (for capacity check)
+ * @param {object} [opts]
+ * @param {number} [opts.overlapPct=0.5]   drop when >= this fraction of the smaller footprint overlaps a bigger one
+ * @returns {Array}  segments minus the dropped overlapping ones
+ */
+export function deduplicateOverlappingFootprints(segments, opts = {}) {
+  const overlapPct = opts.overlapPct ?? 0.5;
+  if (!Array.isArray(segments) || segments.length < 2) return segments || [];
+
+  // Estimate each segment's footprint centre + half-extents in metres.
+  // Fall back to sqrt(area) when _faceDimensions is absent so a naïve
+  // segment doesn't accidentally deduplicate a good neighbour.
+  const withFootprint = segments.map((s) => {
+    const width = Number(s?._faceDimensions?.widthAlongRidgeM);
+    const depth = Number(s?._faceDimensions?.depthAcrossSlopeM);
+    const areaM2 = Number(s?.stats?.areaMeters2) || 0;
+    const halfW = Number.isFinite(width)  && width  > 0 ? width  / 2 : Math.sqrt(areaM2) * 0.6;
+    const halfD = Number.isFinite(depth)  && depth  > 0 ? depth  / 2 : Math.sqrt(areaM2) * 0.6;
+    // Down-slope azimuth → local axes (u = along ridge, v = up-slope)
+    const azRad = (Number(s?.azimuthDegrees) || 0) * Math.PI / 180;
+    const cosA = Math.cos(azRad), sinA = Math.sin(azRad);
+    return {
+      seg: s,
+      areaM2,
+      halfW, halfD,
+      uAxis: { x: -cosA, y:  sinA },
+      vAxis: { x: -sinA, y: -cosA },
+      centre: s?.center,
+    };
+  });
+
+  const keep = [];
+  const dropped = new Set();
+  for (let i = 0; i < withFootprint.length; i++) {
+    if (dropped.has(i)) continue;
+    const a = withFootprint[i];
+    keep.push(a.seg);
+    for (let j = i + 1; j < withFootprint.length; j++) {
+      if (dropped.has(j)) continue;
+      const b = withFootprint[j];
+      if (!a.centre || !b.centre) continue;
+      // Project b's centre into a's local frame (metres offset).
+      const cosLat = Math.cos(a.centre.latitude * Math.PI / 180);
+      const dxE = (b.centre.longitude - a.centre.longitude) * 111_320 * cosLat;
+      const dyN = (b.centre.latitude  - a.centre.latitude)  * 111_320;
+      const du = dxE * a.uAxis.x + dyN * a.uAxis.y;
+      const dv = dxE * a.vAxis.x + dyN * a.vAxis.y;
+      // Both footprints treated as axis-aligned rectangles in a's frame
+      // (a's own footprint is aligned by construction; b's is approximated
+      // as its size projected — the sizes are conservative half-extents).
+      const overlapU = Math.max(0, Math.min(a.halfW + b.halfW, a.halfW + b.halfW - Math.abs(du)));
+      const overlapV = Math.max(0, Math.min(a.halfD + b.halfD, a.halfD + b.halfD - Math.abs(dv)));
+      const overlapArea = overlapU * overlapV;
+      const bArea = (2 * b.halfW) * (2 * b.halfD);
+      if (bArea > 0 && overlapArea / bArea >= overlapPct) {
+        dropped.add(j);
+      }
+    }
+  }
+  return keep;
+}
+
+/**
+ * Estimate the max panels that physically fit on a segment given its face
+ * dimensions and panel size. Falls back to area-based estimate if
+ * `_faceDimensions` isn't present.
+ *
+ * Round 4-rework (2026-08-26): AREA-only capacity checks silently over-
+ * promised on faces whose actual u×v extent (from LiDAR inliers) was much
+ * smaller than sqrt(area) implied. Tier 2 in Dunedin 45 Highgate got
+ * allocated 13 panels on 21m² faces but only ~5 physically fit → 8 panels
+ * silently dropped. The grid-based check catches this and lets the
+ * spill logic move the surplus to other viable faces.
+ */
+function gridCapacityOf(segment, panelLongM, panelShortM, gapM = 0.02) {
+  const longWithGap  = panelLongM + gapM;
+  const shortWithGap = panelShortM + gapM;
+  if (segment?._faceDimensions?.widthAlongRidgeM > 0
+      && segment._faceDimensions.depthAcrossSlopeM > 0) {
+    // 90% packing inside the face (matches computePanelGridOnSegment's
+    // usable-region calc). Absolute caps also mirror the downstream
+    // rendering fn so this estimate matches what actually gets drawn.
+    const usableWidth = Math.min(segment._faceDimensions.widthAlongRidgeM  * 0.90, 12);
+    const usableDepth = Math.min(segment._faceDimensions.depthAcrossSlopeM * 0.90, 10);
+    const cols = Math.max(0, Math.floor(usableWidth / longWithGap));
+    const rows = Math.max(0, Math.floor(usableDepth / shortWithGap));
+    return cols * rows;
+  }
+  // No LiDAR-derived dims → conservative area-based estimate with 75%
+  // packing (setbacks + walkways). Under-estimates rather than over.
+  const areaM2 = Number(segment?.stats?.areaMeters2) || 0;
+  return Math.floor((areaM2 * 0.75) / (longWithGap * shortWithGap));
+}
+
+/**
+ * Distribute a total target panel count across a set of segments using
+ * NZ industry practice: **orientation-first fill**, not area-weighted
+ * spread.
+ *
+ * Fix 9 (2026-08-27) — rewrite. The pre-fix rank-based algorithm
+ * (`area × orientationFactor`) put panels on the biggest available
+ * face regardless of orientation. On 10 Newnham Terrace Christchurch:
+ * biggest face was 42m² W-facing → won the rank contest against three
+ * smaller N-facing faces (15+10+8m² total). Result: 8 panels on W,
+ * 5 on E, 0 on N. But NZ solar installers ALWAYS prefer N (Southern
+ * hemisphere = N-facing gets ~18% more annual yield per panel), even
+ * if it means splitting the array across multiple smaller N faces.
+ *
+ * New algorithm (matches SEANZ / Master Electricians NZ practice):
+ *   1. Sort faces by orientation priority: N > NE/NW > E/W > (S already
+ *      filtered by selectViableSegments)
+ *   2. Within a priority tier, biggest area wins (matches how installers
+ *      pick between two N faces)
+ *   3. FILL each face to its physical grid capacity in priority order,
+ *      moving to the next-priority face only when the current one is
+ *      full or can't hold the remaining panels within MPPT string limits
+ *   4. Enforce minPerSeg (default 4 — Fronius MPPT minimum, matches
+ *      AS/NZS 4777 typical residential inverters). Skip faces that
+ *      would only hold < 4 panels UNLESS placing the last remnant of
+ *      the target (better to accept a small array than drop panels
+ *      the tier card promises).
+ *
+ * Yield effect (Newnham Terrace before/after):
+ *   Before: 8W + 5E = 13 panels × 0.82 orientation factor = 10.66 effective
+ *   After:  12N + 1E                = 12 × 1.0 + 1 × 0.82 = 12.82 effective
+ *   → ~20% more annual generation for the SAME 13 panels, just placed
+ *     according to NZ standard.
+ *
+ * @param {Array}  segments       output of selectViableSegments()
+ * @param {number} totalTarget    total panels across all segments
+ * @param {number} [minPerSeg=4]  min panels per segment (matches Fronius MPPT string minimum)
+ * @param {number} [panelFootprintM2=1.65*0.99]  m² per panel — kept for API compat
+ * @param {number} [panelLongM=1.65]    panel long side (metres) — needed for grid capacity
+ * @param {number} [panelShortM=0.99]   panel short side (metres) — needed for grid capacity
  * @returns {Array<{segment, count}>}
  */
-export function distributePanels(segments, totalTarget, minPerSeg = 3, panelFootprintM2 = 1.65 * 0.99) {
+export function distributePanels(segments, totalTarget, minPerSeg = 4, panelFootprintM2 = 1.65 * 0.99, panelLongM = 1.65, panelShortM = 0.99) {
   if (!Array.isArray(segments) || segments.length === 0) return [];
   if (!Number.isFinite(totalTarget) || totalTarget <= 0) return [];
 
-  // PRIMARY-FACE-FIRST: if the largest segment (top-ranked) can fit the
-  // full target with realistic packing (75% for setbacks + walkways),
-  // don't spread to secondary faces — they'd overlap physically on a
-  // compact house.
-  const primary = segments[0];
-  const primaryUsableM2 = (primary?.stats?.areaMeters2 || 0) * 0.75;
-  const primaryCapacity = Math.floor(primaryUsableM2 / panelFootprintM2);
-  if (primaryCapacity >= totalTarget) {
-    return [{ segment: primary, count: totalTarget }];
+  const pLong  = Number.isFinite(panelLongM)  && panelLongM  > 0 ? panelLongM  : Math.sqrt(panelFootprintM2 * 1.6);
+  const pShort = Number.isFinite(panelShortM) && panelShortM > 0 ? panelShortM : Math.sqrt(panelFootprintM2 / 1.6);
+
+  // NZ industry priority: N first, then near-N (NE/NW), then E/W.
+  // S is already filtered out by selectViableSegments. Unknown
+  // orientation falls to the bottom (safety default).
+  const PRIORITY = { N: 0, NE: 1, NW: 1, E: 2, W: 2, S: 3 };
+  const sorted = [...segments].sort((a, b) => {
+    const pA = PRIORITY[a._viability?.orientation] ?? 99;
+    const pB = PRIORITY[b._viability?.orientation] ?? 99;
+    if (pA !== pB) return pA - pB;
+    // Within priority tier: bigger area wins (matches installer preference
+    // to concentrate an array on the biggest available face of the same
+    // orientation).
+    return (b?.stats?.areaMeters2 || 0) - (a?.stats?.areaMeters2 || 0);
+  });
+
+  // Pass 1: fill in priority order (N > NE/NW > E/W), enforcing MPPT
+  // string minimum on every face. Faces below minPerSeg are skipped
+  // for now — if we still have panels remaining after Pass 1 they get
+  // filled in Pass 2 as sub-min arrays (better than dropping panels).
+  //
+  // Note (2026-08-27) — tried relaxing minPerSeg for N/NE/NW to force
+  // more N-facing placement. Reverted: on complex hip roofs where the
+  // N sections are tiny (e.g. 10 Newnham Terrace Christchurch: 15.5m²
+  // face with Google-derived _faceDimensions = 1-panel cap), the
+  // relaxed version fragmented into 4+ tiny clusters (1+2+4+3) that
+  // looked worse than 2 clean clusters on the bigger NE/W faces
+  // (4+6). Google Solar's per-face _faceDimensions already respects
+  // real-world usable extent (obstructions, chimneys, shading) so
+  // trusting it + enforcing minPerSeg matches real installer practice.
+  const allocations = [];
+  const skipped = [];
+  let remaining = totalTarget;
+  for (const seg of sorted) {
+    if (remaining <= 0) break;
+    const cap = gridCapacityOf(seg, pLong, pShort);
+    if (cap < 1) continue;
+    const alloc = Math.min(remaining, cap);
+    if (alloc < minPerSeg && remaining > alloc) {
+      skipped.push({ seg, cap });
+      continue;
+    }
+    allocations.push({ segment: seg, count: alloc });
+    remaining -= alloc;
   }
 
-  // Iterate: allocate proportionally, drop under-min segments, retry.
-  let pool = [...segments];
-  while (pool.length > 0) {
-    const totalRank = pool.reduce((s, seg) => s + (seg._viability?.rank || seg?.stats?.areaMeters2 || 0), 0);
-    if (totalRank <= 0) return [];
-
-    const raw = pool.map(seg => {
-      const rank = seg._viability?.rank || seg?.stats?.areaMeters2 || 0;
-      return { segment: seg, share: rank / totalRank };
-    });
-    // Largest-remainder method for integer allocation.
-    const rawCounts = raw.map(r => ({ ...r, floatCount: r.share * totalTarget }));
-    const floors = rawCounts.map(r => ({ ...r, count: Math.floor(r.floatCount), remainder: r.floatCount - Math.floor(r.floatCount) }));
-    let allocated = floors.reduce((s, r) => s + r.count, 0);
-    // Distribute the leftover panels one-by-one to segments with largest fractional parts.
-    const leftover = totalTarget - allocated;
-    const sortedByRemainder = [...floors].sort((a, b) => b.remainder - a.remainder);
-    for (let i = 0; i < leftover; i++) {
-      sortedByRemainder[i % sortedByRemainder.length].count++;
+  // Pass 2: if panels remain, EXTEND an existing allocation first.
+  //
+  // Real installers extend a contiguous string on a big face beyond
+  // its "ideal" Google-suggested extent BEFORE starting a new small
+  // string on a tiny dormer. `gridCapacityOf` uses `_faceDimensions`
+  // (Google's suggested layout footprint) as the primary cap, but the
+  // physical face area is usually much bigger — a 42m² W face with
+  // Google suggesting cap=6 can physically hold ~14+ panels.
+  //
+  // For each existing allocation, compute the area-based upper bound
+  // and grow the allocation up to that bound (in priority order, so
+  // the higher-priority face grows first). Only if we STILL have
+  // panels left after all extensions do we fall back to sub-minPerSeg
+  // placements on the skipped tiny faces (Pass 3).
+  if (remaining > 0 && allocations.length > 0) {
+    const areaCap = (seg) => {
+      const areaM2 = Number(seg?.stats?.areaMeters2) || 0;
+      const longWithGap  = pLong  + GAP_METRES;
+      const shortWithGap = pShort + GAP_METRES;
+      return Math.floor((areaM2 * 0.75) / (longWithGap * shortWithGap));
+    };
+    for (const a of allocations) {
+      if (remaining <= 0) break;
+      const room = Math.max(0, areaCap(a.segment) - a.count);
+      const extra = Math.min(remaining, room);
+      if (extra > 0) {
+        a.count += extra;
+        remaining -= extra;
+      }
     }
-
-    // Enforce min per segment.
-    const underMin = floors.find(r => r.count < minPerSeg);
-    if (!underMin) {
-      return floors.map(r => ({ segment: r.segment, count: r.count }));
-    }
-    // Drop the smallest under-min segment (by share) and retry.
-    const worst = floors
-      .filter(r => r.count < minPerSeg)
-      .sort((a, b) => a.share - b.share)[0];
-    pool = pool.filter(seg => seg !== worst.segment);
   }
-  return [];
+
+  // Pass 3: final fallback — accept sub-minPerSeg allocations on
+  // previously-skipped tiny faces. Only reached if the priority-face
+  // extensions in Pass 2 couldn't absorb the remainder. Prevents a
+  // rendered/quoted-count mismatch.
+  if (remaining > 0 && skipped.length > 0) {
+    skipped.sort((a, b) => b.cap - a.cap);
+    for (const { seg, cap } of skipped) {
+      if (remaining <= 0) break;
+      const alloc = Math.min(remaining, cap);
+      if (alloc < 1) continue;
+      allocations.push({ segment: seg, count: alloc });
+      remaining -= alloc;
+    }
+  }
+
+  return allocations;
 }
 
 // Exported constants so tests + callers can reference them.

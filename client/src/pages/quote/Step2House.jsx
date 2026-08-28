@@ -54,12 +54,35 @@ export default function Step2House({ usage, address, onChange, onContinue, onBac
   // Once the customer clicks "Confirm this is my house" in the PreviewStage
   // map, we advance. The pin position (may differ from the geocoded coord)
   // rides along in our address state so Step 3 can use it for roof analysis.
-  const handleFinalConfirm = useCallback((pin) => {
+  //
+  // Fix (2026-08-27) — pin-drag address propagation. PreviewStage now
+  // passes the REVERSE-GEOCODED address for the pin position as a
+  // second arg. When the pin was moved to a place with a different
+  // address, we OVERWRITE formattedAddress with the pinned one so
+  // Step 4's "Designed for X" heading reflects reality, not the
+  // originally-typed address. Without this the customer sees:
+  //   "Designed for 7 Kent Street" (typed)
+  //   ... even though panels are drawn on 12 Kent Street (pinned).
+  const handleFinalConfirm = useCallback((pin, reverseAddress) => {
+    const pinAdjusted = pin.lat !== confirmedPlace.latitude
+                     || pin.lng !== confirmedPlace.longitude;
+    // Use the pinned address when we have one AND it actually differs
+    // from the typed address (a customer nudging within the same
+    // rooftop shouldn't lose their typed address).
+    const usePinnedAddress = pinAdjusted
+      && reverseAddress?.formattedAddress
+      && reverseAddress.formattedAddress.trim() !== (confirmedPlace.formattedAddress || '').trim();
+
     const finalAddress = {
       ...confirmedPlace,
       latitude:  pin.lat,
       longitude: pin.lng,
-      pinAdjusted: (pin.lat !== confirmedPlace.latitude || pin.lng !== confirmedPlace.longitude),
+      pinAdjusted,
+      ...(usePinnedAddress ? {
+        formattedAddress: reverseAddress.formattedAddress,
+        place_id:         reverseAddress.place_id || confirmedPlace.place_id,
+        _originalTypedAddress: confirmedPlace.formattedAddress,   // keep breadcrumb for admin
+      } : {}),
     };
     onChange(finalAddress);
     onContinue();

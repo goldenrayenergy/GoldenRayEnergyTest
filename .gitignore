@@ -24,3 +24,5 @@ server/scripts/out/
 server/scripts/test-output/
 server/scripts/e2e-phase3-out/
 server/scripts/_*-out/
+server/scripts/fix9-out/
+server/scripts/tmp-*.mjs

@@ -29,6 +29,9 @@ import { queryBuildingsNear,
          buildingContaining,
          nearestBuilding }                    from '../services/linz/buildingOutlines.js';
 import { queryOsmBuildingsNear }              from '../services/osm/buildingOutlines.js';
+import { queryParcelsNear,
+         parcelContaining,
+         nearestParcel }                      from '../services/linz/parcels.js';
 import { analyseRoofFromLidar }               from '../services/linz/lidarAnalyseRoof.js';
 import { getPvgisClient }                     from '../services/pvgis/pvgisClient.js';
 import { computePvgisYieldForSegments }       from '../services/pvgis/pvgisSegmentYield.js';
@@ -40,21 +43,72 @@ import { computePvgisYieldForSegments }       from '../services/pvgis/pvgisSegme
 async function findCustomerBuilding({ latitude, longitude }) {
   const tried = [];
 
+  // Round 4 (2026-08-26) — Bug 7/8. Threshold for "nearest building
+  // is close enough to be this address" was 15m. That threshold was
+  // tuned against dense Auckland/Wellington neighbourhoods where every
+  // rooftop is in OSM and picking the wrong neighbour is a real risk.
+  //
+  // In sparse-OSM areas (Queenstown, Kāpiti Coast, new subdivisions
+  // anywhere) the ACTUAL customer roof is often absent from OSM and
+  // the "nearest" candidate is a neighbour 20-25m away. The old 15m
+  // gate rejected these — the pipeline then fell through to LiDAR
+  // with a synthesised polygon centred on the Places pin, which
+  // frequently sits in the driveway, not on the roof.
+  //
+  // NEW: two-tier acceptance. If OSM/LINZ returned MANY candidates in
+  // the 40m search (dense area), keep the strict 15m gate. If only 1-2
+  // candidates came back (sparse area), loosen to 25m. Threshold picked
+  // so a rural plot with two houses on the section still lands on the
+  // right one, while a suburban address with 8 neighbours doesn't
+  // accidentally match the next-door lot.
+  const acceptDistance = (buildings) => (buildings.length >= 3 ? 15 : 25);
+
+  // 0. LINZ Parcels — TRIED FIRST (2026-08-27). The NZ cadastral dataset
+  //    (LINZ layer 50823) gives the LEGAL per-property boundary. For
+  //    unit-titled townhouses, semi-detached homes, and cross-lease
+  //    developments — ~20-30% of urban NZ housing — this is the ONLY
+  //    source that isolates the customer's specific unit. Building
+  //    outlines (both OSM and LINZ layer 101290) merge all units in a
+  //    row into a single physical-structure polygon, causing panels to
+  //    render on the wrong unit's roof (10 Newnham Terrace bug).
+  //
+  //    Only accept the CONTAINING parcel — no "nearest" fallback. If
+  //    Places lat/lng doesn't fall inside any parcel, the address is
+  //    probably rural / newly-subdivided / on shared land, and building
+  //    outlines are more appropriate. Also skip if the containing parcel
+  //    is HUGE (>5000 m²) — that's a farm / reserve / school, where the
+  //    physical building polygon is more useful than the whole land.
+  try {
+    const parcels = await queryParcelsNear({ latitude, longitude, radiusMeters: 30 });
+    tried.push({ source: 'linz-parcel', ok: parcels.ok, count: parcels.parcels?.length ?? 0, error: parcels.error || null });
+    if (parcels.ok && parcels.parcels.length > 0) {
+      const containing = parcelContaining(parcels.parcels, latitude, longitude);
+      if (containing && containing.area_m2 > 0 && containing.area_m2 <= 5000) {
+        return {
+          building: containing,
+          source: 'linz-parcel',
+          match_type: 'containing',
+          tried,
+          max_dist_m_used: 0,
+        };
+      }
+    }
+  } catch (e) {
+    // Missing API-key config, network failure, etc. — non-fatal, fall
+    // through to OSM/LINZ Buildings. Logging so we notice silent
+    // regressions (e.g. key rotated but .env not updated).
+    tried.push({ source: 'linz-parcel', ok: false, count: 0, error: e?.message || String(e) });
+  }
+
   // 1. OSM primary
   const osm = await queryOsmBuildingsNear({ latitude, longitude, radiusMeters: 40 });
   tried.push({ source: 'osm', ok: osm.ok, count: osm.buildings?.length ?? 0, error: osm.error || null });
   if (osm.ok && osm.buildings.length > 0) {
     const containing = buildingContaining(osm.buildings, latitude, longitude);
     const nearest    = nearestBuilding(osm.buildings);
-    // Prefer containing (definitely their house); accept nearest within 30m
-    // as a good candidate (Places coords often land in driveway/front-yard).
-    // Tightened threshold — anything >15m from the Places-verified rooftop coord
-// is almost certainly the WRONG building (stale LINZ 2017 data for new
-// subdivisions matches nearby demolished/old structures). Rejecting these
-// keeps us honest — we fall back to the Places coord which is the customer's
-// actual roof per Google.
-const picked = containing || (nearest && nearest.distance_m <= 15 ? nearest : null);
-    if (picked) return { building: picked, source: 'osm', match_type: containing ? 'containing' : 'nearest', tried };
+    const maxDistM   = acceptDistance(osm.buildings);
+    const picked = containing || (nearest && nearest.distance_m <= maxDistM ? nearest : null);
+    if (picked) return { building: picked, source: 'osm', match_type: containing ? 'containing' : 'nearest', tried, max_dist_m_used: maxDistM };
   }
 
   // 2. LINZ fallback
@@ -63,13 +117,9 @@ const picked = containing || (nearest && nearest.distance_m <= 15 ? nearest : nu
   if (linz.ok && linz.buildings.length > 0) {
     const containing = buildingContaining(linz.buildings, latitude, longitude);
     const nearest    = nearestBuilding(linz.buildings);
-    // Tightened threshold — anything >15m from the Places-verified rooftop coord
-// is almost certainly the WRONG building (stale LINZ 2017 data for new
-// subdivisions matches nearby demolished/old structures). Rejecting these
-// keeps us honest — we fall back to the Places coord which is the customer's
-// actual roof per Google.
-const picked = containing || (nearest && nearest.distance_m <= 15 ? nearest : null);
-    if (picked) return { building: picked, source: 'linz', match_type: containing ? 'containing' : 'nearest', tried };
+    const maxDistM   = acceptDistance(linz.buildings);
+    const picked = containing || (nearest && nearest.distance_m <= maxDistM ? nearest : null);
+    if (picked) return { building: picked, source: 'linz', match_type: containing ? 'containing' : 'nearest', tried, max_dist_m_used: maxDistM };
   }
 
   return { building: null, source: null, match_type: null, tried };
@@ -314,7 +364,38 @@ async function _analyse(req, res) {
     parsed = parseBuildingInsightsResponse(solarResp.data);
     segments.push(...(parsed.roof_segments || []));
     sourceTag = solarResp.source;
-  } else {
+
+    // Layer 2 (2026-08-27) — validate that Google Solar's identified
+    // segments are ON the customer's LINZ parcel. If NONE of the segment
+    // centres fall inside the parcel, Google Solar identified the wrong
+    // building (e.g. 6 Woodacre Street Flat Bush Auckland: 9 segments
+    // all 14-35m from Places pin, all outside the 401m² parcel — they're
+    // on neighbouring rooftops). Force LiDAR fallback in that case —
+    // LiDAR uses the LINZ parcel polygon as its RANSAC boundary so
+    // segments are guaranteed on the customer's actual roof.
+    const parcelRing = buildingLookup.building?.polygon?.[0];
+    if (Array.isArray(parcelRing) && parcelRing.length >= 3 && segments.length > 0) {
+      const pip = (lat, lng) => {
+        let inside = false;
+        for (let i = 0, j = parcelRing.length - 1; i < parcelRing.length; j = i++) {
+          const xi = parcelRing[i][0], yi = parcelRing[i][1];
+          const xj = parcelRing[j][0], yj = parcelRing[j][1];
+          if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+        }
+        return inside;
+      };
+      const insideCount = segments.filter(s => pip(s?.center?.latitude, s?.center?.longitude)).length;
+      if (insideCount === 0) {
+        console.log(`[poc/roof/analyse] Google Solar returned ${segments.length} segments but 0 inside LINZ parcel — forcing LiDAR fallback`);
+        fallbackReason = 'segments_outside_parcel';
+        parsed = null;
+        segments.length = 0;
+        solarResp = null;
+      }
+    }
+  }
+
+  if (!solarResp) {
     // LiDAR path — Google Solar was either absent or overridden.
     const outerRing = buildingLookup.building?.polygon?.[0] || null;
     const lidar = await analyseRoofFromLidar({
@@ -342,9 +423,10 @@ async function _analyse(req, res) {
           },
         },
       };
-    } else if (fallbackReason === 'no_verified_building') {
-      // LiDAR override failed — roll back to Google Solar (stale but present).
-      console.log('[poc/roof/analyse] LiDAR override failed, rolling back to Google Solar (stale but present):', lidar.error);
+    } else if (fallbackReason === 'no_verified_building' || fallbackReason === 'segments_outside_parcel') {
+      // LiDAR override failed — roll back to Google Solar (imperfect but present).
+      // Any render is better than no render — customer can see something + book survey.
+      console.log(`[poc/roof/analyse] LiDAR override failed (fallbackReason=${fallbackReason}), rolling back to Google Solar:`, lidar.error);
       for (const quality of cascade) {
         const r = await getSolarClient().buildingInsights({
           latitude: solarLookupCoord.latitude, longitude: solarLookupCoord.longitude, requiredQuality: quality,
@@ -362,11 +444,28 @@ async function _analyse(req, res) {
       fallbackReason = 'lidar_failed_reverted_to_stale_google';
     } else {
       // Google Solar 404 + LiDAR failed — no data anywhere.
+      // Round 4 (2026-08-26) — include the diagnostics block on error too
+      // so the client's "we could not analyse this roof" card can render
+      // which specific stage broke (building not found vs LiDAR gate hit
+      // vs Cesium sample failure). Without this the UI has no way to
+      // distinguish "we don't have data here" from "we had data but the
+      // algorithm rejected it."
       return res.status(404).json({
         error: `No solar imagery from Google AND LiDAR fallback failed: ${lidar.error}`,
         coords: { latitude: geo.latitude, longitude: geo.longitude },
         formattedAddress: geo.formattedAddress,
         building_lookup: buildingLookup,
+        roof_analysis_diagnostics: {
+          source_pipeline:       'none',
+          fallback_reason:       'both_pipelines_failed',
+          google_solar_error:    'no_imagery_at_coord',
+          lidar_error:           lidar.error,
+          building_source:       buildingLookup.source,
+          building_match_type:   buildingLookup.match_type,
+          building_distance_m:   buildingLookup.building?.distance_m ?? null,
+          building_candidates: (buildingLookup.tried || []).reduce(
+            (acc, t) => { acc[t.source] = t.count; return acc; }, {}),
+        },
       });
     }
   }
@@ -413,6 +512,24 @@ async function _analyse(req, res) {
       ))
     : null;
 
+  // Layer 1 (2026-08-27) — Places-vs-parcel-centroid offset. If Google
+  // Places geocodes the address to a spot far from the LINZ parcel's
+  // centroid, Google Solar will identify roof segments on the wrong
+  // building (e.g. 31A Hillview Auckland: 16m offset → panels on
+  // neighbour). Client uses this to require pin-drag confirmation
+  // before running the analyse — see PreviewStage / Step 2 gating.
+  const placesVsParcelShiftM = buildingCenter
+    ? Math.round(Math.sqrt(
+        Math.pow((geo.latitude  - buildingCenter.latitude)  * 111320, 2) +
+        Math.pow((geo.longitude - buildingCenter.longitude) * 111320 * Math.cos(buildingCenter.latitude * Math.PI / 180), 2)
+      ))
+    : null;
+  const PIN_DRAG_THRESHOLD_M = 5;   // above this we ask customer to drag pin
+  const placementConfidence  = placesVsParcelShiftM == null      ? 'unknown'
+                             : placesVsParcelShiftM <= PIN_DRAG_THRESHOLD_M ? 'high'
+                             : placesVsParcelShiftM <= 15                   ? 'medium'
+                             :                                                 'low';
+
   // Week-7 Phase 1: per-address yield from Google Solar's `sunshineQuantiles`.
   // Only produces a value on the Google Solar path (LiDAR-fallback segments
   // don't carry Google's per-pixel sunshine data). When null, we fall through
@@ -457,12 +574,105 @@ async function _analyse(req, res) {
     }
   }
 
+  // Path B (2026-08-26) — hybrid 3D/2D render mode decision. Google's
+  // Photorealistic 3D Tiles have great coverage in major NZ cities
+  // (Auckland, Wellington, Christchurch, Dunedin) but patchy quality in
+  // regional/hillside/rural areas (Queenstown, Kāpiti fringe, small
+  // towns). Rendering the Cesium 3D scene when the underlying mesh is
+  // low-quality produces the "panels floating in sky" complaint — the
+  // panel coords are right but Cesium's mesh doesn't accurately show
+  // the actual building.
+  //
+  // Heuristic: use 3D when Google Solar's own pipeline succeeded (its
+  // imagery + roof-detection is good for this area, which correlates
+  // strongly with Cesium 3D Tiles coverage — Google publishes both from
+  // the same underlying source). Fall back to 2D whenever we had to
+  // resort to LiDAR (which by definition means Google's data for this
+  // spot isn't great, so Cesium tiles are unlikely to be either).
+  //
+  // sourceTag values from the analysis pipeline above:
+  //   'live'  → Google Solar succeeded (also used in the mock-fallback
+  //             path but that only fires in dev without a Google API key)
+  //   'lidar' → LiDAR fallback was used
+  //   'mock'  → mock data (dev only)
+  //
+  // We also require a building polygon to be found + verified as
+  // 'containing' the address pin — that guarantees the panel overlay
+  // has a real footprint to sit on. `nearest` matches are ambiguous
+  // (could be a neighbour), so we conservatively route them to 2D too.
+  // 2026-08-27 (Option 3) — 2D-fallback trigger for cross-lease /
+  // townhouse-row / multi-unit developments where LINZ parcel = shared
+  // land title, not per-unit. Detected via long-thin parcel bbox
+  // (aspect > 3:1). Google Solar's identified segments can land on any
+  // unit within a shared parcel, giving the "panels on my neighbour's
+  // roof" complaint. 2D satellite view removes the 3D perspective bias
+  // and shows the whole parcel at once — customer sees what's being
+  // quoted and book a survey for exact placement.
+  //
+  // NOTE: earlier revision also flipped to 2D when ALL Google Solar
+  // segment centres fell outside the LINZ parcel. Removed: that
+  // over-corrected on legitimate 3D-viable addresses (e.g. 31A Hillview
+  // Auckland) where Google Solar's segments correctly identify the
+  // customer's building even though its centroids sit just outside the
+  // parcel polygon (parcel is L-shaped or Google's roof segmentation
+  // extends slightly past cadastral boundary — both common). Fix 10a
+  // in panelGrid.js already handles the render path safely by skipping
+  // polygon-clip when the segment centre is outside the polygon; no
+  // reason to also flip render mode.
+  const parcelBbox = (() => {
+    const ring = buildingLookup.building?.polygon?.[0];
+    if (!Array.isArray(ring) || ring.length < 3) return null;
+    const lats = ring.map(v => v[1]), lngs = ring.map(v => v[0]);
+    const h = (Math.max(...lats) - Math.min(...lats)) * 111320;
+    const cosLat = Math.cos((lats[0] || 0) * Math.PI / 180);
+    const w = (Math.max(...lngs) - Math.min(...lngs)) * 111320 * cosLat;
+    return {
+      heightM: h,
+      widthM:  w,
+      aspect:  Math.max(h, w) / Math.max(0.1, Math.min(h, w)),
+    };
+  })();
+  const parcelIsMultiUnit = parcelBbox && parcelBbox.aspect > 3;
+
+  const segCentresOutsidePolygon = (() => {
+    const ring = buildingLookup.building?.polygon?.[0];
+    const segs = segments || [];   // locally-populated array from Google Solar / LiDAR
+    if (!Array.isArray(ring) || ring.length < 3 || segs.length === 0) return false;
+    // Reuse the same ray-cast the parcels module exports.
+    const pip = (lat, lng) => {
+      let inside = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+        if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+      }
+      return inside;
+    };
+    const insideCount = segs.filter(s => pip(s?.center?.latitude, s?.center?.longitude)).length;
+    return insideCount === 0;
+  })();
+
+  const goodFor3D = sourceTag === 'live'
+                 && buildingLookup.building
+                 && buildingLookup.match_type === 'containing'
+                 && !parcelIsMultiUnit;
+  const renderMode = goodFor3D ? '3d' : '2d';
+  const renderModeReason = goodFor3D ? '3d-viable'
+    : (sourceTag !== 'live'                              ? '2d-not-live'
+    :  !buildingLookup.building                          ? '2d-no-building'
+    :  buildingLookup.match_type !== 'containing'        ? '2d-nearest-only'
+    :  parcelIsMultiUnit                                 ? '2d-multi-unit-parcel'
+    : '2d-unknown');
+
   return res.json({
     formattedAddress: geo.formattedAddress,
     coords:           { latitude: geo.latitude, longitude: geo.longitude },
     geocode_quality:  geo.quality,
     solar_source:     solarResp.source,   // 'live' | 'mock'
     used_quality:     usedQuality,
+    // Path B (2026-08-26) — '3d' = Cesium Photorealistic; '2d' = aerial
+    // satellite + SVG panel overlay. Client renders whichever the server
+    // recommends based on data-quality signals.
+    render_mode:      renderMode,
     imagery: {
       quality: parsed.imagery_quality,
       date:    parsed.imagery_date,
@@ -487,6 +697,8 @@ async function _analyse(req, res) {
       building_lookup_attempts:         buildingLookup.tried,   // diagnostic
       google_center:                    googleCenter,
       google_vs_building_shift_m:       googleVsBuildingShiftM, // >30m = mismatch
+      places_vs_parcel_shift_m:         placesVsParcelShiftM,   // Layer 1 pin-drag gating
+      placement_confidence:             placementConfidence,    // 'high' | 'medium' | 'low' | 'unknown'
       solar_lookup_coord:               solarLookupCoord,       // what we sent to Google Solar
       authoritative_center:             authoritativeCenter,    // what the aerial + overlay use
       segments,   // full array so the client can render per-face stats later
@@ -504,6 +716,34 @@ async function _analyse(req, res) {
       // LiDAR-fallback diagnostics (null when Google Solar succeeded).
       // Includes STAC lookup URL, point counts, RANSAC plane count, timings.
       lidar_diagnostics: lidarDiagnostics,
+      // Round 4 (2026-08-26) — Bug 7/8. Consolidated diagnostic block so
+      // the UI can render a single "what happened" panel in the error
+      // card (and, optionally, a debug section on success). Aggregates
+      // the shape-of-failure across all upstream stages so QA can tell
+      // building-match vs LiDAR-gate vs mesh-sample failures apart
+      // without needing to spelunk Render logs.
+      roof_analysis_diagnostics: {
+        source_pipeline:            sourceTag,               // 'google' | 'lidar' | 'mock'
+        fallback_reason:            fallbackReason,          // 'no_verified_building' | ...
+        used_quality:               usedQuality || null,     // Google Solar quality tier
+        building_source:            buildingLookup.source,   // 'osm' | 'linz' | 'linz-parcel' | null
+        building_match_type:        buildingLookup.match_type,
+        building_distance_m:        buildingLookup.building?.distance_m ?? null,
+        building_match_max_dist_m:  buildingLookup.max_dist_m_used ?? null,
+        building_candidates: (buildingLookup.tried || []).reduce(
+          (acc, t) => { acc[t.source] = t.count; return acc; }, {}),
+        google_vs_building_shift_m: googleVsBuildingShiftM,
+        segments_detected:          segments.length,
+        // Render-mode decision trace (Option 3 / 2026-08-27)
+        render_mode:                renderMode,
+        render_mode_reason:         renderModeReason,
+        parcel_bbox:                parcelBbox,              // {heightM, widthM, aspect}
+        parcel_is_multi_unit:       parcelIsMultiUnit,       // aspect > 3
+        seg_centres_outside_parcel: segCentresOutsidePolygon,
+        // LiDAR-only sub-block (null on Google path)
+        lidar: lidarDiagnostics,
+        pvgis: pvgisDiagnostics,
+      },
       // Which data source we actually used + why we made that choice.
       // 'google' | 'lidar' | 'mock', plus the fallback trigger reason.
       source: sourceTag,
@@ -528,6 +768,68 @@ async function _analyse(req, res) {
     },
   });
 }
+
+// ── Parcel lookup (Layer 1 / 2026-08-27) ──────────────────────────────────
+// GET /api/roof/parcel-check?lat=&lng=
+//
+// Lightweight, cache-friendly lookup used by the Step 2 pin-drag UI to
+// decide whether to gate the "Confirm this is my house" button. Returns:
+//   {
+//     places_lat, places_lng,          — echo of query
+//     parcel: null | {                 — LINZ Parcels layer 50823
+//       polygon,                       — [[[lng,lat],...]] rings
+//       centroid: {lat, lng},
+//       area_m2,
+//     },
+//     offset_m: number|null,           — metres from query point to parcel centroid
+//     confidence: 'high'|'medium'|'low'|'unknown',
+//     contains_query: bool,            — is the query point INSIDE the parcel?
+//   }
+// Called on: initial pin drop, every pin drag, every map click.
+// No Google Solar quota consumed. LINZ Parcels only.
+router.get('/parcel-check', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  if (Number.isNaN(lat) || Number.isNaN(lng)) {
+    return res.status(400).json({ error: 'lat, lng required' });
+  }
+  try {
+    const r = await queryParcelsNear({ latitude: lat, longitude: lng, radiusMeters: 30 });
+    if (!r.ok) return res.status(r.status || 502).json({ error: r.error });
+    const containing = parcelContaining(r.parcels, lat, lng);
+    const picked = containing || nearestParcel(r.parcels);
+    if (!picked) {
+      return res.json({
+        places_lat: lat, places_lng: lng,
+        parcel: null,
+        offset_m: null,
+        confidence: 'unknown',
+        contains_query: false,
+      });
+    }
+    const dLat = (lat - picked.centroid.latitude) * 111320;
+    const dLng = (lng - picked.centroid.longitude) * 111320 * Math.cos(lat * Math.PI / 180);
+    const offsetM = Math.round(Math.sqrt(dLat * dLat + dLng * dLng));
+    const containsQuery = !!containing;
+    const confidence = !containsQuery ? 'low'
+                     : offsetM <= 5   ? 'high'
+                     : offsetM <= 15  ? 'medium'
+                     :                  'low';
+    return res.json({
+      places_lat: lat, places_lng: lng,
+      parcel: {
+        polygon:  picked.polygon,
+        centroid: picked.centroid,
+        area_m2:  picked.area_m2,
+      },
+      offset_m: offsetM,
+      confidence,
+      contains_query: containsQuery,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e) });
+  }
+});
 
 // ── DEBUG endpoint (Slice 4a) ─────────────────────────────────────────────
 // GET /api/poc/roof/linz-buildings?lat=&lng=&radius=
