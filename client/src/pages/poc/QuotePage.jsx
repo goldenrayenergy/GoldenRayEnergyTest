@@ -15,6 +15,7 @@
 
 import { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { publicApi } from '../../services/api';
+import { buildApiImageUrl } from '../../services/apiImageUrl.js';
 import {
   Upload, FileText, Loader2, CheckCircle, AlertTriangle, Sparkles, RefreshCw,
   MapPin, Home, Sun, LayoutGrid, ArrowLeft, Search, X,
@@ -2047,7 +2048,12 @@ function MaterialStage({ analysis, material, onPick, onBack, onConfirm, designin
   const { coords, formattedAddress } = analysis;
   const [svError, setSvError] = useState(null);
 
-  const svUrl = `/api/aerial/streetview?lat=${coords.latitude}&lng=${coords.longitude}&size=640x480&pitch=15`;
+  // Fix (2026-09-01) — prefix VITE_API_BASE_URL so this <img src> reaches
+  // the Render backend on Vercel-hosted prod (same bug as Aerial2DPanelView).
+  const svUrl = buildApiImageUrl(
+    import.meta.env.VITE_API_BASE_URL || '',
+    `/api/aerial/streetview?lat=${coords.latitude}&lng=${coords.longitude}&size=640x480&pitch=15`,
+  );
 
   return (
     <div>

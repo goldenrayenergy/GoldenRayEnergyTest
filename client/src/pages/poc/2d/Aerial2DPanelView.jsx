@@ -32,6 +32,7 @@ import {
   deduplicateOverlappingFootprints,
   annotateOpposingFaces,
 } from '../3d/panelGrid.js';
+import { buildApiImageUrl } from '../../../services/apiImageUrl.js';
 
 // ── Config ─────────────────────────────────────────────────────────────
 // Google Static Maps free-tier limit is 640×640 (with paid API key we
@@ -165,7 +166,16 @@ export function Aerial2DPanelView({
   // Google Static Maps satellite through our existing proxy — hides the
   // API key + centralises billing. Path B uses zoom 20 for close-up
   // panel-scale detail. Format-8-bit satellite for max detail.
-  const aerialUrl = `/api/aerial/google?lat=${centerLat}&lng=${centerLng}&zoom=${ZOOM}&size=${IMG_SIZE}x${IMG_SIZE}&marker=0`;
+  //
+  // Fix (2026-09-01) — prefix VITE_API_BASE_URL so the <img src> resolves
+  // to the Render backend on Vercel-hosted prod. Without this, the plain
+  // relative path resolves to the Vercel frontend origin which returns
+  // index.html (SPA fallback) → browser can't render HTML as a JPEG →
+  // blank image tile (whole 2D fallback view breaks).
+  const aerialUrl = buildApiImageUrl(
+    import.meta.env.VITE_API_BASE_URL || '',
+    `/api/aerial/google?lat=${centerLat}&lng=${centerLng}&zoom=${ZOOM}&size=${IMG_SIZE}x${IMG_SIZE}&marker=0`,
+  );
 
   return (
     <div className="w-full">

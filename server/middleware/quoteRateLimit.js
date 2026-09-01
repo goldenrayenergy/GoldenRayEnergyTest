@@ -33,6 +33,7 @@
 // stays self-contained.
 
 import { supabaseAdmin } from '../config/supabase.js';
+import { getClientIp } from './getClientIp.js';
 
 const MAX_ADDRESSES_PER_DAY = 3;
 const ADMIN_COOKIE_NAME = 'gr-admin-bypass';
@@ -130,7 +131,12 @@ export function createQuoteRateLimit(supabase) {
       return next();
     }
 
-    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    // Fix (2026-09-01) — `req.ip` returns Render's internal proxy IP (10.x)
+    // on the Vercel-frontend/Render-backend deploy chain because Express
+    // `trust proxy 1` only walks ONE hop. getClientIp() parses
+    // X-Forwarded-For explicitly and returns the first non-private IP,
+    // which is the customer's real public IP regardless of hop count.
+    const ip = getClientIp(req);
     const key = addressKey(req.body || {});
     const today = todayNZDate();
 
