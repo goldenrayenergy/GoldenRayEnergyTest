@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../../services/api';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
@@ -37,6 +38,25 @@ export default function AdminPage() {
           ))}
         </div>
       </Card>
+      <Card
+        title="Address polygon overrides"
+        subtitle="Manual per-address roof polygons for stubborn addresses"
+        action={
+          <Link
+            to="/portal/admin/polygon-overrides"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition"
+          >
+            Manage overrides →
+          </Link>
+        }
+      >
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          When Google Solar identifies the wrong roof for an address (townhouse rows, new
+          builds, unusual property shapes), draw the correct polygon here. The roof
+          analysis pipeline uses your override for all future quotes at that location.
+        </p>
+      </Card>
+
       <Card title="Team" subtitle="Employees">
         {users.map(u => {
           const r = ROLES[u.role] || { label: u.role, color: '#888' };
