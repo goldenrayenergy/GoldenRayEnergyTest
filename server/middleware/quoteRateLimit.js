@@ -36,6 +36,14 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { getClientIp } from './getClientIp.js';
 
 const MAX_ADDRESSES_PER_DAY = 3;
+// Demo-day override (2026-09-01) — owner can set these on Render to raise
+// the cap for one specific NZ date without a redeploy. Set BOTH env vars:
+//   DEMO_UNLIMITED_NZ_DATE=YYYY-MM-DD   (e.g. 2026-09-02 for tomorrow's demo)
+//   DEMO_MAX_ADDRESSES=30               (defaults to 30 if only date is set)
+// Cap auto-reverts to 3 after that NZ date. Both env vars can be deleted
+// after the demo, or left in place — the date check makes them inert
+// until they match today.
+const DEMO_MAX_ADDRESSES_DEFAULT = 30;
 const ADMIN_COOKIE_NAME = 'gr-admin-bypass';
 const ADMIN_COOKIE_VALUE = '1';
 const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;   // every 6 hours
@@ -57,6 +65,20 @@ if (typeof setInterval === 'function') {
     }
   }, CLEANUP_INTERVAL_MS);
   cleanupTimer.unref?.();
+}
+
+/**
+ * Return the current effective cap on unique addresses per day.
+ * Base value is MAX_ADDRESSES_PER_DAY (3), raised for a single NZ date
+ * when the DEMO_UNLIMITED_NZ_DATE env var matches today. Read from env
+ * per-call so operator can toggle without a restart.
+ */
+export function currentMaxAddressesPerDay() {
+  const demoDate = process.env.DEMO_UNLIMITED_NZ_DATE || '';
+  if (!demoDate) return MAX_ADDRESSES_PER_DAY;
+  if (todayNZDate() !== demoDate) return MAX_ADDRESSES_PER_DAY;
+  const parsed = Number(process.env.DEMO_MAX_ADDRESSES);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEMO_MAX_ADDRESSES_DEFAULT;
 }
 
 /** Current calendar date in Pacific/Auckland as YYYY-MM-DD. */
@@ -159,13 +181,16 @@ export function createQuoteRateLimit(supabase) {
       // Repeat address today → free (customer refining same quote)
       if (usedKeys.has(key)) return next();
 
-      // New address — enforce limit BEFORE recording
-      if (usedKeys.size >= MAX_ADDRESSES_PER_DAY) {
+      // New address — enforce limit BEFORE recording. Cap comes from
+      // currentMaxAddressesPerDay() so demo-day override can raise it
+      // for a single NZ date via env var.
+      const effectiveMax = currentMaxAddressesPerDay();
+      if (usedKeys.size >= effectiveMax) {
         const resetAt = nextMidnightNZ();
         return res.status(429).json({
-          error: `You've explored ${MAX_ADDRESSES_PER_DAY} different addresses today. Ready to talk to a real person about your best option?`,
+          error: `You've explored ${effectiveMax} different addresses today. Ready to talk to a real person about your best option?`,
           quotes_used_today: usedKeys.size,
-          max_per_day:       MAX_ADDRESSES_PER_DAY,
+          max_per_day:       effectiveMax,
           reset_at_iso:      resetAt.toISOString(),
           book_survey_url:   '/book-survey',
         });
