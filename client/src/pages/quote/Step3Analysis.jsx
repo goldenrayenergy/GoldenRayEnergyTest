@@ -16,7 +16,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { AlertTriangle, ChevronLeft } from 'lucide-react';
 import { publicApi } from '../../services/api';
 import { EnergyFlowOverlay, GoogleSolarReadCard } from '../poc/QuotePage.jsx';
-import { friendlyDiagnostic } from './friendlyDiagnostic.js';
+import { errorCopy } from './friendlyDiagnostic.js';
 
 /**
  * @param {object}   props
@@ -142,9 +142,16 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
   // analysis failed, contradicting the yellow error card below and
   // making customers think analysis was still running. Copy now
   // matches the current status: analysing / complete / error.
+  //
+  // Fix (2026-09-01) — error-state heading now branches by cause via
+  // errorCopy(): rate-limit / rural / missing-building / genuine-failure
+  // each get their own title + subtitle. Old static "We couldn't analyse
+  // this roof" read as a technical glitch when the actual cause was a
+  // daily quota, giving customers a false "your software is broken"
+  // impression on the public Test URL.
+  const errorInfo = status === 'error' ? errorCopy(diagnostics, error) : null;
   const headingCopy = status === 'error'
-    ? { title: 'We couldn’t analyse this roof',
-        subtitle: 'The auto-analyser came back empty for this address. See what to do below — a technician visit is often the fastest path to a firm quote.' }
+    ? { title: errorInfo.title, subtitle: errorInfo.subtitle }
     : status === 'complete'
     ? { title: 'Your roof analysis is ready',
         subtitle: 'We\'ve pulled roof geometry, sun-hours, and shading. Review below, then continue to see your quote.' }
@@ -169,7 +176,7 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
           can inspect the roof stats while the CTA pulses above them. */}
       {status === 'error' && (
         <div className="mt-8 rounded-2xl border border-[#E3D9C4] bg-white p-6 md:p-8">
-          <SiteSurveyFallback error={error} diagnostics={diagnostics} rawError={error} address={address} onBack={onBack} />
+          <SiteSurveyFallback error={error} diagnostics={diagnostics} errorInfo={errorInfo} address={address} onBack={onBack} />
         </div>
       )}
 
@@ -233,23 +240,27 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
 // ── I1 site-survey fallback ──────────────────────────────────────────────────
 // When roof analysis fails (Google Solar + LiDAR + OSM all whiff, timeout,
 // or 500), we don't lose the lead. Offer a site-survey booking instead.
-function SiteSurveyFallback({ error, diagnostics, rawError, address, onBack }) {
+function SiteSurveyFallback({ error, diagnostics, errorInfo, address, onBack }) {
   // Round 4-rework (2026-08-26). Tech-detail is now hidden from customer
   // by default and only rendered when `?debug=1` is in the URL — that
   // section is a QA affordance, not something a real customer should
   // see. Owner/admin can append `?debug=1` when reproducing an issue.
   const showTechnicalDetail = typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).has('debug');
+  // Fix (2026-09-01) — hide "Try a different address" when the failure is
+  // the daily-quote rate limit. Trying a different address just re-hits
+  // the same per-IP cap, so the button is misleading and useless there.
+  const isRateLimit = errorInfo?.class === 'rate-limit';
   return (
     <div className="rounded-xl bg-amber-50 border border-amber-200 p-4">
       <div className="flex items-start gap-3">
         <AlertTriangle className="w-5 h-5 mt-0.5 text-amber-700 flex-shrink-0" />
         <div className="flex-1">
           <div className="text-sm font-semibold text-amber-900">
-            We couldn&apos;t analyse this roof automatically.
+            {errorInfo?.title || 'We couldn’t analyse this roof automatically.'}
           </div>
           <div className="text-xs text-amber-800 mt-1">
-            {friendlyDiagnostic(diagnostics, rawError)
+            {errorInfo?.subtitle
               || 'This can happen for complex roofs, new-build addresses not yet in Google’s dataset, or if all three providers timed out. No problem — a technician can survey it in person and give you an exact quote.'}
           </div>
           {showTechnicalDetail && error && (
@@ -270,6 +281,7 @@ function SiteSurveyFallback({ error, diagnostics, rawError, address, onBack }) {
                     {diagnostics.lidar_error && <div>lidar_error: {diagnostics.lidar_error}</div>}
                   </div>
                 )}
+                <div>error_class: {errorInfo?.class || 'n/a'}</div>
               </div>
             </details>
           )}
@@ -303,15 +315,17 @@ function SiteSurveyFallback({ error, diagnostics, rawError, address, onBack }) {
               }}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#D9531E] text-white text-sm font-semibold hover:bg-[#B84418] transition"
             >
-              Book a site survey &rarr;
+              Book my free site survey &rarr;
             </button>
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-amber-300 text-amber-900 text-sm font-semibold hover:bg-amber-100 transition"
-            >
-              Try a different address
-            </button>
+            {!isRateLimit && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-amber-300 text-amber-900 text-sm font-semibold hover:bg-amber-100 transition"
+              >
+                Try a different address
+              </button>
+            )}
           </div>
         </div>
       </div>
