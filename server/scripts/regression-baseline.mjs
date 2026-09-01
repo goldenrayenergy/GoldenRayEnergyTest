@@ -40,10 +40,6 @@ export const baseline = {
       category: 'bad-fixture',
       reason: 'Multi-rate FIXTURE numbers do not reconcile ($5.02 off); parser correctly flags suspect. Fix the fixture, NOT the parser.',
     },
-    'test-e2e-phase3-energy-flow': {
-      category: 'stale-test-selector',
-      reason: 'Targets the legacy /poc/quote 7-step PreviewStage; "Confirm this is my house" button no longer resolves via the test\'s selector after the flow evolved. /poc/quote is being deprecated by the merged /get-quote 5-step flow (project_quote_flow_integration_plan). Delete this test when /poc/quote is removed; until then, tracked as stale test infra with zero product impact.',
-    },
   },
 
   // ── Skipped by default (run with flags): need things a bare run lacks ──────
