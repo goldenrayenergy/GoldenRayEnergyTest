@@ -38,6 +38,11 @@
 
 const METRES_PER_DEG_LAT = 111_320;
 const GAP_METRES = 0.02;   // 20 mm inter-panel gap — typical residential
+// NZ installer standard ridge setback. Highest wind-uplift zone on the
+// roof is within ~600mm of the ridge, and ridge caps need clearance for
+// venting + a foot-hold for the top panel row. 0.8 m matches AS/NZS
+// 1170.2 wind-load practice used by most residential installers.
+const RIDGE_SETBACK_M = 0.8;
 
 /**
  * Choose grid dimensions that keep the FULL target count and minimize the
@@ -288,8 +293,25 @@ export function computePanelGridOnSegment(segment, panelLongM, panelShortM, targ
   maxWidthAlongRidgeM  = Math.min(maxWidthAlongRidgeM,  ABS_MAX_WIDTH_M);
   maxDepthAcrossSlopeM = Math.min(maxDepthAcrossSlopeM, ABS_MAX_DEPTH_M);
 
-  const maxColsByRoof = Math.max(1, Math.floor(maxWidthAlongRidgeM / longWithGap));
-  const maxRowsByRoof = Math.max(1, Math.floor(maxDepthAcrossSlopeM / shortWithGap));
+  // Ridge setback (2026-08-31) — when this segment has an opposing-face
+  // sibling on the same building (gable / hip / dutch-gable), reserve
+  // RIDGE_SETBACK_M on ALL edges so panels don't push past the roof face
+  // into neighbouring face territory. On a hip roof each face is
+  // TRIANGULAR (widest at eave, narrowing to the ridge apex), and the
+  // face's axis-aligned bounding box overstates the physical face width
+  // near the ridge — a grid sized to the bbox extends past the hip lines
+  // (bottom-left "off-roof" clipping reported on 58 David Crescent
+  // 2026-08-31). Setback covers both the ridge itself AND the hip lines
+  // on either side; matches NZ installer 300-500 mm edge-of-face
+  // practice + AS/NZS 1170.2 wind-load edge-zone rules.
+  // Rows self-centre in the reduced depth so setback comes off both ends
+  // evenly (bottom eave clearance stays intact).
+  const ridgeSetbackM = segment?._hasOpposingFace ? RIDGE_SETBACK_M : 0;
+  const effectiveWidthM = Math.max(longWithGap,  maxWidthAlongRidgeM  - ridgeSetbackM);
+  const effectiveDepthM = Math.max(shortWithGap, maxDepthAcrossSlopeM - ridgeSetbackM);
+
+  const maxColsByRoof = Math.max(1, Math.floor(effectiveWidthM / longWithGap));
+  const maxRowsByRoof = Math.max(1, Math.floor(effectiveDepthM / shortWithGap));
 
   // Cap count by BOTH area capacity AND grid geometry. Previously we only
   // capped by area (maxPanels), so a face that has enough m² but limited
@@ -341,6 +363,12 @@ export function computePanelGridOnSegment(segment, panelLongM, panelShortM, targ
       // goes from -(cols-1)/2 to +(cols-1)/2. Short row's c gets shifted by
       // +uCenterShift so it sits symmetrically inside the full-row span.
       const uM = ((c + uCenterShift) - (cols - 1) / 2) * longWithGap;
+      // Ridge setback is applied via `effectiveDepthM` (row-count reduction)
+      // above. We DON'T also shift the grid centre — a down-slope shift
+      // pushes the bottom row past the eave setback (customer report on
+      // 58 David Crescent Karori 2026-08-31: "bottom third row clipping
+      // through roof"). Symmetric centering in the reduced depth gives
+      // extra clearance at BOTH ends (ridge + eave) evenly.
       const vM = ((rows - 1) / 2 - r) * shortWithGap;
 
       // Convert (u, v) to east/north metres.
@@ -566,8 +594,29 @@ export function selectViableSegments(segments, opts = {}) {
   const maxPitchDeg       = opts.maxPitchDeg       ?? 55;
   const tiltFrameThreshDeg = opts.tiltFrameThreshDeg ?? 10;
   const skipSouth         = opts.skipSouth         ?? true;
+  // Sub-building filter (2026-08-31, Bug 1 root fix): segments significantly
+  // BELOW the highest detected plane are treated as detached auxiliary
+  // structures (garages, sheds, decks, patios) and skipped so panels
+  // don't render on the wrong building. Example: 12A Knox Rd Hillpark
+  // had 3 LiDAR planes at 41.62m / 40.77m / 37.97m — the 37.97m one is
+  // 3.65m below the main house roof, meaning it's a detached shed/pad.
+  // Default threshold: 2m separation. Set opts.subBuildingDropM = null
+  // to disable (returns to pre-fix behavior).
+  const subBuildingDropM = opts.subBuildingDropM ?? 2.0;
 
   if (!Array.isArray(segments)) return [];
+
+  // Compute the highest planeHeight so we can flag sub-building segments.
+  let highestPlaneH = -Infinity;
+  if (Number.isFinite(subBuildingDropM)) {
+    for (const s of segments) {
+      const h = Number(s?.planeHeightAtCenterMeters);
+      const a = Number(s?.stats?.areaMeters2) || 0;
+      // Only "significant" segments (≥ min area) anchor the height reference —
+      // a random tiny sliver at high altitude shouldn't disqualify the roof.
+      if (Number.isFinite(h) && a >= minAreaM2 && h > highestPlaneH) highestPlaneH = h;
+    }
+  }
 
   const scored = [];
   for (const s of segments) {
@@ -579,6 +628,19 @@ export function selectViableSegments(segments, opts = {}) {
     if (area  < minAreaM2)   continue;
     if (pitch < 0)           continue;   // sanity — negative pitch means bad data
     if (pitch > maxPitchDeg) continue;   // near-vertical = wall, not roof
+
+    // Sub-building drop (2026-08-31, Bug 1 root fix).
+    // Skip segments significantly below the highest-plane reference —
+    // they're detached auxiliary structures (garage, shed, deck) that
+    // aren't the customer's main house. Only fires when we have a
+    // valid highest-plane reference AND the current segment has a
+    // planeHeight to compare against.
+    if (Number.isFinite(subBuildingDropM) && Number.isFinite(highestPlaneH)) {
+      const planeH = Number(s?.planeHeightAtCenterMeters);
+      if (Number.isFinite(planeH) && (highestPlaneH - planeH) > subBuildingDropM) {
+        continue;
+      }
+    }
 
     // Nearly-flat roofs are viable via tilt frames — flag but don't skip.
     const needsTiltFrames = pitch < tiltFrameThreshDeg;
@@ -709,6 +771,144 @@ export function deduplicateOverlappingFootprints(segments, opts = {}) {
     }
   }
   return keep;
+}
+
+/**
+ * Annotate each segment with `_hasOpposingFace: true` when another viable
+ * segment on the same building has an azimuth within `azToleranceDeg` of
+ * opposite (180°) AND a horizontal centre distance within `maxCentreDistanceM`.
+ *
+ * Called AFTER selectViableSegments + deduplicateOverlappingFootprints so
+ * only segments that will actually receive panels get flagged. The
+ * downstream `computePanelGridOnSegment` reads `_hasOpposingFace` to apply
+ * a ridge setback so panels on opposite ridges (gable/hip roofs) don't push
+ * past the ridge line into each other.
+ *
+ * Mutates + returns the same array (segments are mutated in place; useful
+ * because they're already the working set from selectViableSegments).
+ */
+export function annotateOpposingFaces(segments, opts = {}) {
+  const azToleranceDeg      = opts.azToleranceDeg      ?? 30;
+  const maxCentreDistanceM  = opts.maxCentreDistanceM  ?? 25;
+  if (!Array.isArray(segments) || segments.length < 2) return segments || [];
+  const cosLat0 = Math.cos((Number(segments[0]?.center?.latitude) || 0) * Math.PI / 180);
+  const centres = segments.map((s) => ({
+    lat: Number(s?.center?.latitude),
+    lng: Number(s?.center?.longitude),
+    az:  Number(s?.azimuthDegrees) || 0,
+    valid: Number.isFinite(Number(s?.center?.latitude))
+        && Number.isFinite(Number(s?.center?.longitude)),
+  }));
+  for (let i = 0; i < segments.length; i++) {
+    const c = centres[i];
+    if (!c.valid) continue;
+    for (let j = 0; j < segments.length; j++) {
+      if (i === j) continue;
+      const c2 = centres[j];
+      if (!c2.valid) continue;
+      // Azimuth diff normalised to 0..180. 180 = opposite.
+      const rawDiff = Math.abs(c.az - c2.az) % 360;
+      const azDiff = Math.min(rawDiff, 360 - rawDiff);
+      if (Math.abs(azDiff - 180) > azToleranceDeg) continue;
+      const dLatM = (c.lat - c2.lat) * METRES_PER_DEG_LAT;
+      const dLngM = (c.lng - c2.lng) * METRES_PER_DEG_LAT * cosLat0;
+      const distM = Math.sqrt(dLatM * dLatM + dLngM * dLngM);
+      if (distM > maxCentreDistanceM) continue;
+      segments[i]._hasOpposingFace = true;
+      break;
+    }
+  }
+  return segments;
+}
+
+/**
+ * P1b (2026-08-31) — LiDAR-vs-Cesium-mesh quality assessment. Given a
+ * segment's LiDAR-derived plane data and a set of mesh height samples
+ * across the same face, decide whether Cesium's Photorealistic 3D Tiles
+ * at this address are detailed enough to render the roof correctly.
+ *
+ * Motivation: for addresses where Google Solar failed and we fell back
+ * to LiDAR, the render_mode is 3D but there's no independent Cesium-side
+ * signal that the aerial can actually show a pitched roof. In some
+ * regional NZ areas (Rai Valley, remote Marlborough, older imagery)
+ * Cesium serves LOW-LOD tiles that look FLAT even where LiDAR says a
+ * roof exists. Panels placed at LiDAR planeH then float in the sky.
+ *
+ * Signal: for a real pitched roof, mesh heights across the face MUST
+ * vary by ≈ depth × sin(pitch). If the mesh variance is a small
+ * fraction of what pitch predicts, the tile is stale/flat.
+ *
+ * @param {object} args
+ * @param {Array<number>} args.meshHeights    valid altitude samples across the face
+ * @param {number} args.pitchDegrees          segment's LiDAR pitch
+ * @param {number} args.depthAcrossSlopeM     face depth across the slope (metres)
+ * @param {number} [args.flatRatioThreshold=0.35]  fraction of expected variance
+ *                                                   below which mesh is "flat"
+ * @param {number} [args.minExpectedVarianceM=0.4] don't judge nearly-flat roofs
+ *                                                   (pitch < ~5°) as stale
+ * @returns {{ verdict: 'high-detail'|'flat-mesh'|'insufficient-samples',
+ *             observedVarianceM: number|null,
+ *             expectedVarianceM: number|null }}
+ */
+export function assessLidarMeshQuality(args) {
+  const {
+    meshHeights,
+    pitchDegrees,
+    depthAcrossSlopeM,
+    flatRatioThreshold = 0.35,
+    minExpectedVarianceM = 0.4,
+  } = args || {};
+  const samples = Array.isArray(meshHeights)
+    ? meshHeights.filter(h => Number.isFinite(h))
+    : [];
+  if (samples.length < 3) {
+    return { verdict: 'insufficient-samples', observedVarianceM: null, expectedVarianceM: null };
+  }
+  const observedVarianceM = Math.max(...samples) - Math.min(...samples);
+  const pitchRad = (Number(pitchDegrees) || 0) * Math.PI / 180;
+  const depth = Number(depthAcrossSlopeM) || 0;
+  const expectedVarianceM = depth * Math.abs(Math.sin(pitchRad));
+  if (!(expectedVarianceM > minExpectedVarianceM)) {
+    return { verdict: 'high-detail', observedVarianceM, expectedVarianceM };
+  }
+  const verdict = observedVarianceM < expectedVarianceM * flatRatioThreshold
+    ? 'flat-mesh'
+    : 'high-detail';
+  return { verdict, observedVarianceM, expectedVarianceM };
+}
+
+/**
+ * Categorise WHY selectViableSegments produced an empty set. The result
+ * (`'no-roof-plane' | 'roof-too-small' | 'all-south-facing' | 'no-viable'`)
+ * drives customer-friendly error copy in the render layer — see P5 fix
+ * 2026-08-31 for 160 Carroll Street Central Dunedin, where a single
+ * pitch=74.7° "segment" was actually a wall and the customer saw a raw
+ * red-banner tech error.
+ *
+ * Same thresholds as `selectViableSegments` defaults (maxPitch=55°,
+ * minArea=10 m²). If those defaults change, update here too.
+ *
+ * @param {Array} segments   the ORIGINAL enriched segments (before filter)
+ * @returns {string}         soft-reason tag; 'no-viable' when no single
+ *                           reason dominates (mixed rejections)
+ */
+export function categoriseNoViableReason(segments) {
+  if (!Array.isArray(segments) || segments.length === 0) return 'no-viable';
+  const reasons = [];
+  for (const s of segments) {
+    const pitch = Number(s?.pitchDegrees) || 0;
+    const area  = Number(s?.stats?.areaMeters2) || 0;
+    if (pitch > 55)     reasons.push('wall');
+    else if (area < 10) reasons.push('tiny');
+    else                reasons.push('south');
+  }
+  const allWalls = reasons.every(r => r === 'wall');
+  const allTiny  = reasons.every(r => r === 'tiny');
+  const allSouth = reasons.every(r => r === 'south');
+  if (allWalls) return 'no-roof-plane';
+  if (allTiny)  return 'roof-too-small';
+  if (allSouth) return 'all-south-facing';
+  return 'no-viable';
 }
 
 /**

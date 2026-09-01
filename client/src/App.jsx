@@ -54,6 +54,7 @@ import ContactsPage from './pages/portal/ContactsPage';
 import CompaniesPage from './pages/portal/CompaniesPage';
 import ReportsPage from './pages/portal/ReportsPage';
 import AdminPage from './pages/portal/AdminPage';
+import PolygonOverridesPage from './pages/portal/PolygonOverridesPage';
 import EnquiriesPage from './pages/portal/EnquiriesPage';
 import ReferralsPage from './pages/portal/ReferralsPage';
 import EnquiryDetailPage from './pages/portal/EnquiryDetailPage';
@@ -178,6 +179,7 @@ export default function App() {
         <Route path="companies" element={<CompaniesPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="admin" element={<AdminPage />} />
+        <Route path="admin/polygon-overrides" element={<AdminRoute><PolygonOverridesPage /></AdminRoute>} />
         <Route path="finance" element={<AdminRoute><FinanceApplicationsPage /></AdminRoute>} />
         <Route path="overrides" element={<OverrideRequestsPage />} />
         <Route path="products" element={<ProductsPage />} />

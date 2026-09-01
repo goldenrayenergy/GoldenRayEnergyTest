@@ -12,6 +12,7 @@ import ownerRoutes from './owner.js';
 import adminRoutes from './admin.js';
 import adminImportRoutes from './admin-import.js';
 import adminCatalogueImportRoutes from './admin-catalogue-import.js';
+import polygonOverridesRoutes from './polygon-overrides.js';
 import proposalRoutes from './proposals.js';
 import qrCodesRoutes from './qr-codes.js';
 import quotesRoutes from './quotes.js';
@@ -38,6 +39,7 @@ router.use('/owner', ownerRoutes);
 
 // Admin config — company_settings, financing_options, proposal_terms
 router.use('/admin', adminRoutes);
+router.use('/admin/polygon-overrides', polygonOverridesRoutes);
 // Admin data import — supplier setup workbook (writes suppliers/products/
 // compatibility/region_defaults/cost_defaults from a single xlsx upload).
 router.use('/admin', adminImportRoutes);

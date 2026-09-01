@@ -23,8 +23,11 @@ import { publicApi } from '../../../services/api';
 import {
   computePanelGridOnSegment,
   selectViableSegments,
+  annotateOpposingFaces,
+  categoriseNoViableReason,
   distributePanels,
   enrichSegmentsWithFaceDimensions,
+  deduplicateOverlappingFootprints,
 } from './panelGrid';
 import { addPanelEntities } from './cesiumPanelEntities';
 import { nzGeoidSeparationMetres } from '../../../lib/nzGeoid';
@@ -1047,10 +1050,64 @@ export default function Cesium3DView({
         // a hard slice would starve the algorithm of the smaller N faces
         // that outrank W/E for solar placement even when smaller.
         // maxSegments prop kept as a safety upper bound (capped at 8).
-        const viable = selectViableSegments(enriched);
-        if (!viable.length) {
-          throw new Error(`No viable roof segments (all ${enriched.length} were south-facing, too small, or wrong pitch).`);
+        // Bug 1 fix (2026-08-31) — S-inclusion fallback.
+        //
+        // Default: skip S-facing segments (poor NZ yield). But when the
+        // primary-orientation pass returns too little viable area (< 20 m²,
+        // roughly < 10 panels of capacity), the customer's ONLY significant
+        // roof might be S-facing. Real installers still put panels on such
+        // roofs — just at lower yield.
+        //
+        // Example: 12A Knox Rd Hillpark — LiDAR found:
+        //   128 m² S-facing (skipped by default)
+        //    25 m² S-facing (skipped)
+        //    16 m² W-facing (viable)
+        // With default skipSouth=true, only the 16 m² pad is viable →
+        // panels placed on a ground-level shed. With this fallback, we
+        // include S and place panels on the actual 128 m² main house
+        // roof — visibly correct, honest yield.
+        let viable = selectViableSegments(enriched);
+        const primaryAreaM2 = viable.reduce((sum, s) => sum + (s?.stats?.areaMeters2 || 0), 0);
+        const S_INCLUSION_THRESHOLD_M2 = 20;
+        if (primaryAreaM2 < S_INCLUSION_THRESHOLD_M2) {
+          const withSouth = selectViableSegments(enriched, { skipSouth: false });
+          const withSouthArea = withSouth.reduce((sum, s) => sum + (s?.stats?.areaMeters2 || 0), 0);
+          if (withSouthArea > primaryAreaM2) {
+            console.log(`[Cesium3DView] primary viable area ${primaryAreaM2.toFixed(0)}m² < ${S_INCLUSION_THRESHOLD_M2}m² threshold; retrying with S-facing included (yields ${withSouthArea.toFixed(0)}m²).`);
+            viable = withSouth;
+          }
         }
+        if (!viable.length) {
+          // Tag error with a softReason so the UI branches to
+          // customer-friendly copy + site-survey CTA (P5 fix 2026-08-31 —
+          // 160 Carroll Street single wall-pitch=74.7° case).
+          const err = new Error(
+            `No viable roof segments (all ${enriched.length} were south-facing, too small, or wrong pitch).`
+          );
+          err.softReason = categoriseNoViableReason(enriched);
+          throw err;
+        }
+
+        // Bug 6 fix wire-up (2026-08-31) — inter-face overlap dedupe.
+        // The helper has existed in panelGrid.js since Round 4 but was
+        // never called; David Crescent Karori surfaced the consequence
+        // — 4 planes' panel arrays visually stack on top of each other
+        // when adjacent faces have similar azimuth. Drop segments whose
+        // footprint overlaps a larger neighbour's by ≥50% BEFORE
+        // distributePanels allocates, so we don't paint 2 layers of
+        // panels on the same physical roof area.
+        const beforeDedupe = viable.length;
+        viable = deduplicateOverlappingFootprints(viable, { overlapPct: 0.5 });
+        if (viable.length < beforeDedupe) {
+          console.log(`[Cesium3DView] overlap-dedupe: ${beforeDedupe} viable segments → ${viable.length} after dropping ${beforeDedupe - viable.length} overlapping smaller footprints`);
+        }
+
+        // Ridge setback wire-up (2026-08-31) — mark segments that have an
+        // opposing-face sibling on the same building. computePanelGridOnSegment
+        // reads _hasOpposingFace to reserve 0.8 m of depth on the ridge side
+        // so panels don't cross the ridge into the other face.
+        annotateOpposingFaces(viable);
+
         const topSegments = viable.slice(0, Math.max(maxSegments, 8));
         // 2026-08-18 (V6 diagnostic fix) — pass REAL panel footprint to
         // distributePanels. Previously it used the hardcoded fallback
@@ -1194,18 +1251,65 @@ export default function Cesium3DView({
           // separation). A naive delta check treats this reference offset as
           // "stale imagery" and drops panels underground; that was a
           // regression on 75 Mahia in the earlier iteration.
+          //
+          // ── FIX 2026-08-31 ──────────────────────────────────────────
+          // Root cause of Knox/David/Ramphal "panels missing or floating"
+          // bugs: sync `scene.sampleHeight` reads the last-rendered depth
+          // buffer, which often still shows LOW-DETAIL BASE TILES for the
+          // target address at the moment we call it. sampleHeight returns
+          // the FLAT base-tile height (e.g. 73m for Knox, 250m for David),
+          // panels get placed there, then when high-detail tiles finish
+          // loading the ACTUAL pitched roof appears at a different
+          // altitude. Panels stay stuck at the flat-tile altitude:
+          //   - Knox: 73m was ground level → panels visible in grass
+          //   - David: 250m was flat-base → real roof at 253-260m →
+          //           panels buried beneath actual roof mesh, invisible
+          //
+          // Diagnostic (2026-08-31) proved this: all 3 addresses had
+          // sampledCount == segPanels.length (all samples "succeeded"),
+          // but staleMeshDetected=true was flagged. Kelburn (working)
+          // had staleMeshDetected=false.
+          //
+          // Fix: use `sampleHeightMostDetailed` (ASYNC, awaits highest-
+          // LOD tiles for the queried positions) instead of sync
+          // `sampleHeight`. Bounded with a 6s timeout so we don't hang
+          // on transient tile failures — timeout falls back to sync
+          // sampleHeight + accepts the staleness risk (better a chance
+          // of correct placement than no render at all).
           let sampledCount = 0;
           const meshHeights = [];
-          for (const p of segPanels) {
-            const carto = Cesium.Cartographic.fromDegrees(
-              p.center.longitude, p.center.latitude,
-            );
-            const h = viewer.scene.sampleHeight(carto);
-            if (Number.isFinite(h)) {
-              meshHeights.push(h);
-              sampledCount++;
-            } else {
-              meshHeights.push(null);
+          {
+            const cartosToSample = segPanels.map(p =>
+              Cesium.Cartographic.fromDegrees(p.center.longitude, p.center.latitude));
+            let sampledCartos = null;
+            try {
+              // Race: sampleHeightMostDetailed vs 6s timeout
+              const result = await Promise.race([
+                viewer.scene.sampleHeightMostDetailed([...cartosToSample]),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000)),
+              ]);
+              sampledCartos = result;
+            } catch (e) {
+              console.warn(`[Cesium3DView] sampleHeightMostDetailed(perPanel) failed for seg az=${segment.azimuthDegrees?.toFixed(0)}°: ${e?.message || e} — falling back to sync sampleHeight`);
+              sampledCartos = null;
+            }
+            for (let i = 0; i < segPanels.length; i++) {
+              let h = null;
+              if (sampledCartos && Number.isFinite(sampledCartos[i]?.height)) {
+                h = sampledCartos[i].height;
+              } else {
+                // Fallback: sync sampleHeight (last-rendered depth buffer)
+                const carto = Cesium.Cartographic.fromDegrees(
+                  segPanels[i].center.longitude, segPanels[i].center.latitude);
+                const syncH = viewer.scene.sampleHeight(carto);
+                if (Number.isFinite(syncH)) h = syncH;
+              }
+              if (Number.isFinite(h)) {
+                meshHeights.push(h);
+                sampledCount++;
+              } else {
+                meshHeights.push(null);
+              }
             }
           }
 
@@ -1355,6 +1459,27 @@ export default function Cesium3DView({
             if (spread > 0.5) {
               console.log(`[Cesium3DView] segment-uniform altitude: az=${segment.azimuthDegrees?.toFixed(0)}°, median delta ${uniformDelta.toFixed(2)}m (raw sample spread was ${spread.toFixed(2)}m — flattened for clean geometry)`);
             }
+          }
+          // Diag 2026-08-31 — enabled via URL ?debug=panels or localStorage['gr-debug-panels']='1'.
+          // Dumps per-segment altitude decision so we can trace Bug 1 (Knox floating panels)
+          // + Bug 3 (David/Ramphal panels never appear). Off by default; safe for prod.
+          const _debugPanels =
+            typeof window !== 'undefined' && (
+              new URLSearchParams(window.location.search).get('debug') === 'panels'
+              || window.localStorage?.getItem('gr-debug-panels') === '1'
+            );
+          if (_debugPanels) {
+            const meshOrig = segPanels.map((p, i) => ({
+              lat: p.center.latitude.toFixed(6),
+              lng: p.center.longitude.toFixed(6),
+              origAlt: Number(originalAltitudes[i].toFixed(2)),
+              meshH: meshHeights[i] != null ? Number(meshHeights[i].toFixed(2)) : null,
+              finalAlt: Number(p.center.altitude.toFixed(2)),
+            }));
+            console.log(`[panels-diag] segment az=${Math.round(segment.azimuthDegrees)}° pitch=${segment.pitchDegrees?.toFixed(1)}° area=${segment.stats?.areaMeters2?.toFixed(0)}m² source=${segment._source || 'google'}`);
+            console.log(`[panels-diag]   segments planeH=${segment.planeHeightAtCenterMeters?.toFixed(2)}m centre=${segment.center.latitude.toFixed(6)},${segment.center.longitude.toFixed(6)}`);
+            console.log(`[panels-diag]   deltaSource=${deltaSource} uniformDelta=${uniformDelta.toFixed(2)}m sampledCount=${sampledCount}/${segPanels.length} staleMesh=${staleMeshDetected}`);
+            console.log(`[panels-diag]   per-panel altitudes: ${JSON.stringify(meshOrig).slice(0, 800)}`);
           }
           if (geoidFallbackUsed) {
             console.warn(`[Cesium3DView] geoid-fallback: segment az=${segment.azimuthDegrees?.toFixed(0)}° at (${segment.center.latitude.toFixed(4)}, ${segment.center.longitude.toFixed(4)}) — applied ${segGeoidSep.toFixed(1)} m NZ geoid correction to raw MSL. Mesh sampling failed for every panel + centre — Cesium tiles likely still loading. Refresh may help.`);
@@ -1562,7 +1687,12 @@ export default function Cesium3DView({
       } catch (e) {
         console.error('[Cesium3DView] failed:', e);
         if (!cancelled) {
-          setError(e?.response?.data?.error || e?.message || String(e));
+          // Preserve any softReason tag from the panel-layout thrower so
+          // the error UI can pick friendly copy (P5 fix 2026-08-31 —
+          // Carroll Street single-wall-segment case).
+          const errMsg = e?.response?.data?.error || e?.message || String(e);
+          const softReason = e?.softReason || null;
+          setError(softReason ? { message: errMsg, softReason } : errMsg);
           setStatus('error');
         }
       }
@@ -1821,15 +1951,56 @@ export default function Cesium3DView({
           </div>
         )}
 
-        {/* Error state */}
-        {status === 'error' && (
-          <div className="absolute inset-0 grid place-items-center bg-red-900/70 backdrop-blur-sm z-10 p-6 text-center">
-            <div className="text-white text-sm">
-              <div className="font-semibold mb-2">3D view unavailable</div>
-              <div className="font-mono text-xs opacity-90 max-w-lg whitespace-pre-wrap">{error}</div>
+        {/* Error state (P5 fix 2026-08-31 — softened for customer-facing
+            single-segment / small-building / no-viable cases like Carroll
+            Street. Tech detail hidden by default; ?debug=1 reveals it.) */}
+        {status === 'error' && (() => {
+          const isObj = typeof error === 'object' && error !== null;
+          const softReason = isObj ? error.softReason : null;
+          const rawMsg    = isObj ? error.message    : error;
+          const showTech  = typeof window !== 'undefined'
+            && new URLSearchParams(window.location.search).has('debug');
+          let title, body;
+          switch (softReason) {
+            case 'no-roof-plane':
+              title = 'This looks like a wall, not a roof.';
+              body  = "The imagery we have here only shows one steep face (looks more like a wall than a slanted roof), so our automatic panel-layout can't work with it. A site survey will confirm your actual roof and give you an exact quote.";
+              break;
+            case 'roof-too-small':
+              title = 'Your roof is smaller than our auto-layout can handle.';
+              body  = 'Roofs under ~10 m² of usable area get better placement from a technician in person. A quick site survey will confirm what fits and give you an exact quote.';
+              break;
+            case 'all-south-facing':
+              title = 'Every face on this roof is south-facing.';
+              body  = "In New Zealand, south-facing panels get about a third of the yield of a north-facing roof. A technician can look at options like tilt-frames, ground-mount, or a partial install to make it worth it.";
+              break;
+            default:
+              title = "We couldn't lay panels on this roof automatically.";
+              body  = 'This can happen for unusual roof shapes, obstructions, or coverage gaps in the imagery. A technician site survey is the fastest path to an accurate quote.';
+          }
+          return (
+            <div className="absolute inset-0 grid place-items-center bg-[#F4EEE1]/95 backdrop-blur-sm z-10 p-6 text-center">
+              <div className="max-w-md text-[#2B2A28]">
+                <div className="text-base font-semibold mb-2">{title}</div>
+                <div className="text-sm text-[#55504A] mb-4">{body}</div>
+                <a
+                  href="/book-survey"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#D9531E] text-white text-sm font-semibold hover:bg-[#B84418] transition"
+                >
+                  Book a site survey &rarr;
+                </a>
+                {showTech && rawMsg && (
+                  <details className="mt-4 text-left">
+                    <summary className="text-xs text-[#8B8377] cursor-pointer">Technical detail (debug mode)</summary>
+                    <div className="mt-1 text-[11px] font-mono text-[#55504A] bg-[#E3D9C4]/40 rounded p-2 whitespace-pre-wrap">
+                      {rawMsg}
+                    </div>
+                  </details>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Google attribution (required) */}
         {attribution && (

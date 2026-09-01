@@ -32,6 +32,7 @@ import { queryOsmBuildingsNear }              from '../services/osm/buildingOutl
 import { queryParcelsNear,
          parcelContaining,
          nearestParcel }                      from '../services/linz/parcels.js';
+import { findOverrideForCoords }              from './pm/polygon-overrides.js';
 import { analyseRoofFromLidar }               from '../services/linz/lidarAnalyseRoof.js';
 import { getPvgisClient }                     from '../services/pvgis/pvgisClient.js';
 import { computePvgisYieldForSegments }       from '../services/pvgis/pvgisSegmentYield.js';
@@ -62,6 +63,38 @@ async function findCustomerBuilding({ latitude, longitude }) {
   // right one, while a suburban address with 8 neighbours doesn't
   // accidentally match the next-door lot.
   const acceptDistance = (buildings) => (buildings.length >= 3 ? 15 : 25);
+
+  // -1. Manual polygon override — TRIED BEFORE ANYTHING ELSE (Layer 3 /
+  //     Session 2, 2026-08-28). Owner-managed table for the ~16% of NZ
+  //     addresses where Google Solar + LINZ Parcels + OSM + LINZ
+  //     Buildings all give the wrong roof. When present, this polygon
+  //     is used verbatim as the building outline for polygon-clip AND
+  //     (optionally) its segments_override bypasses Google Solar / LiDAR
+  //     roof-face identification entirely. Owner draws these via the
+  //     admin UI at /admin/polygon-overrides.
+  try {
+    const override = await findOverrideForCoords({ latitude, longitude, radiusMeters: 20 });
+    tried.push({ source: 'manual-override', ok: true, count: override ? 1 : 0, error: null });
+    if (override) {
+      return {
+        building: {
+          id:         override.id,
+          properties: { source: 'admin_override', notes: override.notes, override_id: override.id },
+          centroid:   { latitude: Number(override.latitude), longitude: Number(override.longitude) },
+          polygon:    override.polygon,     // already [[[lng,lat],...]] rings
+          area_m2:    null,                 // could compute but not needed downstream
+          distance_m: override._distanceM ?? 0,
+        },
+        source:            'manual-override',
+        match_type:        'containing',    // an override is BY DEFINITION the customer's building
+        tried,
+        max_dist_m_used:   0,
+        segments_override: override.segments_override || null,   // consumed by main handler
+      };
+    }
+  } catch (e) {
+    tried.push({ source: 'manual-override', ok: false, count: 0, error: e?.message || String(e) });
+  }
 
   // 0. LINZ Parcels — TRIED FIRST (2026-08-27). The NZ cadastral dataset
   //    (LINZ layer 50823) gives the LEGAL per-property boundary. For
@@ -350,6 +383,20 @@ async function _analyse(req, res) {
   let lidarDiagnostics = null;
   let fallbackReason = null;                 // human-readable why we fell back
   const segments = [];                       // populated below either way
+
+  // P1a fix (2026-08-31) — track whether Google Solar SUCCEEDED for this
+  // coord at any quality tier, BEFORE any later invalidation. Layer 2 may
+  // null out `solarResp` because the identified segments are on the wrong
+  // building, and the LiDAR path resets `sourceTag = 'lidar'`. That loses
+  // the fact that Cesium's 3D tiles likely have good coverage here
+  // (Google Solar and Cesium Photorealistic 3D Tiles come from the same
+  // Google dataset — if one has imagery, the other usually does too).
+  //
+  // The `renderMode` decision at the bottom of this handler uses this
+  // flag to allow 3D rendering with LiDAR-derived segments (which are on
+  // the CORRECT building, per LINZ parcel) instead of forcing 2D purely
+  // because sourceTag is no longer 'live'.
+  const googleSolarInitiallySucceeded = !!solarResp;
 
   const shouldTryLidarOverride = solarResp && !buildingLookup.building;
   if (shouldTryLidarOverride) {
@@ -651,16 +698,37 @@ async function _analyse(req, res) {
     return insideCount === 0;
   })();
 
-  const goodFor3D = sourceTag === 'live'
+  // P1a (2026-08-31) — 3D-viability check now honours
+  // `googleSolarInitiallySucceeded`, not just the final `sourceTag`.
+  // Rationale: when Layer 2 fires (Google Solar found the wrong building
+  // and we swapped to LiDAR for the right one), Cesium's 3D tiles for
+  // this area are still good — Google Solar imagery + Cesium 3D tiles
+  // come from the same Google dataset. LiDAR-derived segments (correct
+  // building via LINZ parcel) rendered on Cesium's 3D mesh gives
+  // customers the 3D roof view they expected, without the "wrong
+  // building" bug that Layer 2 was designed to prevent.
+  //
+  // The `sourceTag === 'live'` OR clause is redundant with the new flag
+  // (initialSuccess covers all cases where sourceTag stays 'live') but
+  // kept for defensiveness — future edits that mutate sourceTag before
+  // this point won't accidentally kill 3D.
+  // Owner mandate (2026-08-31): when 3D IS available, panels MUST render
+  // correctly on the roof. Don't fall to 2D just because primary-orientation
+  // viable capacity is small — instead, include S-facing segments (real
+  // installers use S-facing in NZ when it's the only significant roof,
+  // just at lower yield). Fix implemented client-side in Cesium3DView.jsx
+  // via selectViableSegments retry with `skipSouth: false` when the
+  // initial primary-orientation pass yields too little.
+  const goodFor3D = (googleSolarInitiallySucceeded || sourceTag === 'live')
                  && buildingLookup.building
                  && buildingLookup.match_type === 'containing'
                  && !parcelIsMultiUnit;
   const renderMode = goodFor3D ? '3d' : '2d';
   const renderModeReason = goodFor3D ? '3d-viable'
-    : (sourceTag !== 'live'                              ? '2d-not-live'
-    :  !buildingLookup.building                          ? '2d-no-building'
-    :  buildingLookup.match_type !== 'containing'        ? '2d-nearest-only'
-    :  parcelIsMultiUnit                                 ? '2d-multi-unit-parcel'
+    : (!googleSolarInitiallySucceeded && sourceTag !== 'live' ? '2d-google-solar-never-succeeded'
+    :  !buildingLookup.building                               ? '2d-no-building'
+    :  buildingLookup.match_type !== 'containing'             ? '2d-nearest-only'
+    :  parcelIsMultiUnit                                      ? '2d-multi-unit-parcel'
     : '2d-unknown');
 
   return res.json({
