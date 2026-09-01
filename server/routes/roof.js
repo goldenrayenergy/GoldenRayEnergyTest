@@ -987,6 +987,19 @@ router.get('/osm-buildings', async (req, res) => {
 // ── Separate router for aerial proxies (Google Static Maps + LINZ tiles) ────
 export const aerialRouter = Router();
 
+// Cross-Origin-Resource-Policy override (2026-09-01) — aerial images are
+// embedded via <img src> from the frontend which lives on a different
+// origin (e.g. vercel.app while the API is on onrender.com). Helmet's
+// default CORP=same-origin causes the browser to SILENTLY block the
+// image from rendering even though the fetch itself succeeds — no
+// visible error in the network tab, image tile shows up blank. Override
+// to 'cross-origin' just for the aerial responses so cross-origin
+// embedding is allowed. Does not weaken any other endpoint's security.
+aerialRouter.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+});
+
 // GET /api/poc/aerial/google?lat=&lng=&zoom=&size=&marker=
 // Proxies Google Static Maps satellite imagery. Marker=1 drops a red pin at
 // the exact lat/lng. Same GOOGLE_SOLAR_API_KEY (Static Maps API must be
