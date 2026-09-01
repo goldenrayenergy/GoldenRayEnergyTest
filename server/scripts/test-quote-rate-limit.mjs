@@ -15,7 +15,7 @@
 //
 // Run:  node server/scripts/test-quote-rate-limit.mjs
 
-import { addressKey, createQuoteRateLimit } from '../middleware/quoteRateLimit.js';
+import { addressKey, createQuoteRateLimit, currentMaxAddressesPerDay, todayNZDate } from '../middleware/quoteRateLimit.js';
 
 let pass = 0, fail = 0;
 const assert = (cond, msg) => {
@@ -197,6 +197,100 @@ console.log('\n══ Cross-day isolation ══');
   const r = await callMiddleware(mw, { ip: '9.9.9.9', body: { place_id: 'TODAY1' } });
   assert(r.calledNext && r.status === 200,
     'yesterdays 3 addresses do NOT block today (cross-day reset)');
+}
+
+console.log('\n══ Demo-day cap override (currentMaxAddressesPerDay) ══');
+{
+  // Snapshot + restore env vars around each case so tests don't leak.
+  const orig = {
+    DEMO_UNLIMITED_NZ_DATE: process.env.DEMO_UNLIMITED_NZ_DATE,
+    DEMO_MAX_ADDRESSES:     process.env.DEMO_MAX_ADDRESSES,
+  };
+  const restore = () => {
+    if (orig.DEMO_UNLIMITED_NZ_DATE === undefined) delete process.env.DEMO_UNLIMITED_NZ_DATE;
+    else process.env.DEMO_UNLIMITED_NZ_DATE = orig.DEMO_UNLIMITED_NZ_DATE;
+    if (orig.DEMO_MAX_ADDRESSES === undefined) delete process.env.DEMO_MAX_ADDRESSES;
+    else process.env.DEMO_MAX_ADDRESSES = orig.DEMO_MAX_ADDRESSES;
+  };
+
+  try {
+    // Baseline — env unset → default cap.
+    delete process.env.DEMO_UNLIMITED_NZ_DATE;
+    delete process.env.DEMO_MAX_ADDRESSES;
+    assert(currentMaxAddressesPerDay() === 3,
+      'no env vars set → cap is 3 (default)');
+
+    // Date set to TODAY (NZ) → default demo max (30) applies.
+    process.env.DEMO_UNLIMITED_NZ_DATE = todayNZDate();
+    delete process.env.DEMO_MAX_ADDRESSES;
+    assert(currentMaxAddressesPerDay() === 30,
+      "date matches today → cap is 30 (default demo max)");
+
+    // Date set to TODAY + custom max → custom max applies.
+    process.env.DEMO_UNLIMITED_NZ_DATE = todayNZDate();
+    process.env.DEMO_MAX_ADDRESSES = '50';
+    assert(currentMaxAddressesPerDay() === 50,
+      'date matches + DEMO_MAX_ADDRESSES=50 → cap is 50');
+
+    // Date set to a NON-matching date → override inert, back to 3.
+    process.env.DEMO_UNLIMITED_NZ_DATE = '2099-12-31';
+    process.env.DEMO_MAX_ADDRESSES = '999';
+    assert(currentMaxAddressesPerDay() === 3,
+      'date does NOT match today → cap reverts to 3 (override inert)');
+
+    // Invalid DEMO_MAX_ADDRESSES → falls back to default demo max (30).
+    process.env.DEMO_UNLIMITED_NZ_DATE = todayNZDate();
+    process.env.DEMO_MAX_ADDRESSES = 'not-a-number';
+    assert(currentMaxAddressesPerDay() === 30,
+      'invalid DEMO_MAX_ADDRESSES → cap is 30 (default), never NaN');
+
+    // Zero / negative DEMO_MAX_ADDRESSES → falls back to default (30).
+    process.env.DEMO_MAX_ADDRESSES = '0';
+    assert(currentMaxAddressesPerDay() === 30,
+      'DEMO_MAX_ADDRESSES=0 → cap is 30 (default), never zero');
+    process.env.DEMO_MAX_ADDRESSES = '-5';
+    assert(currentMaxAddressesPerDay() === 30,
+      'DEMO_MAX_ADDRESSES=-5 → cap is 30 (default), never negative');
+
+    // Empty string date → treated as unset.
+    process.env.DEMO_UNLIMITED_NZ_DATE = '';
+    delete process.env.DEMO_MAX_ADDRESSES;
+    assert(currentMaxAddressesPerDay() === 3,
+      "empty-string date → cap is 3 (empty means unset)");
+  } finally {
+    restore();
+  }
+}
+
+console.log('\n══ Middleware honours demo-day cap ══');
+{
+  const orig = process.env.DEMO_UNLIMITED_NZ_DATE;
+  try {
+    // Set demo date to TODAY so the middleware uses cap=30 not 3.
+    process.env.DEMO_UNLIMITED_NZ_DATE = todayNZDate();
+    process.env.DEMO_MAX_ADDRESSES = '30';
+
+    const mock = makeMockSupabase();
+    const mw = createQuoteRateLimit(mock);
+
+    // Fire 3 requests — all should pass (would previously cap at 3rd).
+    for (let i = 0; i < 3; i++) {
+      const r = await callMiddleware(mw, { ip: '7.7.7.7', body: { place_id: `demo${i}` } });
+      assert(r.calledNext && r.status === 200,
+        `demo-day cap 30: request ${i + 1}/3 passes (would have been AT CAP under old default)`);
+    }
+
+    // 4th, 5th, 6th also pass because cap is 30 today.
+    for (let i = 3; i < 6; i++) {
+      const r = await callMiddleware(mw, { ip: '7.7.7.7', body: { place_id: `demo${i}` } });
+      assert(r.calledNext && r.status === 200,
+        `demo-day cap 30: request ${i + 1}/30 passes (proves override applied)`);
+    }
+  } finally {
+    if (orig === undefined) delete process.env.DEMO_UNLIMITED_NZ_DATE;
+    else process.env.DEMO_UNLIMITED_NZ_DATE = orig;
+    delete process.env.DEMO_MAX_ADDRESSES;
+  }
 }
 
 console.log(`\n━━━ ${pass} passed · ${fail} failed ━━━`);
