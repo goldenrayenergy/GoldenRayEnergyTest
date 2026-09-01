@@ -16,6 +16,9 @@ import {
   selectViableSegments,
   distributePanels,
   enrichSegmentsWithFaceDimensions,
+  annotateOpposingFaces,
+  categoriseNoViableReason,
+  assessLidarMeshQuality,
   CONSTANTS,
 } from '../../client/src/pages/poc/3d/panelGrid.js';
 
@@ -662,6 +665,280 @@ console.log('\n── Per-panel yield from sunshineQuantiles (Week 7) ──');
     const y = panels[0].yieldEstEnergyKwh;
     assert(y > 500 && y < 610,
       `PVGIS 1000 → ~555 kWh/panel with 340 W/m² fallback (got ${y}), NOT Google 1400 → ~777`);
+  }
+}
+
+// ── annotateOpposingFaces ─────────────────────────────────────────────────
+console.log('\n── annotateOpposingFaces ──');
+{
+  // Empty / trivial inputs.
+  assert(annotateOpposingFaces(null).length === 0, 'null → []');
+  assert(annotateOpposingFaces([]).length === 0, 'empty → []');
+  {
+    const one = [{ center: { latitude: -36.85, longitude: 174.76 }, azimuthDegrees: 0 }];
+    annotateOpposingFaces(one);
+    assert(!one[0]._hasOpposingFace, 'single segment → no annotation');
+  }
+
+  // Two segments — opposite azimuths (E 90°, W 270°) on same building (~5 m
+  // apart): both should be flagged (classic David Cres gable-roof case).
+  {
+    const segs = [
+      { center: { latitude: -41.278036, longitude: 174.737929 }, azimuthDegrees: 91  },  // E
+      { center: { latitude: -41.278032, longitude: 174.737869 }, azimuthDegrees: 263 },  // W
+    ];
+    annotateOpposingFaces(segs);
+    assert(segs[0]._hasOpposingFace === true && segs[1]._hasOpposingFace === true,
+      'David Cres E+W (opposite az, ~5 m apart) → both flagged');
+  }
+
+  // Two segments with opposite azimuths but > 25 m apart → different
+  // buildings, no flag.
+  {
+    const segs = [
+      { center: { latitude: -41.2780, longitude: 174.7379 }, azimuthDegrees: 90  },
+      { center: { latitude: -41.2782, longitude: 174.7395 }, azimuthDegrees: 270 },  // ~130 m east
+    ];
+    annotateOpposingFaces(segs);
+    assert(!segs[0]._hasOpposingFace && !segs[1]._hasOpposingFace,
+      '>25 m apart (different buildings) → no annotation even at opposite azimuths');
+  }
+
+  // Perpendicular azimuths (N + E on same building) → not opposite.
+  {
+    const segs = [
+      { center: { latitude: -41.2780, longitude: 174.7379 }, azimuthDegrees:  0 },  // N
+      { center: { latitude: -41.2780, longitude: 174.7380 }, azimuthDegrees: 90 },  // E
+    ];
+    annotateOpposingFaces(segs);
+    assert(!segs[0]._hasOpposingFace && !segs[1]._hasOpposingFace,
+      'perpendicular azimuths → no annotation');
+  }
+
+  // Within the 30° tolerance — 180° / 340° differ by 160° (20° off opposite),
+  // should still count as an opposing pair.
+  {
+    const segs = [
+      { center: { latitude: -41.2780, longitude: 174.7379 }, azimuthDegrees: 180 },
+      { center: { latitude: -41.2780, longitude: 174.7380 }, azimuthDegrees: 340 },
+    ];
+    annotateOpposingFaces(segs);
+    assert(segs[0]._hasOpposingFace && segs[1]._hasOpposingFace,
+      'azimuth diff 160° (20° off opposite, within 30° tolerance) → flagged');
+  }
+
+  // Just OUTSIDE tolerance — 180° / 320° differ by 140° (40° off opposite),
+  // should NOT be flagged.
+  {
+    const segs = [
+      { center: { latitude: -41.2780, longitude: 174.7379 }, azimuthDegrees: 180 },
+      { center: { latitude: -41.2780, longitude: 174.7380 }, azimuthDegrees: 320 },
+    ];
+    annotateOpposingFaces(segs);
+    assert(!segs[0]._hasOpposingFace && !segs[1]._hasOpposingFace,
+      'azimuth diff 140° (40° off opposite, outside 30° tolerance) → not flagged');
+  }
+
+  // Wrap-around azimuths (10° / 190° = opposite, crossing 360→0 boundary).
+  {
+    const segs = [
+      { center: { latitude: -41.2780, longitude: 174.7379 }, azimuthDegrees:  10 },
+      { center: { latitude: -41.2780, longitude: 174.7380 }, azimuthDegrees: 190 },
+    ];
+    annotateOpposingFaces(segs);
+    assert(segs[0]._hasOpposingFace && segs[1]._hasOpposingFace,
+      'azimuths 10° / 190° (exact opposite across wrap) → flagged');
+  }
+
+  // Missing centre coords → skip that segment, don't blow up.
+  {
+    const segs = [
+      { azimuthDegrees:  90 },   // no centre
+      { center: { latitude: -41.2780, longitude: 174.7380 }, azimuthDegrees: 270 },
+    ];
+    annotateOpposingFaces(segs);
+    assert(!segs[0]._hasOpposingFace && !segs[1]._hasOpposingFace,
+      'missing centre coord → no annotation, no crash');
+  }
+}
+
+// ── Ridge setback in computePanelGridOnSegment ────────────────────────────
+console.log('\n── Ridge setback in computePanelGridOnSegment ──');
+{
+  // A big rectangular face with LiDAR face dims that fit exactly 4 rows of
+  // panels top-to-bottom. With the ridge setback applied, one row should
+  // drop (or top row's up-slope position should move down-slope by ≥ 0.4 m).
+  const baseSeg = {
+    center: { latitude: -41.2780, longitude: 174.7380 },
+    azimuthDegrees: 90,     // E-facing
+    pitchDegrees:   30,
+    planeHeightAtCenterMeters: 100,
+    stats: { areaMeters2: 50 },
+    _faceDimensions: { widthAlongRidgeM: 8.0, depthAcrossSlopeM: 5.0 },
+    _panelCapacityWatts: 400,
+  };
+  const panelsNoFlag = computePanelGridOnSegment({ ...baseSeg }, 1.65, 0.99, 20);
+  const panelsFlagged = computePanelGridOnSegment({ ...baseSeg, _hasOpposingFace: true }, 1.65, 0.99, 20);
+
+  assert(panelsNoFlag.length > 0 && panelsFlagged.length > 0,
+    'both configurations produce panels (setback doesn\'t wipe layout)');
+
+  // Ridge setback should NEVER produce more panels than the no-setback baseline.
+  assert(panelsFlagged.length <= panelsNoFlag.length,
+    `flagged count (${panelsFlagged.length}) ≤ no-flag count (${panelsNoFlag.length})`);
+
+  // The overall grid EXTENT (top row - bottom row altitude) should shrink
+  // when the flag is set — fewer rows fit in the reduced usable depth.
+  const altRangeNoFlag  = Math.max(...panelsNoFlag.map(p => p.center.altitude))
+                        - Math.min(...panelsNoFlag.map(p => p.center.altitude));
+  const altRangeFlagged = Math.max(...panelsFlagged.map(p => p.center.altitude))
+                        - Math.min(...panelsFlagged.map(p => p.center.altitude));
+  assert(altRangeFlagged < altRangeNoFlag,
+    `flagged altitude range (${altRangeFlagged.toFixed(3)} m) < no-flag range (${altRangeNoFlag.toFixed(3)} m) — grid extent shrunk by setback`);
+
+  // Grid stays centred on the segment (bottom-clipping regression check):
+  // top row and bottom row should be roughly EQUIDISTANT from segment centre
+  // altitude (segment centre altitude = planeHeightAtCenterMeters = 100 in
+  // this test). Symmetric placement means the setback comes off BOTH ends
+  // equally, not just the top — avoids the 58 David Crescent
+  // 2026-08-31 regression where bottom row poked past the eave.
+  const centreAlt = 100;  // matches planeHeightAtCenterMeters
+  const maxAltFlagged  = Math.max(...panelsFlagged.map(p => p.center.altitude));
+  const minAltFlagged  = Math.min(...panelsFlagged.map(p => p.center.altitude));
+  const topOffset    = Math.abs(maxAltFlagged - centreAlt);
+  const bottomOffset = Math.abs(minAltFlagged - centreAlt);
+  assert(Math.abs(topOffset - bottomOffset) < 0.05,
+    `symmetric placement: top offset ${topOffset.toFixed(3)} m ≈ bottom offset ${bottomOffset.toFixed(3)} m (delta < 5 cm)`);
+}
+
+// ── categoriseNoViableReason ──────────────────────────────────────────────
+console.log('\n── categoriseNoViableReason (P5 soft-error routing) ──');
+{
+  assert(categoriseNoViableReason(null) === 'no-viable', 'null → no-viable');
+  assert(categoriseNoViableReason([]) === 'no-viable', 'empty → no-viable');
+
+  // Carroll Street case: single segment with pitch=74.7° (a wall).
+  {
+    const segs = [{ pitchDegrees: 74.7, stats: { areaMeters2: 25 } }];
+    assert(categoriseNoViableReason(segs) === 'no-roof-plane',
+      "160 Carroll: single 74.7° wall → 'no-roof-plane'");
+  }
+
+  // All segments are walls (pitch > 55°).
+  {
+    const segs = [
+      { pitchDegrees: 88, stats: { areaMeters2: 12 } },
+      { pitchDegrees: 62, stats: { areaMeters2: 20 } },
+    ];
+    assert(categoriseNoViableReason(segs) === 'no-roof-plane',
+      'all-walls → no-roof-plane');
+  }
+
+  // All segments are too tiny (< 10 m²).
+  {
+    const segs = [
+      { pitchDegrees: 25, stats: { areaMeters2: 4 } },
+      { pitchDegrees: 30, stats: { areaMeters2: 8 } },
+    ];
+    assert(categoriseNoViableReason(segs) === 'roof-too-small',
+      'all-tiny → roof-too-small');
+  }
+
+  // All segments are viable-shape but south-facing (the LAST-resort case).
+  {
+    const segs = [
+      { pitchDegrees: 30, stats: { areaMeters2: 40 } },
+      { pitchDegrees: 25, stats: { areaMeters2: 55 } },
+    ];
+    assert(categoriseNoViableReason(segs) === 'all-south-facing',
+      'all viable-shape → all-south-facing (skipped elsewhere)');
+  }
+
+  // Mixed rejection reasons → generic 'no-viable' fallback.
+  {
+    const segs = [
+      { pitchDegrees: 88, stats: { areaMeters2: 25 } },  // wall
+      { pitchDegrees: 25, stats: { areaMeters2:  3 } },  // tiny
+      { pitchDegrees: 30, stats: { areaMeters2: 30 } },  // south
+    ];
+    assert(categoriseNoViableReason(segs) === 'no-viable',
+      'mixed reasons → no-viable');
+  }
+}
+
+// ── assessLidarMeshQuality ────────────────────────────────────────────────
+console.log('\n── assessLidarMeshQuality (P1b LiDAR quality gate) ──');
+{
+  // Kelburn-style: 30° pitch × 6 m depth → expect ~3 m variance.
+  // Realistic Cesium samples on high-detail tile: 100.0 → 103.2 m.
+  {
+    const out = assessLidarMeshQuality({
+      meshHeights: [100.0, 100.9, 101.7, 102.6, 103.2],
+      pitchDegrees: 30,
+      depthAcrossSlopeM: 6,
+    });
+    assert(out.verdict === 'high-detail',
+      `Kelburn-style (30° / 6 m / 3.2 m obs vs 3.0 m expected) → high-detail (got ${out.verdict})`);
+  }
+
+  // Rai Valley-style: LiDAR says 30° / 6 m (~3 m variance expected)
+  // BUT Cesium mesh returns nearly flat: 100.0 → 100.4 m.
+  {
+    const out = assessLidarMeshQuality({
+      meshHeights: [100.0, 100.1, 100.2, 100.3, 100.4],
+      pitchDegrees: 30,
+      depthAcrossSlopeM: 6,
+    });
+    assert(out.verdict === 'flat-mesh',
+      `Rai-Valley-style (30° / 6 m / 0.4 m obs vs 3.0 m expected) → flat-mesh (got ${out.verdict})`);
+  }
+
+  // Genuinely low-pitch roof (e.g., commercial flat) — 3° / 8 m → 0.42 m
+  // expected. Even a flat Cesium mesh shouldn't be judged stale here.
+  {
+    const out = assessLidarMeshQuality({
+      meshHeights: [100.0, 100.05, 100.1, 100.15, 100.2],
+      pitchDegrees: 3,
+      depthAcrossSlopeM: 8,
+    });
+    assert(out.verdict === 'high-detail',
+      `low-pitch flat roof (3° / 8 m) → high-detail (guarded by minExpectedVarianceM, got ${out.verdict})`);
+  }
+
+  // Insufficient samples: only 2 points → can't judge, don't flag.
+  {
+    const out = assessLidarMeshQuality({
+      meshHeights: [100.0, 100.1],
+      pitchDegrees: 30,
+      depthAcrossSlopeM: 6,
+    });
+    assert(out.verdict === 'insufficient-samples',
+      '< 3 samples → insufficient-samples');
+  }
+
+  // Borderline: expected 3 m, observed exactly at threshold ratio (0.35).
+  // Should be treated as flat (< threshold, not ≤).
+  {
+    const out = assessLidarMeshQuality({
+      meshHeights: [100.0, 100.3, 100.6, 100.9, 101.0],  // 1.0 m variance
+      pitchDegrees: 30,
+      depthAcrossSlopeM: 6,   // expected 3.0 m
+      flatRatioThreshold: 0.35,
+    });
+    // 1.0 / 3.0 = 0.333 < 0.35 → flat
+    assert(out.verdict === 'flat-mesh',
+      `borderline (obs/expected = 0.333 < 0.35) → flat-mesh (got ${out.verdict})`);
+  }
+
+  // Handles nulls/NaNs in samples gracefully.
+  {
+    const out = assessLidarMeshQuality({
+      meshHeights: [100.0, null, 100.9, NaN, 103.2],
+      pitchDegrees: 30,
+      depthAcrossSlopeM: 6,
+    });
+    assert(out.verdict === 'high-detail',
+      `filters null/NaN samples (got ${out.verdict})`);
   }
 }
 

@@ -3464,6 +3464,24 @@ export function QuoteStage({
   const [openDrawer, setOpenDrawer] = useState(null);
   const closeDrawer = () => setOpenDrawer(null);
 
+  // P1b (2026-08-31) — LiDAR quality gate. When the server routed to 3D
+  // based on LiDAR-only data (Google Solar failed) BUT Cesium reports its
+  // mesh is essentially flat, the aerial can't render the roof correctly
+  // and the LiDAR planeH sits in the sky — panels float. Fall to 2D so
+  // the customer sees a satellite view + calibrated numbers instead.
+  // Triggered by the child's onPlacementChange callback (staleMeshDetected
+  // flag). Only fires on LiDAR-only routes; Google-Solar-succeeded routes
+  // keep 3D even when stale (banner explains).
+  const [forceRuntime2D, setForceRuntime2D] = useState(false);
+  const isLidarOnly = (roof?.source === 'lidar') || (analysis?.solar_source === 'lidar');
+  const wrappedOnPlacementChange = (placement) => {
+    if (isLidarOnly && placement?.staleMeshDetected && !forceRuntime2D) {
+      console.warn('[QuoteStage] LiDAR-only + Cesium mesh flat → falling to 2D (P1b gate)');
+      setForceRuntime2D(true);
+    }
+    if (typeof onRoofPlacementChange === 'function') onRoofPlacementChange(placement);
+  };
+
   // Tier comparison 3D (2026-08-19) — customer can click any tier card
   // to preview its panel layout on the 3D. Defaults to the engine's
   // recommendation; reset whenever a new recommendation arrives.
@@ -3613,16 +3631,28 @@ export function QuoteStage({
           'render_mode' is '2d'. Fallback defaults to 3D if the field
           is absent (backwards-compat with older analyse responses). */}
       <div className={isPreviewingNonRecommended ? 'mt-3' : 'mt-4'}>
-        {analysis?.render_mode === '2d' ? (
-          <Aerial2DPanelView
-            coords={roof.authoritative_center || roof.google_center || coords}
-            segments={filteredSegments}
-            solarPanels={filteredSolarPanels}
-            building={roof.building}
-            panelTargetCount={viewingTier?.panel?.count || 0}
-            recommendedTier={viewingTier}
-            onPlacementChange={onRoofPlacementChange}
-          />
+        {(analysis?.render_mode === '2d' || forceRuntime2D) ? (
+          <>
+            {forceRuntime2D && analysis?.render_mode !== '2d' && (
+              <div className="mb-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-[#F4EEE1] border border-[#E3D9C4] text-xs text-[#55504A]">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-[#8B8377]" />
+                <span>
+                  Switched to a satellite view — Google&apos;s 3D imagery for this
+                  area doesn&apos;t match our LiDAR roof data. Panel numbers are
+                  calibrated to your roof; a site survey confirms exact placement.
+                </span>
+              </div>
+            )}
+            <Aerial2DPanelView
+              coords={roof.authoritative_center || roof.google_center || coords}
+              segments={filteredSegments}
+              solarPanels={filteredSolarPanels}
+              building={roof.building}
+              panelTargetCount={viewingTier?.panel?.count || 0}
+              recommendedTier={viewingTier}
+              onPlacementChange={onRoofPlacementChange}
+            />
+          </>
         ) : (
           <Cesium3DPanelHero
             coords={roof.authoritative_center || roof.google_center || coords}
@@ -3631,7 +3661,7 @@ export function QuoteStage({
             building={roof.building}
             panelTargetCount={viewingTier?.panel?.count || 0}
             recommendedTier={viewingTier}
-            onPlacementChange={onRoofPlacementChange}
+            onPlacementChange={wrappedOnPlacementChange}
             /* Tier UX Fix D (2026-08-20): 3D scene reflects the selected tier.
                Solar-only tier hides ground hardware; Solar+Battery shows the
                battery box; Solar+Battery+EV additionally shows the EV pedestal

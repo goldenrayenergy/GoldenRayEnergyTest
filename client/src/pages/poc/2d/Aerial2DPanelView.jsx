@@ -29,6 +29,8 @@ import {
   distributePanels,
   computePanelGridOnSegment,
   enrichSegmentsWithFaceDimensions,
+  deduplicateOverlappingFootprints,
+  annotateOpposingFaces,
 } from '../3d/panelGrid.js';
 
 // ── Config ─────────────────────────────────────────────────────────────
@@ -86,8 +88,25 @@ export function Aerial2DPanelView({
     if (!Array.isArray(segments) || segments.length === 0) return [];
     if (!panelTargetCount || panelTargetCount <= 0) return [];
     const enriched = enrichSegmentsWithFaceDimensions(segments, solarPanels || []);
-    const viable = selectViableSegments(enriched);
+    // Bug 1 fix (2026-08-31) — S-inclusion fallback. Same policy as
+    // Cesium3DView: if primary-orientation viable area is tiny (<20 m²),
+    // retry with skipSouth=false so a lone-S-facing roof can still take
+    // panels. Keeps 2D and 3D render paths in lockstep.
+    let viable = selectViableSegments(enriched);
+    const primaryAreaM2 = viable.reduce((s, x) => s + (x?.stats?.areaMeters2 || 0), 0);
+    if (primaryAreaM2 < 20) {
+      const withSouth = selectViableSegments(enriched, { skipSouth: false });
+      if (withSouth.reduce((s, x) => s + (x?.stats?.areaMeters2 || 0), 0) > primaryAreaM2) {
+        viable = withSouth;
+      }
+    }
+    // Bug 6 wire-up (2026-08-31) — same overlap dedupe as Cesium3DView
+    viable = deduplicateOverlappingFootprints(viable, { overlapPct: 0.5 });
     if (!viable.length) return [];
+    // Ridge setback wire-up (2026-08-31) — annotate opposing-face pairs so
+    // computePanelGridOnSegment reserves 0.8 m of depth on the ridge side.
+    // Keeps 2D and 3D render paths in lockstep.
+    annotateOpposingFaces(viable);
     // Fix 9 (2026-08-27): pass ALL viable to distributePanels so the
     // orientation-first fill can pick the best faces (N always
     // preferred). Safety cap at 8 to avoid pathological cases.

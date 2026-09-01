@@ -16,6 +16,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { AlertTriangle, ChevronLeft } from 'lucide-react';
 import { publicApi } from '../../services/api';
 import { EnergyFlowOverlay, GoogleSolarReadCard } from '../poc/QuotePage.jsx';
+import { friendlyDiagnostic } from './friendlyDiagnostic.js';
 
 /**
  * @param {object}   props
@@ -168,7 +169,7 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
           can inspect the roof stats while the CTA pulses above them. */}
       {status === 'error' && (
         <div className="mt-8 rounded-2xl border border-[#E3D9C4] bg-white p-6 md:p-8">
-          <SiteSurveyFallback error={error} diagnostics={diagnostics} address={address} onBack={onBack} />
+          <SiteSurveyFallback error={error} diagnostics={diagnostics} rawError={error} address={address} onBack={onBack} />
         </div>
       )}
 
@@ -232,7 +233,7 @@ export default function Step3Analysis({ address, analysis, onChange, onContinue,
 // ── I1 site-survey fallback ──────────────────────────────────────────────────
 // When roof analysis fails (Google Solar + LiDAR + OSM all whiff, timeout,
 // or 500), we don't lose the lead. Offer a site-survey booking instead.
-function SiteSurveyFallback({ error, diagnostics, address, onBack }) {
+function SiteSurveyFallback({ error, diagnostics, rawError, address, onBack }) {
   // Round 4-rework (2026-08-26). Tech-detail is now hidden from customer
   // by default and only rendered when `?debug=1` is in the URL — that
   // section is a QA affordance, not something a real customer should
@@ -248,7 +249,7 @@ function SiteSurveyFallback({ error, diagnostics, address, onBack }) {
             We couldn&apos;t analyse this roof automatically.
           </div>
           <div className="text-xs text-amber-800 mt-1">
-            {friendlyDiagnostic(diagnostics)
+            {friendlyDiagnostic(diagnostics, rawError)
               || 'This can happen for complex roofs, new-build addresses not yet in Google’s dataset, or if all three providers timed out. No problem — a technician can survey it in person and give you an exact quote.'}
           </div>
           {showTechnicalDetail && error && (
@@ -318,36 +319,6 @@ function SiteSurveyFallback({ error, diagnostics, address, onBack }) {
   );
 }
 
-// Round 4 (2026-08-26) — translate roof_analysis_diagnostics into a
-// customer-friendly sentence for the SiteSurveyFallback body. Falls back
-// to the generic copy when the reason isn't one we can explain nicely.
-function friendlyDiagnostic(d) {
-  if (!d) return null;
-  // Fix (2026-08-27) — rate-limit friendly copy.
-  if (d.fallback_reason === 'daily_quote_limit') {
-    return `You've explored ${d.quotes_used_today || d.max_per_day || 3} different addresses today. Come back tomorrow for more, or book a site survey now to talk to a real person about your best option.`;
-  }
-  if (d.fallback_reason === 'both_pipelines_failed') {
-    if (d.building_source == null && d.building_candidates
-        && (d.building_candidates.osm || 0) + (d.building_candidates.linz || 0) === 0) {
-      return 'We couldn’t find your building in our reference maps (OSM/LINZ have no polygon for this address yet — common for new subdivisions). A technician site survey is the fastest path to an accurate quote.';
-    }
-    // Option B (2026-08-27) — rural / remote coverage gap. LINZ LiDAR
-    // coverage exists for most NZ populated areas but has genuine gaps
-    // in remote regions (e.g. Hira, Rai Valley, some Marlborough Sounds
-    // + Fiordland). Google Solar also lacks imagery here. Nothing to
-    // analyse online — book a site survey.
-    if (/\d+\s*points?\s*above/i.test(d.lidar_error || '')
-        || /RANSAC detected no roof planes/i.test(d.lidar_error || '')) {
-      return 'This address is outside our automatic-analysis coverage — public roof-imagery data for this area isn’t detailed enough. A technician site visit is the accurate path to a quote here, and often faster than we can do online for rural properties.';
-    }
-    return 'Both roof-analysis providers came back empty for this coord. Try refining the address, or book a technician survey.';
-  }
-  if (d.fallback_reason === 'lidar_failed_reverted_to_stale_google') {
-    return 'The LiDAR fallback couldn’t detect roof planes for this address. We’re showing Google’s older imagery result — book a site survey to confirm on the current roof.';
-  }
-  return null;
-}
 
 // ── Result summary shown in overlay's completion card ──────────────────────
 function summarize(analysis) {
