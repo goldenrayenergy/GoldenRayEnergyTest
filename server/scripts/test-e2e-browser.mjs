@@ -6,14 +6,19 @@
 //   3. Wait for parse → ExtractStage
 //   4. Type address into Places autocomplete
 //   5. Wait for suggestions → click first match
-//   6. Click "Analyse my roof"
+//   6a. Click "Continue to house preview" (goes to PreviewStage 2D aerial)
+//   6b. On preview, wait for + click "Confirm this is my house" (triggers analyse)
 //   7. Wait for AddressStage 3D
 //   8. Verify pin marker + camera zoomed
-//   9. Click "Yes, that's my house"
+//   9. Click "Roof looks right — continue"
 //   10. On MaterialStage, pick metal roof
 //   11. Click "Design my system"
 //   12. Wait for QuoteStage 3D + panels
 //   13. Verify panels rendered, all within roof bounds, no overflow
+//
+// Flow-label update (2026-09-03): the wizard now has a PreviewStage between
+// extract and 3D address, and per-stage CTAs were relabelled. This test's
+// selectors match the current UI as of that date.
 //
 // Uses puppeteer-core connected to the user's installed Chrome.
 //
@@ -32,6 +37,10 @@ const CLIENT_URL = 'http://localhost:5173';
 const SCREENSHOT_DIR = path.join(__dirname, 'test-output');
 const FIXTURE_DIR    = path.join(__dirname, 'test-fixtures');
 const HEADLESS = process.env.E2E_HEADLESS === '1';
+
+// When E2E_ONLY is set (comma-separated slugs) only those scenarios run.
+// Useful for iterating on a single address without paying the full suite.
+const _ONLY = process.env.E2E_ONLY ? process.env.E2E_ONLY.split(',').map(s => s.trim()) : null;
 
 // Each test scenario has its OWN bill PDF, address, and expected outcomes.
 const SCENARIOS = [
@@ -204,7 +213,7 @@ async function testFullFlow(browser, spec) {
 
   // ── Step 3: Wait for ExtractStage ──
   console.log('  → step 3: waiting for parse → ExtractStage');
-  await waitForButtonPresent(page, 'analyse my roof', 30_000);
+  await waitForButtonPresent(page, 'continue to house preview', 30_000);
   await screenshot(page, `${spec.slug}-01-extract.png`);
   assert(extractApiBody?.retailer === 'Mercury',
          `bill parse: retailer = 'Mercury' (got '${extractApiBody?.retailer}')`);
@@ -239,10 +248,73 @@ async function testFullFlow(browser, spec) {
     }
   });
 
-  // ── Step 6: Click Analyse ──
-  await waitForButtonEnabled(page, 'analyse my roof', 15_000);
-  console.log('  → step 6: clicking "Analyse my roof"');
-  await clickByText(page, 'analyse my roof');
+  // ── Step 6a: Advance from extract → preview ──
+  // The extract CTA is enabled once confirmedPlace.place_id is set
+  // (which the suggestion click above does).
+  await waitForButtonEnabled(page, 'continue to house preview', 15_000);
+  console.log('  → step 6a: clicking "Continue to house preview"');
+  await clickByText(page, 'continue to house preview');
+
+  // ── Step 6b: On PreviewStage, click Confirm (triggers /roof/analyse) ──
+  // Preview stage renders a 2D aerial with a pin and runs LINZ parcel-check
+  // asynchronously. When the pin sits on-parcel with high confidence the
+  // primary CTA is "Confirm this is my house". If the pin were dragged it
+  // would become "Analyse pin at ..." — the label match tolerates both.
+  console.log('  → step 6b: waiting for PreviewStage confirm button');
+  const previewCta = async () => {
+    // Look for either variant, whichever is present + enabled.
+    return await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll('button')];
+      const match = buttons.find(b => {
+        const t = (b.textContent || '').trim().toLowerCase();
+        return (t.includes('confirm this is my house') || t.startsWith('analyse pin at')) && !b.disabled;
+      });
+      return match ? (match.textContent || '').trim() : null;
+    });
+  };
+  {
+    const start = Date.now();
+    let label = null;
+    // Give parcel-check up to 20s to settle (LINZ Parcels + reverse geocode).
+    while (Date.now() - start < 20_000) {
+      label = await previewCta();
+      if (label) break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    if (!label) throw new Error('PreviewStage confirm button not enabled within 20s');
+    console.log(`  → step 6b: clicking "${label}"`);
+    await page.evaluate((match) => {
+      const buttons = [...document.querySelectorAll('button')];
+      const btn = buttons.find(b => (b.textContent || '').trim() === match);
+      if (btn) btn.click();
+    }, label);
+  }
+
+  // ── Step 6c: PreviewStage completion overlay ──
+  // /analyse (5-15s) → "pendingAnalysis" is set → completion overlay
+  // appears with "See my roof analysis" CTA. There is also an 8s
+  // auto-commit fallback. We click through as soon as the button appears
+  // to keep the test snappy — either path advances to AddressStage.
+  console.log('  → step 6c: dismissing analysis-ready overlay');
+  {
+    const start = Date.now();
+    let clicked = false;
+    while (Date.now() - start < 30_000) {
+      clicked = await page.evaluate(() => {
+        const buttons = [...document.querySelectorAll('button')];
+        const btn = buttons.find(b => {
+          const t = (b.textContent || '').trim().toLowerCase();
+          return t.includes('see my roof analysis') && !b.disabled;
+        });
+        if (btn) { btn.click(); return true; }
+        return false;
+      });
+      if (clicked) break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    // If the button never appeared, the 8s auto-commit will have fired
+    // by now anyway — just proceed.
+  }
 
   // ── Step 7: Wait for AddressStage 3D ──
   console.log('  → step 7: waiting for AddressStage 3D (up to 60s)');
@@ -258,20 +330,27 @@ async function testFullFlow(browser, spec) {
   assert(addrState.camera.height < 500,
          `AddressStage: camera zoomed to house (<500m) — ${addrState.camera.height?.toFixed(0)}m`);
 
-  // ── Step 8: Pin marker present ──
-  const pinInfo = await page.evaluate(() => {
+  // ── Step 8: AddressStage framing anchor present ──
+  // 2026-08-18: the customer's pin was removed from AddressStage — the pin
+  // is placed once on the Leaflet PreviewStage instead. Cesium3DView now
+  // adds an invisible `__customer_anchor` entity for zoomTo to frame the
+  // building; the camera-height check above already proves framing worked,
+  // but we also verify the anchor is present so a future refactor that
+  // breaks the framing pipeline is caught.
+  const anchorInfo = await page.evaluate(() => {
     const viewer = window.__cesiumViewer;
-    if (!viewer) return { hasPin: false };
-    const pin = viewer.entities.getById('__customer_pin');
-    return { hasPin: !!pin, hasLabel: !!pin?.label };
+    if (!viewer) return { hasAnchor: false };
+    const anchor = viewer.entities.getById('__customer_anchor');
+    return { hasAnchor: !!anchor };
   });
-  assert(pinInfo.hasPin,   `AddressStage: pin marker entity present (customer can see their house)`);
-  assert(pinInfo.hasLabel, `AddressStage: pin has "Your house" label`);
+  assert(anchorInfo.hasAnchor, `AddressStage: framing anchor entity present`);
 
-  // ── Step 9: Click "Yes, that's my house" ──
-  console.log('  → step 9: clicking "Yes, that\'s my house"');
-  await waitForButtonEnabled(page, "yes, that's my house", 10_000);
-  await clickByText(page, "yes, that's my house");
+  // ── Step 9: Advance from AddressStage → MaterialStage ──
+  // House identity was already confirmed at preview stage, so this CTA is
+  // just "continue" — label became "Roof looks right — continue" 2026-09.
+  console.log('  → step 9: clicking "Roof looks right — continue"');
+  await waitForButtonEnabled(page, 'roof looks right', 15_000);
+  await clickByText(page, 'roof looks right');
 
   // Reset debug state so we know when QuoteStage publishes fresh.
   await page.evaluate(() => { delete window.__cesium3DState; delete window.__cesiumViewer; });
@@ -387,8 +466,11 @@ const browser = await puppeteer.launch({
 });
 console.log(`  Chrome PID ${browser.process()?.pid}`);
 
+const _RUN = _ONLY ? SCENARIOS.filter(s => _ONLY.includes(s.slug)) : SCENARIOS;
+if (_ONLY) console.log(`\n▶ Running only: ${_RUN.map(s => s.slug).join(', ')}`);
+
 try {
-  for (const spec of SCENARIOS) {
+  for (const spec of _RUN) {
     try {
       await testFullFlow(browser, spec);
     } catch (e) {

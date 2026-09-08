@@ -28,6 +28,7 @@ import {
   distributePanels,
   enrichSegmentsWithFaceDimensions,
   deduplicateOverlappingFootprints,
+  computeFaceGridSamplePositions,
 } from './panelGrid';
 import { addPanelEntities } from './cesiumPanelEntities';
 import { nzGeoidSeparationMetres } from '../../../lib/nzGeoid';
@@ -1314,30 +1315,65 @@ export default function Cesium3DView({
           }
 
           // STALE-MESH DETECTOR that survives the geoid-offset false positive.
-          // Idea: for a real roof at pitch θ, mesh heights across the panel
-          // grid MUST vary by (depthM × sin θ) — the down-slope drop.
+          // Idea: for a real roof at pitch θ, mesh heights ACROSS THE FACE
+          // MUST vary by (depthM × sin θ) — the down-slope drop.
           // If the Cesium mesh sample variance is ≪ expected, the mesh
           // isn't showing a tilted roof — it's showing flat ground/pad
           // (imagery predates the building). Compare RELATIVE variance,
           // not absolute altitude, so the reference-frame offset drops out.
+          //
+          // ── FIX 2026-09-02 (sample-area bug) ────────────────────────
+          // Previously we compared the variance of per-panel mesh samples
+          // (which cluster tightly on small arrays) against the FULL face
+          // depth expected variance. Result: small-bill quotes on a
+          // legitimately pitched roof failed the ratio check and fell to
+          // 2D, even though the same address with a big bill rendered
+          // fine. The verdict must not depend on panel count.
+          //
+          // Fix: sample a fixed 3×3 grid across the entire face
+          // rectangle and compute observed variance from THOSE. Per-panel
+          // samples above are still used for the altitude bridge — this
+          // check is now decoupled from panel count entirely.
           let staleMeshDetected = false;
           let meshVarianceM = null;
           let expectedVarianceM = null;
-          if (sampledCount >= 3) {
-            const valid = meshHeights.filter(Number.isFinite);
-            meshVarianceM = Math.max(...valid) - Math.min(...valid);
-            const pitchRad = ((segment.pitchDegrees || 0) * Math.PI) / 180;
-            const depthM = Number(segment._faceDimensions?.depthAcrossSlopeM)
-              || Math.sqrt(Number(segment.stats?.areaMeters2) || 0);
-            expectedVarianceM = depthM * Math.abs(Math.sin(pitchRad));
-            // Flag when the mesh looks essentially FLAT but the roof isn't:
-            //   - the roof has meaningful pitch (>4°, i.e. would produce
-            //     >~0.3 m of altitude variation over a typical 5 m depth)
-            //   - AND the mesh variance is a small fraction of that
-            if (expectedVarianceM > 0.4 && meshVarianceM < expectedVarianceM * 0.35) {
-              staleMeshDetected = true;
-              anyStaleMesh = true;
-              console.warn(`[Cesium3DView] mesh appears FLAT (${meshVarianceM.toFixed(2)} m variance) but segment az=${segment.azimuthDegrees?.toFixed(0)}° pitch=${segment.pitchDegrees?.toFixed(1)}° expects ${expectedVarianceM.toFixed(2)} m — Cesium imagery likely predates current roof. Panels shown at sampled-mesh position for visibility; UI shows warning banner.`);
+          {
+            const faceGridPositions = computeFaceGridSamplePositions(segment, 3, 3);
+            const faceCartos = faceGridPositions.map(p =>
+              Cesium.Cartographic.fromDegrees(p.longitude, p.latitude));
+            let faceHeights = [];
+            if (faceCartos.length >= 3) {
+              try {
+                const faceSampled = await Promise.race([
+                  viewer.scene.sampleHeightMostDetailed([...faceCartos]),
+                  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000)),
+                ]);
+                faceHeights = faceSampled
+                  .map(c => Number(c?.height))
+                  .filter(h => Number.isFinite(h));
+              } catch (e) {
+                console.warn(`[Cesium3DView] face-grid sampleHeightMostDetailed failed for seg az=${segment.azimuthDegrees?.toFixed(0)}°: ${e?.message || e} — falling back to sync sampleHeight`);
+                for (const carto of faceCartos) {
+                  const h = viewer.scene.sampleHeight(carto);
+                  if (Number.isFinite(h)) faceHeights.push(h);
+                }
+              }
+            }
+            if (faceHeights.length >= 3) {
+              meshVarianceM = Math.max(...faceHeights) - Math.min(...faceHeights);
+              const pitchRad = ((segment.pitchDegrees || 0) * Math.PI) / 180;
+              const depthM = Number(segment._faceDimensions?.depthAcrossSlopeM)
+                || Math.sqrt(Number(segment.stats?.areaMeters2) || 0);
+              // Face grid spans 80% of face depth (see
+              // computeFaceGridSamplePositions), so the expected variance
+              // for THIS sample set is the full-face expectation scaled
+              // to the sampled fraction.
+              expectedVarianceM = 0.80 * depthM * Math.abs(Math.sin(pitchRad));
+              if (expectedVarianceM > 0.4 && meshVarianceM < expectedVarianceM * 0.35) {
+                staleMeshDetected = true;
+                anyStaleMesh = true;
+                console.warn(`[Cesium3DView] mesh appears FLAT (${meshVarianceM.toFixed(2)} m variance across ${faceHeights.length}-point face grid) but segment az=${segment.azimuthDegrees?.toFixed(0)}° pitch=${segment.pitchDegrees?.toFixed(1)}° expects ${expectedVarianceM.toFixed(2)} m — Cesium imagery likely predates current roof. Panels shown at sampled-mesh position for visibility; UI shows warning banner.`);
+              }
             }
           }
 
