@@ -3131,30 +3131,80 @@ function CustomiseSystemCard({
   onPanelsChange,
   viewingTierLabel,
   viewingTierIdx,
+  /* 2026-09-08 fix — battery picker sync with tier card.
+     installedBatteryKwh: what the composer actually installed on the
+       currently-viewed tier (the value shown on the tier card). Used as
+       the picker's default when customBatteryKwh is null, so the picker
+       position always matches the tier card. Undefined when the tier
+       has no battery (Solar Only). */
+  installedBatteryKwh,
+  viewingTierHasBattery,
 }) {
-  // Effective values for display (falls back to recommendation defaults)
+  // Effective values for display. Prefer customer's target when they've
+  // moved the picker; else fall back to what the composer actually
+  // installed (fixes stale-mismatch bug — slider showed
+  // bill_analysis.recommended_battery_kwh, card showed tier.battery.usable_kwh).
   const effectiveBattery = Number.isFinite(customBatteryKwh)
     ? customBatteryKwh
-    : (Number.isFinite(recommendedBatteryKwh) ? recommendedBatteryKwh : 0);
+    : (Number.isFinite(installedBatteryKwh)
+        ? installedBatteryKwh
+        : (Number.isFinite(recommendedBatteryKwh) ? recommendedBatteryKwh : 0));
   const evOn = customEvKmPerDay !== 0;   // null (legacy) OR >0 = ON; 0 = OFF
   const effectiveEvKm = evOn
     ? (Number.isFinite(customEvKmPerDay) && customEvKmPerDay > 0 ? customEvKmPerDay : 40)
     : 0;
 
-  // Battery slider bounds — server sends min 0 but BYD HVM (our
-  // primary residential battery) needs MIN 4 modules (11.04 kWh) for
-  // the BMS to work. Sliding below that silently snaps up to 11.04 in
-  // the composed system → confusing "I set 3 kWh but got 11 kWh". So
-  // slider starts at the SMALLEST viable pack size (~11 kWh) with a
-  // dedicated "None (Solar only)" option for the zero case (which
-  // routes to Tier 1's config).
+  // Battery bounds. Legacy min/max/step kept as a fallback (older server
+  // responses without available_kits) but the discrete-kit picker is the
+  // primary UX now.
   const rawMin  = Number(batteryBounds?.min_kwh)  || 0;
   const maxKwh  = Number(batteryBounds?.max_kwh)  || 22.08;
   const stepKwh = Number(batteryBounds?.step_kwh) || 2.76;
-  // Real smallest configured battery = 4 modules × 2.76 = 11.04 kWh (BYD HVM BMS floor)
   const minViableKwh = Math.max(rawMin, 4 * stepKwh);
   const minKwh  = minViableKwh;
 
+  // 2026-09-08 — discrete kit list from server (`battery_bounds.available_kits`).
+  // Deduplicate on usable_kwh so overlapping kits from different brands
+  // (e.g. HVM 13.8 vs Reserva 12.6) show as distinct capacity options.
+  const availableKits = Array.isArray(batteryBounds?.available_kits)
+    ? batteryBounds.available_kits.filter(k => Number.isFinite(k?.usable_kwh) && k.usable_kwh > 0)
+    : [];
+  const kitPickerEnabled = availableKits.length > 0;
+  // For each unique usable_kwh, pick the first kit (matches composer's
+  // priority of same-family kits it already assigned).
+  const uniqueKits = (() => {
+    const seen = new Set();
+    const out = [];
+    for (const k of availableKits) {
+      const key = k.usable_kwh.toFixed(2);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(k);
+    }
+    return out;
+  })();
+  // Find the kit that best matches the effective battery — picker snaps
+  // to this index so slider and card can't drift apart.
+  const activeKitIdx = (() => {
+    if (!kitPickerEnabled || !(effectiveBattery > 0)) return -1;
+    let bestIdx = 0;
+    let bestDelta = Infinity;
+    for (let i = 0; i < uniqueKits.length; i++) {
+      const d = Math.abs(uniqueKits[i].usable_kwh - effectiveBattery);
+      if (d < bestDelta) { bestDelta = d; bestIdx = i; }
+    }
+    return bestIdx;
+  })();
+  const activeKit = activeKitIdx >= 0 ? uniqueKits[activeKitIdx] : null;
+
+  const handleKitPick = (kit) => {
+    onBatteryChange(kit.usable_kwh);
+  };
+  const handleKitSlider = (e) => {
+    const idx = Number(e.target.value);
+    if (idx >= 0 && idx < uniqueKits.length) onBatteryChange(uniqueKits[idx].usable_kwh);
+  };
+  // Legacy continuous handler — only used when available_kits missing.
   const handleBatterySlider = (e) => {
     const v = Number(e.target.value);
     onBatteryChange(v);
@@ -3273,55 +3323,140 @@ function CustomiseSystemCard({
       )}
 
       <div className="grid md:grid-cols-2 gap-6">
-        {/* Battery slider */}
+        {/* Battery picker — hidden on Solar-Only tier per 2026-09-08 fix.
+            The tier itself declares whether it carries a battery
+            (viewingTierHasBattery); when false, this whole block is
+            replaced with a hint pointing to the tiers that do. */}
         <div>
           <div className="flex items-baseline justify-between mb-2 gap-2 flex-wrap">
             <label className="text-[10px] uppercase tracking-wider text-[#8B8377] font-mono font-semibold">
-              Battery size
+              Battery size {viewingTierLabel ? <span className="normal-case text-[#D9531E]/70">({viewingTierLabel})</span> : null}
             </label>
-            {/* No-battery checkbox — explicit way to opt out of battery
-                without hunting through tier cards. When checked, we
-                send batteryKwh=0 which routes to Tier 1's config
-                (Solar only). */}
-            <label className="inline-flex items-center gap-2 text-xs text-[#55504A] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={customBatteryKwh === 0}
-                onChange={(e) => onBatteryChange(e.target.checked ? 0 : (Number.isFinite(recommendedBatteryKwh) ? recommendedBatteryKwh : minKwh))}
-                className="w-3.5 h-3.5 accent-[#D9531E] cursor-pointer"
-              />
-              No battery (Solar only)
-            </label>
+            {/* No-battery checkbox — sends batteryKwh=0 which routes to
+                Tier 1's config (Solar only). Only shown when a battery
+                is actually available on this tier. */}
+            {viewingTierHasBattery !== false && (
+              <label className="inline-flex items-center gap-2 text-xs text-[#55504A] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={customBatteryKwh === 0}
+                  onChange={(e) => onBatteryChange(e.target.checked ? 0 : (activeKit ? activeKit.usable_kwh : (Number.isFinite(installedBatteryKwh) ? installedBatteryKwh : minKwh)))}
+                  className="w-3.5 h-3.5 accent-[#D9531E] cursor-pointer"
+                />
+                No battery (Solar only)
+              </label>
+            )}
           </div>
-          <div className={`transition-opacity ${customBatteryKwh === 0 ? 'opacity-40 pointer-events-none' : ''}`}>
-            <div className="flex items-baseline gap-1 mb-2">
-              <div className="font-serif font-bold text-2xl text-[#1A1614] tabular-nums leading-none">
-                {customBatteryKwh === 0 ? '—' : effectiveBattery.toFixed(1)}
+
+          {viewingTierHasBattery === false ? (
+            /* Solar-Only tier — battery is meaningless here. Give the
+               customer a clear signpost to the tiers that add one. */
+            <div className="rounded-xl bg-[#F4EEE1] border border-[#E3D9C4] p-3 text-xs text-[#55504A]">
+              This tier is <strong>solar-only</strong> — no battery is installed.
+              Click a <strong>Solar + Battery</strong> tier below to pick a
+              battery capacity.
+            </div>
+          ) : kitPickerEnabled ? (
+            /* Discrete kit picker — one segment per installable kit,
+               sourced from server (battery_bounds.available_kits). Picker
+               value is snapped to the same kit the composer picks, so the
+               number here ALWAYS matches the tier card's battery.usable_kwh. */
+            <div className={`transition-opacity ${customBatteryKwh === 0 ? 'opacity-40 pointer-events-none' : ''}`}>
+              <div className="flex items-baseline gap-1 mb-2">
+                <div className="font-serif font-bold text-2xl text-[#1A1614] tabular-nums leading-none">
+                  {customBatteryKwh === 0 ? '—' : (activeKit ? activeKit.usable_kwh.toFixed(2) : effectiveBattery.toFixed(1))}
+                </div>
+                <span className="text-sm text-[#8B8377]">kWh</span>
+                {activeKit?.display_name && customBatteryKwh !== 0 && (
+                  <span className="ml-2 text-xs text-[#8B8377]">
+                    &middot; {activeKit.display_name}
+                  </span>
+                )}
               </div>
-              <span className="text-sm text-[#8B8377]">kWh</span>
+              {/* Segmented pill row for ≤ 6 kits (fits horizontally); slider for more. */}
+              {uniqueKits.length <= 6 ? (
+                <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Battery kit">
+                  {uniqueKits.map((k, i) => {
+                    const active = i === activeKitIdx && customBatteryKwh !== 0;
+                    return (
+                      <button
+                        key={k.system_sku || `${k.usable_kwh}-${i}`}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        disabled={customBatteryKwh === 0}
+                        onClick={() => handleKitPick(k)}
+                        title={k.display_name || `${k.usable_kwh} kWh`}
+                        className={`px-2.5 py-1.5 rounded-full text-xs font-semibold tabular-nums transition
+                          ${active
+                            ? 'bg-[#D9531E] text-white shadow-md'
+                            : 'bg-[#F4EEE1] text-[#55504A] hover:bg-[#EBE2CE] border border-[#E3D9C4]'
+                          }
+                          disabled:opacity-40 disabled:cursor-not-allowed
+                        `}
+                      >
+                        {k.usable_kwh.toFixed(2)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <>
+                  <input
+                    type="range"
+                    min={0}
+                    max={uniqueKits.length - 1}
+                    step={1}
+                    value={Math.max(0, activeKitIdx)}
+                    onChange={handleKitSlider}
+                    disabled={customBatteryKwh === 0}
+                    className="w-full accent-[#D9531E] cursor-pointer disabled:cursor-not-allowed"
+                    aria-label="Battery kit picker"
+                  />
+                  <div className="flex justify-between mt-1 text-[10px] font-mono text-[#8B8377] tabular-nums">
+                    <span>{uniqueKits[0].usable_kwh.toFixed(2)} kWh</span>
+                    <span>{uniqueKits[uniqueKits.length - 1].usable_kwh.toFixed(2)} kWh</span>
+                  </div>
+                </>
+              )}
+              <div className="mt-2 text-[10px] font-mono text-[#8B8377]">
+                {customBatteryKwh === 0
+                  ? 'No battery — grid-only backup, sizing = Tier 1 config'
+                  : `Pick from ${uniqueKits.length} kit${uniqueKits.length === 1 ? '' : 's'} compatible with your system`}
+              </div>
             </div>
-            <input
-              type="range"
-              min={minKwh}
-              max={maxKwh}
-              step={stepKwh}
-              value={effectiveBattery}
-              onChange={handleBatterySlider}
-              disabled={customBatteryKwh === 0}
-              className="w-full accent-[#D9531E] cursor-pointer disabled:cursor-not-allowed"
-              aria-label="Battery size in kWh"
-            />
-            <div className="flex justify-between mt-1 text-[10px] font-mono text-[#8B8377] tabular-nums">
-              <span>{minKwh.toFixed(2)} kWh</span>
-              <span>{Number.isFinite(recommendedBatteryKwh) ? `${recommendedBatteryKwh} recommended` : ''}</span>
-              <span>{maxKwh.toFixed(2)} kWh</span>
+          ) : (
+            /* Legacy continuous slider — fallback when server hasn't sent
+               available_kits (e.g. older client cache, missing compat data). */
+            <div className={`transition-opacity ${customBatteryKwh === 0 ? 'opacity-40 pointer-events-none' : ''}`}>
+              <div className="flex items-baseline gap-1 mb-2">
+                <div className="font-serif font-bold text-2xl text-[#1A1614] tabular-nums leading-none">
+                  {customBatteryKwh === 0 ? '—' : effectiveBattery.toFixed(1)}
+                </div>
+                <span className="text-sm text-[#8B8377]">kWh</span>
+              </div>
+              <input
+                type="range"
+                min={minKwh}
+                max={maxKwh}
+                step={stepKwh}
+                value={effectiveBattery}
+                onChange={handleBatterySlider}
+                disabled={customBatteryKwh === 0}
+                className="w-full accent-[#D9531E] cursor-pointer disabled:cursor-not-allowed"
+                aria-label="Battery size in kWh"
+              />
+              <div className="flex justify-between mt-1 text-[10px] font-mono text-[#8B8377] tabular-nums">
+                <span>{minKwh.toFixed(2)} kWh</span>
+                <span>{maxKwh.toFixed(2)} kWh</span>
+              </div>
+              <div className="mt-2 text-[10px] font-mono text-[#8B8377]">
+                {customBatteryKwh === 0
+                  ? 'No battery — grid-only backup, sizing = Tier 1 config'
+                  : `Slider steps by ${stepKwh} kWh (BYD HVM module); min ${minKwh.toFixed(2)} kWh = 4-module BMS floor`}
+              </div>
             </div>
-          </div>
-          <div className="mt-2 text-[10px] font-mono text-[#8B8377]">
-            {customBatteryKwh === 0
-              ? 'No battery — grid-only backup, sizing = Tier 1 config'
-              : `Slider steps by ${stepKwh} kWh (BYD HVM module size); min ${minKwh.toFixed(2)} kWh = 4-module BMS floor`}
-          </div>
+          )}
         </div>
 
         {/* EV toggle + km/day input — proper toggle switch (small
@@ -3696,6 +3831,12 @@ export function QuoteStage({
       <CustomiseSystemCard
         batteryBounds={design.battery_bounds}
         recommendedBatteryKwh={design.bill_analysis?.recommended_battery_kwh}
+        /* 2026-09-08 — picker default now snaps to what the composer
+           ACTUALLY installed on the viewing tier (not the raw engine
+           recommendation), so picker + tier card can never disagree.
+           When null/absent (Solar Only tier) the picker hides. */
+        installedBatteryKwh={viewingTier?.battery?.usable_kwh || null}
+        viewingTierHasBattery={!!(viewingTier?.battery && Number(viewingTier.battery.usable_kwh) > 0)}
         customBatteryKwh={
           typeof getCustomBatteryKwh === 'function'
             ? getCustomBatteryKwh(viewingTierIdx)
@@ -3718,7 +3859,12 @@ export function QuoteStage({
         }
         designing={designing}
         onShowEnergyFlow={() => setEnergyFlowOpen(true)}
-        viewingTierLabel={viewingTier?.label || `Tier ${viewingTierIdx + 1}`}
+        /* 2026-09-08 fix — use client-derived label (matches TierCard headline)
+           instead of server's stale pre-composition label. Server label
+           can say "Solar + 9.5 kWh battery" while the actually-installed
+           pack is 11.04 kWh; deriveTierLabel reads tier.battery.usable_kwh
+           so it agrees with the tier card + picker + composed reality. */
+        viewingTierLabel={deriveTierLabel(viewingTier) || `Tier ${viewingTierIdx + 1}`}
         viewingTierIdx={viewingTierIdx}
         /* PR-E fix (2026-08-24): panel-count slider bounds + tier-scoped
            value + change handler. Bounds come from the design response:

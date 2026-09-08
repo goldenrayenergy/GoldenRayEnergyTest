@@ -317,7 +317,12 @@ export async function loadCatalogueFromDb(supabase) {
     const [{ data: compatRows }, { data: bsRows }] = await Promise.all([
       supabase.from('inverter_battery_compat')
         .select('inverter_sku, battery_system_sku, is_compatible, charge_kw, discharge_kw, full_backup, min_battery_kwh, max_battery_kwh'),
-      supabase.from('battery_systems').select('system_sku, family, capacity_kwh'),
+      // 2026-09-08 — widened select for the Customise-Card discrete kit
+      // stepper. Client needs display_name + usable_kwh to render each
+      // kit as a picker option that matches the composed tier's
+      // battery.usable_kwh exactly.
+      supabase.from('battery_systems')
+        .select('system_sku, family, brand, display_name, capacity_kwh, usable_kwh, voltage_type'),
     ]);
     const bsBySku = new Map((bsRows || []).map((b) => [b.system_sku, b]));
     const byInverter = new Map();
@@ -326,7 +331,11 @@ export async function loadCatalogueFromDb(supabase) {
       const entry = {
         battery_system_sku: r.battery_system_sku,
         family: bs?.family || null,
+        brand: bs?.brand || null,
+        display_name: bs?.display_name || null,
         capacity_kwh: bs ? num(bs.capacity_kwh) : null,
+        usable_kwh:   bs ? num(bs.usable_kwh)   : null,
+        voltage_type: bs?.voltage_type || null,
         is_compatible: r.is_compatible !== false,
         charge_kw: num(r.charge_kw),
         discharge_kw: num(r.discharge_kw),
@@ -339,6 +348,20 @@ export async function loadCatalogueFromDb(supabase) {
     }
     for (const sku of Object.keys(out.INVERTERS)) {
       out.INVERTERS[sku].compatible_batteries = byInverter.get(sku) || null;
+    }
+    // Expose the full kit index so design.js can enumerate ALL kits an
+    // inverter is compatible with when building the customise-card picker.
+    out.BATTERY_SYSTEMS = {};
+    for (const bs of bsRows || []) {
+      out.BATTERY_SYSTEMS[bs.system_sku] = {
+        system_sku:   bs.system_sku,
+        display_name: bs.display_name || bs.system_sku,
+        brand:        bs.brand || null,
+        family:       bs.family || null,
+        capacity_kwh: num(bs.capacity_kwh),
+        usable_kwh:   num(bs.usable_kwh),
+        voltage_type: bs.voltage_type || null,
+      };
     }
     out.__compat_rows = (compatRows || []).length;
   } catch (e) {
