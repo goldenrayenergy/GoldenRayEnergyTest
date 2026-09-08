@@ -822,6 +822,88 @@ export function annotateOpposingFaces(segments, opts = {}) {
 }
 
 /**
+ * P1b-2 (2026-09-02) — Fixed-grid sample positions across the face
+ * rectangle, independent of the panel count.
+ *
+ * Motivation: the original P1b staleness gate sampled mesh heights AT
+ * each panel's centre. Fewer panels (small bill → small array) meant
+ * the samples clustered in a smaller physical footprint, so the
+ * observed variance shrank while the expected variance stayed pinned
+ * to the FULL face depth. Same address, same imagery, same pitch —
+ * different verdicts depending on bill size. Small-array quotes fell
+ * to 2D even though the mesh was perfectly renderable.
+ *
+ * Fix: sample the mesh at a fixed grid spanning the ENTIRE face
+ * rectangle (rows × cols), derived from `segment.center`,
+ * `azimuthDegrees`, and `_faceDimensions`. Verdict is now
+ * deterministic per-address and panel-count independent.
+ *
+ * The returned positions stay 20% inside the face edges (usable
+ * region factor 0.80) so we never sample past the actual roof face
+ * and pick up ground/eaves that would falsely inflate variance.
+ *
+ * @param {object} segment
+ *   Must have `center.{latitude,longitude}`, `azimuthDegrees`. Uses
+ *   `_faceDimensions.{widthAlongRidgeM, depthAcrossSlopeM}` when
+ *   present; falls back to sqrt(area) so callers without LiDAR
+ *   inliers still get a sensible sample set.
+ * @param {number} [rows=3]     grid rows along the depth-across-slope axis
+ * @param {number} [cols=3]     grid cols along the width-along-ridge axis
+ * @returns {Array<{latitude:number, longitude:number}>}
+ *   Ordered row-major from up-slope-left to down-slope-right. Empty
+ *   array if segment is missing required fields.
+ */
+export function computeFaceGridSamplePositions(segment, rows = 3, cols = 3) {
+  const lat = Number(segment?.center?.latitude);
+  const lng = Number(segment?.center?.longitude);
+  const az  = Number(segment?.azimuthDegrees);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(az)) return [];
+  if (!Number.isFinite(rows) || rows < 1) rows = 1;
+  if (!Number.isFinite(cols) || cols < 1) cols = 1;
+
+  let widthM  = Number(segment?._faceDimensions?.widthAlongRidgeM);
+  let depthM  = Number(segment?._faceDimensions?.depthAcrossSlopeM);
+  if (!(widthM > 0) || !(depthM > 0)) {
+    const areaM2 = Number(segment?.stats?.areaMeters2);
+    if (!(areaM2 > 0)) return [];
+    widthM = depthM = Math.sqrt(areaM2);
+  }
+
+  // Stay inside the face — mirrors the 0.90 packing factor used
+  // downstream but tighter (0.80) so grid points never touch eave/ridge
+  // edges where mesh can dip into ground / gutter geometry.
+  const usableWidth = widthM * 0.80;
+  const usableDepth = depthM * 0.80;
+
+  const azRad = (az * Math.PI) / 180;
+  const cosA = Math.cos(azRad);
+  const sinA = Math.sin(azRad);
+  // Same axis convention as computePanelGridOnSegment:
+  //   u axis (along ridge) in metres east/north = (-cosA,  sinA)
+  //   v axis (up-slope)    in metres east/north = (-sinA, -cosA)
+  const uAxisX = -cosA, uAxisY =  sinA;
+  const vAxisX = -sinA, vAxisY = -cosA;
+
+  const cosLat0 = Math.cos(lat * Math.PI / 180);
+  const positions = [];
+  for (let r = 0; r < rows; r++) {
+    // r=0 → up-slope edge (+v), r=rows-1 → down-slope edge (-v)
+    const vFrac = rows === 1 ? 0 : 0.5 - r / (rows - 1);   // +0.5 .. -0.5
+    const vM = vFrac * usableDepth;
+    for (let c = 0; c < cols; c++) {
+      const uFrac = cols === 1 ? 0 : c / (cols - 1) - 0.5; // -0.5 .. +0.5
+      const uM = uFrac * usableWidth;
+      const dEastM  = uM * uAxisX + vM * vAxisX;
+      const dNorthM = uM * uAxisY + vM * vAxisY;
+      const dLat = dNorthM / METRES_PER_DEG_LAT;
+      const dLng = dEastM  / (METRES_PER_DEG_LAT * cosLat0);
+      positions.push({ latitude: lat + dLat, longitude: lng + dLng });
+    }
+  }
+  return positions;
+}
+
+/**
  * P1b (2026-08-31) — LiDAR-vs-Cesium-mesh quality assessment. Given a
  * segment's LiDAR-derived plane data and a set of mesh height samples
  * across the same face, decide whether Cesium's Photorealistic 3D Tiles

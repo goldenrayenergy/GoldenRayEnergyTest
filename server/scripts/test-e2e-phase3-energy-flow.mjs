@@ -59,6 +59,25 @@ async function waitForText(page, text, timeoutMs = 15_000) {
   throw new Error(`Text "${text}" not found within ${timeoutMs}ms`);
 }
 
+// 2026-09-08 — waits until a button matching `text` is present AND
+// enabled (i.e. `disabled` attribute is absent). PreviewStage's
+// "Confirm this is my house" button renders IMMEDIATELY when the pin
+// lands, but stays disabled until the async LINZ parcel-check + reverse-
+// geocode settle. `waitForText` passes on the text alone, so the
+// subsequent `clickByText` used to race the check and fail.
+async function waitForClickable(page, text, timeoutMs = 15_000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const ready = await page.evaluate((t) => {
+      const els = [...document.querySelectorAll('button, a, [role="button"]')];
+      return els.some(e => e.textContent && e.textContent.trim().toLowerCase().includes(t.toLowerCase()) && !e.disabled);
+    }, text);
+    if (ready) return;
+    await new Promise(r => setTimeout(r, 250));
+  }
+  throw new Error(`Clickable element "${text}" not enabled within ${timeoutMs}ms`);
+}
+
 async function inspectOverlay(page) {
   return page.evaluate(() => {
     const overlay = document.querySelector('.fixed.inset-0.bg-black\\/85')
@@ -194,7 +213,12 @@ async function run() {
     console.log('\n== Step 2: search + pick address ==');
     const input = await page.waitForSelector('input[placeholder*="typing your address"]', { timeout: 5_000 });
     await input.click();
-    await input.type('Queen Street Auckland', { delay: 30 });
+    // 2026-09-08 — was "Queen Street Auckland" which resolves to a road
+    // centre (pin on asphalt) → LINZ parcel-check returns 'low' confidence
+    // → primary Confirm button stays disabled forever, so we never reach
+    // Step 4 (the actual overlay-under-test). Swapped to a specific
+    // residential address that geocodes to a real parcel.
+    await input.type('25 Commodore Drive Lynfield', { delay: 30 });
     await new Promise(r => setTimeout(r, 900));
     await page.waitForSelector('ul li', { timeout: 8_000 });
     await page.evaluate(() => {
@@ -212,6 +236,9 @@ async function run() {
     assert(true, 'PreviewStage reached (Confirm button visible)');
 
     console.log('\n== Step 4: click Confirm -> verify overlay auto-mounts ==');
+    // 2026-09-08 — button is present-but-disabled until LINZ parcel check
+    // and reverse-geocode settle (~1-3s). Wait for enabled before click.
+    await waitForClickable(page, 'Confirm this is my house', 20_000);
     await clickByText(page, 'Confirm this is my house');
     let overlayState = null;
     for (let i = 0; i < 20; i++) {

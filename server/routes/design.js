@@ -586,11 +586,61 @@ router.post('/compose', async (req, res) => {
     const maxBatteryKwh = batteryProducts.length > 0
       ? batteryProducts[batteryProducts.length - 1].usable_kwh
       : 22.08;   // fallback: 8 × BYD HVM modules
+
+    // 2026-09-08 — discrete kit picker for the Customise-Card. Prefer
+    // kits sourced from the compat matrix (union across tier inverters
+    // that have compat data). Fall back to the FULL battery_systems
+    // catalogue when no tier inverter has compat rows — happens for
+    // non-Fronius inverter picks. The composer then constrains to
+    // whichever kit it can actually build. Sorted asc by usable_kwh.
+    const availableKits = (() => {
+      const bsIndex = catalogue?.BATTERY_SYSTEMS || {};
+      if (!bsIndex || Object.keys(bsIndex).length === 0) return [];
+      const seenSkus = new Set();
+      let hasAnyCompatData = false;
+      for (const tier of out.tiers || []) {
+        const invSku = tier?.inverter?.sku;
+        const inv = invSku ? catalogue.INVERTERS?.[invSku] : null;
+        const compat = inv?.compatible_batteries;
+        if (compat && compat.length > 0) {
+          hasAnyCompatData = true;
+          for (const c of compat) {
+            if (c.is_compatible === false) continue;
+            if (!c.battery_system_sku) continue;
+            seenSkus.add(c.battery_system_sku);
+          }
+        }
+      }
+      // Fallback: no tier's inverter had compat rows (e.g. non-Fronius) →
+      // expose the full kit catalogue so the customer still sees options.
+      if (!hasAnyCompatData) {
+        for (const sku of Object.keys(bsIndex)) seenSkus.add(sku);
+      }
+      const kits = [];
+      for (const sku of seenSkus) {
+        const bs = bsIndex[sku];
+        if (!bs) continue;
+        const kwh = Number(bs.usable_kwh) || Number(bs.capacity_kwh) || 0;
+        if (!(kwh > 0)) continue;
+        kits.push({
+          system_sku:   bs.system_sku,
+          display_name: bs.display_name,
+          brand:        bs.brand,
+          family:       bs.family,
+          capacity_kwh: Number(bs.capacity_kwh) || null,
+          usable_kwh:   kwh,
+        });
+      }
+      kits.sort((a, b) => a.usable_kwh - b.usable_kwh);
+      return kits;
+    })();
+
     const battery_bounds = {
       min_kwh:  0,
       max_kwh:  maxBatteryKwh,
-      step_kwh: 2.76,             // BYD HVM module size
-      products: batteryProducts,
+      step_kwh: 2.76,             // BYD HVM module size (legacy — kept for backwards compat)
+      products: batteryProducts,  // legacy module list — kept for backwards compat
+      available_kits: availableKits,   // NEW: discrete kit picker source of truth
     };
 
     // Catalogue stores products keyed by SKU already: catalogue.PANELS,
