@@ -6024,6 +6024,20 @@ function PanelOverlayHero({ aerial, coords, building, panels, segments = [], pan
   );
 }
 
+// 2026-09-09 — collapse the DB's per-module product name into the
+// family name the customer recognises. "BYD HVM Battery Box Module
+// 2.76kWh" → "BYD HVM". Keeps the tier-card battery row readable when
+// we render "{family} × {N} modules · {kWh} usable". Falls back to the
+// raw name for products that don't match a known family pattern so we
+// never lose information.
+function friendlyBatteryFamily(battery) {
+  if (!battery) return '';
+  const raw = String(battery.name || battery.sku || '').trim();
+  // Match "BYD HVM", "BYD HVS", "BYD LVL", "Fronius Reserva", "Freedom Won", "ZYC SIMPO"
+  const m = raw.match(/^(BYD\s+(?:HVM|HVS|LVL|LVS)|Fronius\s+Reserva|Freedom\s+Won|ZYC\s+SIMPO|SigenStor|Powerwall)/i);
+  return m ? m[1] : raw;
+}
+
 // Client-side tier-card label — reflects ACTUAL composed system, not
 // the server's pre-composition label (which uses slider target values
 // that may not match the installed battery due to product minimums
@@ -6135,8 +6149,17 @@ export function TierCard({ tier, isRecommended, isViewing, onClick, recommendedP
         <SpecRow icon={<Cpu className="w-4 h-4" />} label="Inverter" value={
           tier.inverter ? `${tier.inverter.name} (${tier.inverter.ac_kw} kW)` : '—'
         } />
+        {/* 2026-09-09 fix — show module/stack count on the battery row so
+            the customer can see the actual configuration (e.g. "BYD HVM
+            × 4 modules · 11.04 kWh usable"), not just the module SKU
+            name. Falls back gracefully to the old (name + kWh) format
+            when module_count is missing (older compose responses). */}
         <SpecRow icon={<Battery className="w-4 h-4" />} label="Battery" value={
-          tier.battery ? `${tier.battery.name} (${tier.battery.usable_kwh} kWh)` : 'none'
+          tier.battery
+            ? (Number.isFinite(tier.battery.module_count) && tier.battery.module_count > 0
+                ? `${friendlyBatteryFamily(tier.battery)} × ${tier.battery.module_count} module${tier.battery.module_count === 1 ? '' : 's'} · ${tier.battery.usable_kwh} kWh usable`
+                : `${tier.battery.name} (${tier.battery.usable_kwh} kWh)`)
+            : 'none'
         } />
         <SpecRow icon={<Sparkles className="w-4 h-4" />} label="EV charger" value={tier.wattpilot_included ? 'Wattpilot ready' : 'not included'} />
       </div>

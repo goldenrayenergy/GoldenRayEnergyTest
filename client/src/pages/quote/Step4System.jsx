@@ -110,6 +110,10 @@ export default function Step4System({
   const skipFirstMountRef = useRef(true);      // one-shot for initial compose
   const skipFirstChangeRef = useRef(true);     // debounce guards
   const skipFirstCustomiseRef = useRef(true);
+  // 2026-09-09 — snap-on-recompose safety net (belt-and-braces for the
+  // server-side available_kits filter). When set true by the snap effect,
+  // the next customByTier-driven compose is suppressed so we don't loop.
+  const skipNextCustomiseComposeRef = useRef(false);
 
   // ── composeDesign — copied from POC/QuotePage.jsx composeDesign ────────
   // Ref-passing for design so composeDesign can read the current tier
@@ -227,10 +231,47 @@ export default function Step4System({
   // ── Debounced re-compose on Customise slider changes (POC 800ms) ───────
   useEffect(() => {
     if (skipFirstCustomiseRef.current) { skipFirstCustomiseRef.current = false; return undefined; }
+    // 2026-09-09 — suppress the compose when this customByTier change was
+    // caused by the snap-on-recompose effect below (would otherwise loop).
+    if (skipNextCustomiseComposeRef.current) {
+      skipNextCustomiseComposeRef.current = false;
+      return undefined;
+    }
     const t = setTimeout(() => composeDesign(), 800);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customByTier]);
+
+  // ── 2026-09-09 — snap picker target to composed reality ────────────────
+  // After each compose completes, if a tier's customBatteryKwh differs
+  // from what the composer actually installed by more than 0.5 kWh, snap
+  // it to the installed value so the Customise picker + tier card never
+  // display divergent numbers. Server filters battery_bounds.available_kits
+  // to composable values (design.js), which should make this a rare edge
+  // case (e.g. when the compat matrix changes mid-quote); this effect is
+  // the belt-and-braces safety net so a drift can't persist visually.
+  useEffect(() => {
+    if (!design?.tiers) return;
+    let anyChange = false;
+    const nextCustomByTier = { ...customByTier };
+    for (let i = 0; i < design.tiers.length; i++) {
+      const tier = design.tiers[i];
+      const target = nextCustomByTier[i]?.battery_kwh;
+      if (target == null) continue;   // untouched → nothing to snap
+      const installed = Number(tier?.battery?.usable_kwh) || 0;
+      if (target === 0) continue;     // customer explicitly picked "no battery"
+      if (installed <= 0) continue;   // tier has no battery — leave alone
+      if (Math.abs(target - installed) > 0.5) {
+        nextCustomByTier[i] = { ...(nextCustomByTier[i] || {}), battery_kwh: installed };
+        anyChange = true;
+      }
+    }
+    if (anyChange) {
+      skipNextCustomiseComposeRef.current = true;   // suppress the redundant recompose
+      setCustomByTier(nextCustomByTier);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [design]);
 
   // ── Fix C · one-shot roof-fit recompose ────────────────────────────────
   useEffect(() => {

@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { supabaseAdmin } from '../config/supabase.js';
 import { loadCatalogueFromDb } from '../services/pm/proposalEngine/catalogue/dbLoader.js';
 import { composeThreeTiers }   from '../services/pm/proposalEngine/threeTierComposer.js';
+import { selectBattery }       from '../services/pm/proposalEngine/batterySelector.js';
 import { runThreeScenarios, MONTHLY_YIELD_PCT }   from '../services/pm/proposalEngine/financialModel.js';
 import { REGIONS, COMPATIBILITY, BMS_RULES, TIER_STRIP_SETTINGS }
   from '../services/pm/proposalEngine/data/engineeringRules.js';
@@ -591,15 +592,30 @@ router.post('/compose', async (req, res) => {
     // kits sourced from the compat matrix (union across tier inverters
     // that have compat data). Fall back to the FULL battery_systems
     // catalogue when no tier inverter has compat rows — happens for
-    // non-Fronius inverter picks. The composer then constrains to
-    // whichever kit it can actually build. Sorted asc by usable_kwh.
+    // non-Fronius inverter picks.
+    //
+    // 2026-09-09 fix — the compat matrix says which kits are ALLOWED for
+    // the inverter, but the composer builds batteries as module × count
+    // and may score-prefer BYD HVM over HVS/Reserva. Result: picker
+    // offered kits the composer never actually picks (e.g. HVS 7.7 or
+    // Reserva 6.3 always got substituted with HVM 11.04). Second filter
+    // pass here SIMULATES the composer's battery selector across a
+    // capacity sweep for each battery-capable tier's inverter, collects
+    // the DISTINCT USABLE-KWH OUTPUTS the composer would actually
+    // produce, and keeps only kits within ±0.5 kWh of one of them. That
+    // guarantees the picker + composed tier card can never disagree.
     const availableKits = (() => {
       const bsIndex = catalogue?.BATTERY_SYSTEMS || {};
       if (!bsIndex || Object.keys(bsIndex).length === 0) return [];
       const seenSkus = new Set();
       let hasAnyCompatData = false;
       for (const tier of out.tiers || []) {
-        const invSku = tier?.inverter?.sku;
+        // Composer tier shape here still uses system_overrides.inverter.sku;
+        // the client-facing tier.inverter.sku is built downstream. Read both
+        // so this filter works regardless of shape.
+        const invSku = tier?.system_overrides?.inverter?.sku
+                    || tier?.inverter?.sku
+                    || null;
         const inv = invSku ? catalogue.INVERTERS?.[invSku] : null;
         const compat = inv?.compatible_batteries;
         if (compat && compat.length > 0) {
@@ -611,18 +627,18 @@ router.post('/compose', async (req, res) => {
           }
         }
       }
-      // Fallback: no tier's inverter had compat rows (e.g. non-Fronius) →
-      // expose the full kit catalogue so the customer still sees options.
       if (!hasAnyCompatData) {
         for (const sku of Object.keys(bsIndex)) seenSkus.add(sku);
       }
-      const kits = [];
+
+      // Compat-derived kit candidates
+      const compatKits = [];
       for (const sku of seenSkus) {
         const bs = bsIndex[sku];
         if (!bs) continue;
         const kwh = Number(bs.usable_kwh) || Number(bs.capacity_kwh) || 0;
         if (!(kwh > 0)) continue;
-        kits.push({
+        compatKits.push({
           system_sku:   bs.system_sku,
           display_name: bs.display_name,
           brand:        bs.brand,
@@ -631,8 +647,74 @@ router.post('/compose', async (req, res) => {
           usable_kwh:   kwh,
         });
       }
-      kits.sort((a, b) => a.usable_kwh - b.usable_kwh);
-      return kits;
+
+      // Second pass — simulate the composer's battery selector across a
+      // capacity sweep to enumerate what usable_kwh values it would
+      // actually output for each battery-capable inverter. Union across
+      // tiers (typically tier2 and tier3 share the same Plus inverter).
+      // NOTE: at this point in the code, out.tiers[i] still carries the
+      // composer's shape (system_overrides.inverter.sku), not the
+      // client-facing shape (tier.inverter.sku — built later). Read both
+      // so this filter fires regardless of shape.
+      const composerOutputKwhs = new Set();
+      const seenInverterSkus = new Set();
+      for (const tier of out.tiers || []) {
+        const invSku = tier?.system_overrides?.inverter?.sku
+                    || tier?.inverter?.sku
+                    || null;
+        if (!invSku || seenInverterSkus.has(invSku)) continue;
+        const inv = catalogue.INVERTERS?.[invSku] || null;
+        if (!inv) continue;
+        // Skip non-Plus inverters — selector returns 'inverter_not_plus'
+        // for those, so no batteries are producible.
+        if (!(inv.battery_capable === true || inv.is_plus_variant === true)) continue;
+        seenInverterSkus.add(invSku);
+        // Sweep target from 3 to 30 kWh in 0.5-kWh steps. Coarser than
+        // real slider but fine enough to catch every module-count tier
+        // the selector might produce (smallest module is Reserva 3.15).
+        for (let target = 3; target <= 30; target += 0.5) {
+          const result = selectBattery({
+            targetUsableKwh: target,
+            inverter: inv,
+            catalogue,
+            COMPATIBILITY,
+            BMS_RULES,
+          });
+          if (result && result.battery && result.total_usable_kwh > 0) {
+            // Round to 2dp to collapse floating-point twins.
+            composerOutputKwhs.add(Number(result.total_usable_kwh.toFixed(2)));
+          }
+        }
+      }
+
+      // Filter compat kits to only those within ±0.5 kWh of a value the
+      // composer can actually output. Skips this step entirely if the
+      // simulation returned no outputs (defensive — do not accidentally
+      // hide every kit).
+      let filteredKits = compatKits;
+      if (composerOutputKwhs.size > 0) {
+        filteredKits = compatKits.filter(k =>
+          [...composerOutputKwhs].some(o => Math.abs(o - k.usable_kwh) <= 0.5)
+        );
+        // De-duplicate on nearest-composer-output — pick one kit per
+        // unique composed capacity so the picker doesn't show two
+        // options that both resolve to the same installed pack.
+        const bestPerOutput = new Map();
+        for (const k of filteredKits) {
+          const nearest = [...composerOutputKwhs].reduce((best, o) =>
+            Math.abs(o - k.usable_kwh) < Math.abs(best - k.usable_kwh) ? o : best,
+            composerOutputKwhs.values().next().value
+          );
+          const existing = bestPerOutput.get(nearest);
+          if (!existing || Math.abs(k.usable_kwh - nearest) < Math.abs(existing.usable_kwh - nearest)) {
+            bestPerOutput.set(nearest, k);
+          }
+        }
+        filteredKits = [...bestPerOutput.values()];
+      }
+
+      filteredKits.sort((a, b) => a.usable_kwh - b.usable_kwh);
+      return filteredKits;
     })();
 
     const battery_bounds = {
